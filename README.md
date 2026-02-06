@@ -55,6 +55,12 @@ Topics racine: `flowio/<deviceId>/...`
 
 Spécification détaillée: `docs/mqtt_spec_v1_1.md`
 
+## Documentation
+- `docs/mqtt_spec_v1_1.md`
+- `docs/mqtt-spec-v1-fr.md`
+- `docs/dev_guide.md`
+- `docs/sensors.md`
+
 ## Développement
 - Génération modèle runtime: `scripts/generate_datamodel.py`
 - Exemple complet de module: `docs/dev_guide.md`
