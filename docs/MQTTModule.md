@@ -100,7 +100,7 @@ flowio/<deviceId>/cfg/<module>
 Exemples :
 ```
 flowio/<deviceId>/cfg/mqtt
-flowio/<deviceId>/cfg/sensors
+flowio/<deviceId>/cfg/io
 ```
 
 ### 6.2 Appliquer une config
@@ -109,9 +109,24 @@ Topic :
 ```
 flowio/<deviceId>/cfg/set
 ```
-Payload :
+
+Format payload (`module -> objet de clés`) :
+- les modules sont des clés de 1er niveau (à plat)
+- un module peut contenir des `/` dans son nom (ex: `io/output/d0`)
+- ne pas imbriquer par segments (`"io":{"output":{"d0":...}}` n'est pas supporté)
+
+Payload exemple :
 ```json
 {"mqtt":{"baseTopic":"flowio2"}}
+```
+
+Exemple IO correct :
+```json
+{
+  "io/output/d0": {
+    "d0_active_high": false
+  }
+}
 ```
 
 Ack :
@@ -123,23 +138,41 @@ flowio/<deviceId>/cfg/ack
 
 ## 7) Runtime (snapshots)
 
-### 7.1 Sensors
+### 7.1 IO
 
-Topic :
+Topics :
 ```
-flowio/<deviceId>/rt/sensors/state
+flowio/<deviceId>/rt/io/input/state
+flowio/<deviceId>/rt/io/output/state
 ```
-Payload :
+
+Payload `rt/io/input/state` :
 ```json
 {
-  "ph": 7.12,
-  "orp": 732.0,
-  "psi": 1.8,
-  "waterTemp": 26.4,
-  "airTemp": 24.1,
+  "a0": {"name":"ph","value":7.12},
+  "a1": {"name":"orp","value":732.0},
+  "a2": {"name":"psi","value":1.8},
+  "a3": {"name":"water_temp","value":26.4},
+  "a4": {"name":"air_temp","value":24.1},
   "ts": 12345678
 }
 ```
+
+Payload `rt/io/output/state` :
+```json
+{
+  "d0": {"name":"Filtration Pump","value":false},
+  "d3": {"name":"Chlorine Generator","value":true},
+  "status_leds_mask": {"name":"status_leds_mask","value":128},
+  "ts": 12345678
+}
+```
+
+Comportement de publication sur changement :
+- publication déclenchée via événement DataStore (`DIRTY_SENSORS`)
+- les changements d'`io.write` sur sorties digitales alimentent aussi le DataStore
+- pour limiter les payloads, seul le bloc `input` ou `output` modifié est republié
+- cadence limitée par `sensor_min_publish_ms`
 
 ### 7.2 Network
 
@@ -177,8 +210,9 @@ Payload :
 
 ## 8) Périodicité par défaut
 
-- `rt/sensors/state` : 15 s
+- `rt/io/input/state` et `rt/io/output/state` : publication sur changement (événement DataStore)
+- publication sur changement limitée par `sensor_min_publish_ms` (10 s par défaut)
 - `rt/network/state` : 60 s
 - `rt/system/state` : 60 s
 
-Ces périodes sont configurables via `cfg/sensors` et `cfg/mqtt`.
+Ces périodes sont configurables via `cfg/io` et `cfg/mqtt`.

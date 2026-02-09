@@ -106,6 +106,9 @@ void MQTTModule::refreshConfigModules()
 {
     if (cfgSvc && cfgSvc->listModules) {
         cfgModuleCount = cfgSvc->listModules(cfgSvc->ctx, cfgModules, CFG_TOPIC_MAX);
+        if (cfgModuleCount >= CFG_TOPIC_MAX) {
+            LOGW("Config module list reached limit (%u), some cfg/* blocks may be omitted", (unsigned)CFG_TOPIC_MAX);
+        }
     } else {
         cfgModuleCount = 0;
     }
@@ -288,8 +291,9 @@ void MQTTModule::loop() {
             if (minMs == 0 || (uint32_t)(now - lastSensorsPublishMs) >= minMs) {
                 if (sensorsBuild(this, publishBuf, sizeof(publishBuf))) {
                     publish(sensorsTopic, publishBuf, 0, false);
-                    lastSensorsPublishMs = now;
                 }
+                // Update throttle window even if callback published manually.
+                lastSensorsPublishMs = now;
                 sensorsPending = false;
             }
         }
@@ -301,6 +305,8 @@ void MQTTModule::loop() {
             if (p.build(this, publishBuf, sizeof(publishBuf))) {
                 publish(p.topic, publishBuf, p.qos, p.retain);
                 p.lastMs = now;
+            } else {
+                LOGW("runtime snapshot build failed topic=%s (buffer=%u)", p.topic, (unsigned)sizeof(publishBuf));
             }
         }
         break;
@@ -365,18 +371,6 @@ void MQTTModule::onEvent(const Event& e)
         if (!p) return;
         if ((p->dirtyFlags & DIRTY_SENSORS) == 0) return;
         sensorsPending = true;
-
-        if (state == MQTTState::Connected && sensorsTopic && sensorsBuild) {
-            uint32_t now = millis();
-            uint32_t minMs = cfgData.sensorMinPublishMs;
-            if (minMs == 0 || (uint32_t)(now - lastSensorsPublishMs) >= minMs) {
-                if (sensorsBuild(this, publishBuf, sizeof(publishBuf))) {
-                    publish(sensorsTopic, publishBuf, 0, false);
-                    lastSensorsPublishMs = now;
-                }
-                sensorsPending = false;
-            }
-        }
         return;
     }
 

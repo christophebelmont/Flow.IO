@@ -39,6 +39,7 @@
 #include "Modules/IOModule/IORuntime.h"
 #include "Core/SystemStats.h"
 #include <WiFi.h>
+#include <esp_system.h>
 
 /// Only necessary services (global)
 #include "Core/Services/iLogger.h"
@@ -67,8 +68,10 @@ static DataStore*           gIoDataStore = nullptr;
 
 static OneWireBus oneWireWater(19);
 static OneWireBus oneWireAir(18);
+static TaskHandle_t ledRandomTaskHandle = nullptr;
 
-static char topicSensorsState[128] = {0};
+static char topicIoInputState[128] = {0};
+static char topicIoOutputState[128] = {0};
 static char topicNetworkState[128] = {0};
 static char topicSystemState[128] = {0};
 
@@ -77,6 +80,8 @@ static constexpr uint8_t IO_IDX_ORP = 1;
 static constexpr uint8_t IO_IDX_PSI = 2;
 static constexpr uint8_t IO_IDX_WATER_TEMP = 3;
 static constexpr uint8_t IO_IDX_AIR_TEMP = 4;
+static uint32_t gIoInputLastPublishedTs = 0;
+static uint32_t gIoOutputLastPublishedTs = 0;
 
 static void onIoFloatValue(void* ctx, float value) {
     if (!gIoDataStore) return;
@@ -84,22 +89,108 @@ static void onIoFloatValue(void* ctx, float value) {
     setIoEndpointFloat(*gIoDataStore, idx, value, millis(), DIRTY_SENSORS);
 }
 
-static bool buildSensorsSnapshot(MQTTModule* mqtt, char* out, size_t len) {
+static bool isInputEndpointId(const char* id)
+{
+    return id && id[0] == 'a' && id[1] >= '0' && id[1] <= '9' && id[2] == '\0';
+}
+
+static bool isOutputEndpointId(const char* id)
+{
+    if (!id || id[0] == '\0') return false;
+    if (id[0] == 'd' && id[1] >= '0' && id[1] <= '9' && id[2] == '\0') return true;
+    return strcmp(id, "status_leds_mask") == 0;
+}
+
+static bool buildIoGroupSnapshot(char* out, size_t len, bool inputGroup, uint32_t& maxTsOut)
+{
+    size_t used = 0;
+    int wrote = snprintf(out, len, "{");
+    if (wrote < 0 || (size_t)wrote >= len) return false;
+    used += (size_t)wrote;
+
+    IORegistry& reg = ioModule.registry();
+    bool first = true;
+    uint32_t maxTs = 0;
+    for (uint8_t i = 0; i < reg.count(); ++i) {
+        IOEndpoint* ep = reg.at(i);
+        if (!ep) continue;
+        if ((ep->capabilities() & IO_CAP_READ) == 0) continue;
+        const char* id = ep->id();
+        if (!id || id[0] == '\0') continue;
+        if (inputGroup && !isInputEndpointId(id)) continue;
+        if (!inputGroup && !isOutputEndpointId(id)) continue;
+
+        IOEndpointValue v{};
+        bool ok = ep->read(v);
+        if (!ok) v.valid = false;
+
+        const char* label = ioModule.endpointLabel(id);
+        wrote = snprintf(out + used, len - used, "%s\"%s\":{\"name\":\"%s\",\"value\":",
+                         first ? "" : ",",
+                         id,
+                         (label && label[0] != '\0') ? label : id);
+        if (wrote < 0 || (size_t)wrote >= (len - used)) return false;
+        used += (size_t)wrote;
+        first = false;
+
+        if (!v.valid) {
+            wrote = snprintf(out + used, len - used, "null");
+        } else if (v.valueType == IO_EP_VALUE_BOOL) {
+            wrote = snprintf(out + used, len - used, "%s", v.v.b ? "true" : "false");
+        } else if (v.valueType == IO_EP_VALUE_FLOAT) {
+            wrote = snprintf(out + used, len - used, "%.3f", (double)v.v.f);
+        } else if (v.valueType == IO_EP_VALUE_INT32) {
+            wrote = snprintf(out + used, len - used, "%ld", (long)v.v.i);
+        } else {
+            wrote = snprintf(out + used, len - used, "null");
+        }
+        if (wrote < 0 || (size_t)wrote >= (len - used)) return false;
+        used += (size_t)wrote;
+
+        wrote = snprintf(out + used, len - used, "}");
+        if (wrote < 0 || (size_t)wrote >= (len - used)) return false;
+        used += (size_t)wrote;
+
+        if (v.timestampMs > maxTs) maxTs = v.timestampMs;
+    }
+
+    wrote = snprintf(out + used, len - used, ",\"ts\":%lu}", (unsigned long)millis());
+    if (wrote < 0 || (size_t)wrote >= (len - used)) return false;
+
+    maxTsOut = maxTs;
+    return true;
+}
+
+static bool publishIoStates(MQTTModule* mqtt, char* out, size_t len) {
     if (!mqtt) return false;
     DataStore* ds = mqtt->dataStorePtr();
     if (!ds) return false;
+    (void)ds;
 
-    float ph = 0.0f, orp = 0.0f, psi = 0.0f, w = 0.0f, a = 0.0f;
-    ioEndpointFloat(*ds, IO_IDX_PH, ph);
-    ioEndpointFloat(*ds, IO_IDX_ORP, orp);
-    ioEndpointFloat(*ds, IO_IDX_PSI, psi);
-    ioEndpointFloat(*ds, IO_IDX_WATER_TEMP, w);
-    ioEndpointFloat(*ds, IO_IDX_AIR_TEMP, a);
+    bool published = false;
+    uint32_t inputTs = 0;
+    if (buildIoGroupSnapshot(out, len, true, inputTs)) {
+        if (inputTs > gIoInputLastPublishedTs) {
+            if (mqtt->publish(topicIoInputState, out, 0, false)) {
+                gIoInputLastPublishedTs = inputTs;
+                published = true;
+            }
+        }
+    }
 
-    snprintf(out, len,
-             "{\"ph\":%.3f,\"orp\":%.3f,\"psi\":%.3f,\"waterTemp\":%.2f,\"airTemp\":%.2f,\"ts\":%lu}",
-             ph, orp, psi, w, a, (unsigned long)millis());
-    return true;
+    uint32_t outputTs = 0;
+    if (buildIoGroupSnapshot(out, len, false, outputTs)) {
+        if (outputTs > gIoOutputLastPublishedTs) {
+            if (mqtt->publish(topicIoOutputState, out, 0, false)) {
+                gIoOutputLastPublishedTs = outputTs;
+                published = true;
+            }
+        }
+    }
+
+    // Prevent publisher from posting on its bound topic; we publish manually above.
+    (void)published;
+    return false;
 }
 
 static bool buildNetworkSnapshot(MQTTModule* mqtt, char* out, size_t len) {
@@ -139,6 +230,18 @@ static bool buildSystemSnapshot(MQTTModule* mqtt, char* out, size_t len) {
              (unsigned int)snap.heap.fragPercent,
              (unsigned long)millis());
     return true;
+}
+/* Test task currently deactivated */
+static void ledRandomTask(void*)
+{
+    for (;;) {
+        const IOLedMaskService* leds = services.get<IOLedMaskService>("io_leds");
+        if (leds && leds->setMask) {
+            uint8_t mask = (uint8_t)(esp_random() & 0xFF);
+            leds->setMask(leds->ctx, mask);
+        }
+        vTaskDelay(pdMS_TO_TICKS(2000));
+    }
 }
 
 void setup() {
@@ -216,6 +319,64 @@ void setup() {
     airDef.onValueCtx = (void*)(uintptr_t)IO_IDX_AIR_TEMP;
     ioModule.defineAnalogInput(airDef);
 
+    IODigitalOutputDefinition d0{};
+    snprintf(d0.id, sizeof(d0.id), "filtration_pump");
+    d0.pin = 32;
+    d0.activeHigh = false;
+    d0.initialOn = false;
+    ioModule.defineDigitalOutput(d0);
+
+    IODigitalOutputDefinition d1{};
+    snprintf(d1.id, sizeof(d1.id), "ph_pump");
+    d1.pin = 25;
+    d1.activeHigh = false;
+    d1.initialOn = false;
+    ioModule.defineDigitalOutput(d1);
+
+    IODigitalOutputDefinition d2{};
+    snprintf(d2.id, sizeof(d2.id), "chlorine_pump");
+    d2.pin = 26;
+    d2.activeHigh = false;
+    d2.initialOn = false;
+    ioModule.defineDigitalOutput(d2);
+
+    IODigitalOutputDefinition d3{};
+    snprintf(d3.id, sizeof(d3.id), "chlorine_generator");
+    d3.pin = 13;
+    d3.activeHigh = false;
+    d3.initialOn = false;
+    d3.momentary = true;
+    d3.pulseMs = 500;
+    ioModule.defineDigitalOutput(d3);
+
+    IODigitalOutputDefinition d4{};
+    snprintf(d4.id, sizeof(d4.id), "robot");
+    d4.pin = 33;
+    d4.activeHigh = false;
+    d4.initialOn = false;
+    ioModule.defineDigitalOutput(d4);
+
+    IODigitalOutputDefinition d5{};
+    snprintf(d5.id, sizeof(d5.id), "lights");
+    d5.pin = 27;
+    d5.activeHigh = false;
+    d5.initialOn = false;
+    ioModule.defineDigitalOutput(d5);
+
+    IODigitalOutputDefinition d6{};
+    snprintf(d6.id, sizeof(d6.id), "fill_pump");
+    d6.pin = 23;
+    d6.activeHigh = false;
+    d6.initialOn = false;
+    ioModule.defineDigitalOutput(d6);
+
+    IODigitalOutputDefinition d7{};
+    snprintf(d7.id, sizeof(d7.id), "water_heater");
+    d7.pin = 12;
+    d7.activeHigh = false;
+    d7.initialOn = false;
+    ioModule.defineDigitalOutput(d7);
+
     
     bool ok = moduleManager.initAll(registry, services);
     if (!ok) {
@@ -225,13 +386,23 @@ void setup() {
     const DataStoreService* dsSvc = services.get<DataStoreService>("datastore");
     gIoDataStore = dsSvc ? dsSvc->store : nullptr;
 
-    mqttModule.formatTopic(topicSensorsState, sizeof(topicSensorsState), "rt/sensors/state");
+    mqttModule.formatTopic(topicIoInputState, sizeof(topicIoInputState), "rt/io/input/state");
+    mqttModule.formatTopic(topicIoOutputState, sizeof(topicIoOutputState), "rt/io/output/state");
     mqttModule.formatTopic(topicNetworkState, sizeof(topicNetworkState), "rt/network/state");
     mqttModule.formatTopic(topicSystemState, sizeof(topicSystemState), "rt/system/state");
-    mqttModule.setSensorsPublisher(topicSensorsState, buildSensorsSnapshot);
-    mqttModule.addRuntimePublisher(topicSensorsState, 60000, 0, false, buildSensorsSnapshot);
+    mqttModule.setSensorsPublisher(topicIoInputState, publishIoStates);
     mqttModule.addRuntimePublisher(topicNetworkState, 60000, 0, false, buildNetworkSnapshot);
     mqttModule.addRuntimePublisher(topicSystemState, 60000, 0, false, buildSystemSnapshot);
+
+    /*xTaskCreatePinnedToCore(
+        ledRandomTask,
+        "led_random",
+        3072,
+        nullptr,
+        1,
+        &ledRandomTaskHandle,
+        1
+    );*/
 
     Serial.print(
         "\x1b[34m"

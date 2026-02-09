@@ -49,21 +49,20 @@ platformio.ini
 Topics racine: `flowio/<deviceId>/...`
 - `cmd`, `ack`, `status`
 - `cfg/set`, `cfg/ack`, `cfg/<module>`
-- `rt/sensors/state` (snapshot JSON)
+- `rt/io/state` (snapshot JSON)
 - `rt/network/state` (snapshot JSON)
 - `rt/system/state` (snapshot JSON)
 
-Spécification détaillée: `docs/mqtt_spec_v1_1.md`
+Spécification détaillée: [MQTTModule](docs/MQTTModule.md)
 
 ## Documentation
-- `docs/mqtt_spec_v1_1.md`
-- `docs/mqtt-spec-v1-fr.md`
-- `docs/dev_guide.md`
-- `docs/IOModule.md`
+- [DevGuide](docs/DevGuide.md)
+- [IOModule](docs/IOModule.md)
+- [MQTTModule](docs/MQTTModule.md)
 
 ## Développement
 - Génération modèle runtime: `scripts/generate_datamodel.py`
-- Exemple complet de module: `docs/dev_guide.md`
+- Exemple complet de module: [DevGuide](docs/DevGuide.md)
 
 ## Build
 ```

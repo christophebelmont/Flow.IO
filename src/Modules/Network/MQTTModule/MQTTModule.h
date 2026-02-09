@@ -92,7 +92,9 @@ private:
     static constexpr size_t MAX_PUBLISHERS = 8;
     RuntimePublisher publishers[MAX_PUBLISHERS] = {};
     uint8_t publisherCount = 0;
-    static constexpr size_t CFG_TOPIC_MAX = 16;
+    // Max number of config module blocks published as cfg/<module>.
+    // Keep this above the total number of module paths declared in ConfigStore.
+    static constexpr size_t CFG_TOPIC_MAX = 48;
     const char* cfgModules[CFG_TOPIC_MAX] = {nullptr};
     uint8_t cfgModuleCount = 0;
     char topicCfgBlocks[CFG_TOPIC_MAX][128] = {{0}};
@@ -110,7 +112,7 @@ private:
     char ackBuf[512] = {0};
     char replyBuf[256] = {0};
     char stateCfgBuf[768] = {0};
-    char publishBuf[512] = {0};
+    char publishBuf[1536] = {0};
 
     ConfigVariable<char,0> hostVar {
         NVS_KEY("mq_host"),"host","mqtt",ConfigType::CharArray,

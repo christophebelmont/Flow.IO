@@ -59,3 +59,51 @@ static inline bool setIoEndpointFloat(DataStore& ds, uint8_t idx, float value, u
     ds.notifyChanged((DataKey)(DATAKEY_IO_BASE + idx), dirtyMask);
     return true;
 }
+
+static inline bool setIoEndpointBool(DataStore& ds, uint8_t idx, bool value, uint32_t tsMs,
+                                     uint32_t dirtyMask = DIRTY_SENSORS)
+{
+    if (idx >= IO_MAX_ENDPOINTS) return false;
+
+    RuntimeData& rt = ds.dataMutable();
+    IOEndpointRuntime& ep = rt.io.endpoints[idx];
+
+    if (ep.valid &&
+        ep.valueType == IO_VALUE_BOOL &&
+        ep.boolValue == value &&
+        ep.timestampMs == tsMs) {
+        return false;
+    }
+
+    ep.valid = true;
+    ep.valueType = IO_VALUE_BOOL;
+    ep.boolValue = value;
+    ep.timestampMs = tsMs;
+
+    ds.notifyChanged((DataKey)(DATAKEY_IO_BASE + idx), dirtyMask);
+    return true;
+}
+
+static inline bool setIoEndpointInt(DataStore& ds, uint8_t idx, int32_t value, uint32_t tsMs,
+                                    uint32_t dirtyMask = DIRTY_SENSORS)
+{
+    if (idx >= IO_MAX_ENDPOINTS) return false;
+
+    RuntimeData& rt = ds.dataMutable();
+    IOEndpointRuntime& ep = rt.io.endpoints[idx];
+
+    if (ep.valid &&
+        ep.valueType == IO_VALUE_INT32 &&
+        ep.intValue == value &&
+        ep.timestampMs == tsMs) {
+        return false;
+    }
+
+    ep.valid = true;
+    ep.valueType = IO_VALUE_INT32;
+    ep.intValue = value;
+    ep.timestampMs = tsMs;
+
+    ds.notifyChanged((DataKey)(DATAKEY_IO_BASE + idx), dirtyMask);
+    return true;
+}
