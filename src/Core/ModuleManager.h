@@ -6,7 +6,7 @@
 #include "Module.h"
 
 /** @brief Maximum number of modules supported at runtime. */
-constexpr size_t MAX_MODULES = 15;
+constexpr size_t MAX_MODULES = 25;
 
 /**
  * @brief Registers modules, resolves dependencies, and starts tasks.

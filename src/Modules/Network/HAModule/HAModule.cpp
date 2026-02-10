@@ -277,6 +277,47 @@ bool HAModule::publishSwitch(const char* objectId, const char* name,
     return publishDiscovery("switch", objectId, payloadBuf);
 }
 
+bool HAModule::publishNumber(const char* objectId, const char* name,
+                             const char* stateTopic, const char* valueTemplate,
+                             const char* commandTopic, const char* commandTemplate,
+                             float minValue, float maxValue, float step,
+                             const char* mode, const char* entityCategory, const char* icon, const char* unit)
+{
+    if (!objectId || !name || !stateTopic || !valueTemplate || !commandTopic || !commandTemplate) return false;
+
+    char unitField[48] = {0};
+    if (unit && unit[0] != '\0') {
+        snprintf(unitField, sizeof(unitField), ",\"unit_of_measurement\":\"%s\"", unit);
+    }
+    char entityCategoryField[48] = {0};
+    if (entityCategory && entityCategory[0] != '\0') {
+        snprintf(entityCategoryField, sizeof(entityCategoryField), ",\"entity_category\":\"%s\"", entityCategory);
+    }
+
+    if (icon && icon[0] != '\0') {
+        snprintf(payloadBuf, sizeof(payloadBuf),
+                 "{\"name\":\"%s\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
+                 "\"value_template\":\"%s\",\"command_topic\":\"%s\",\"command_template\":\"%s\","
+                 "\"min\":%.3f,\"max\":%.3f,\"step\":%.3f,\"mode\":\"%s\",\"icon\":\"%s\"%s%s,"
+                 "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"FlowIO\","
+                 "\"manufacturer\":\"%s\",\"model\":\"%s\"}}",
+                 name, objectId, stateTopic, valueTemplate, commandTopic, commandTemplate,
+                 (double)minValue, (double)maxValue, (double)step, mode ? mode : "slider", icon, entityCategoryField, unitField,
+                 deviceIdent, cfgData.vendor, cfgData.model);
+    } else {
+        snprintf(payloadBuf, sizeof(payloadBuf),
+                 "{\"name\":\"%s\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
+                 "\"value_template\":\"%s\",\"command_topic\":\"%s\",\"command_template\":\"%s\","
+                 "\"min\":%.3f,\"max\":%.3f,\"step\":%.3f,\"mode\":\"%s\"%s%s,"
+                 "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"FlowIO\","
+                 "\"manufacturer\":\"%s\",\"model\":\"%s\"}}",
+                 name, objectId, stateTopic, valueTemplate, commandTopic, commandTemplate,
+                 (double)minValue, (double)maxValue, (double)step, mode ? mode : "slider", entityCategoryField, unitField,
+                 deviceIdent, cfgData.vendor, cfgData.model);
+    }
+    return publishDiscovery("number", objectId, payloadBuf);
+}
+
 const char* HAModule::iconForInput(uint8_t idx, const char* label) const
 {
     if (idx == 0) return "mdi:ph";
@@ -390,13 +431,12 @@ bool HAModule::publishConfigStoreEntities()
 
 bool HAModule::publishDataStoreEntities()
 {
-    if (!mqttSvc || !mqttSvc->formatTopic) return false;
+    if (!mqttSvc || !mqttSvc->formatTopic || !cfgSvc || !cfgSvc->toJsonModule) return false;
     bool any = false;
 
     char objectId[160];
     char idRaw[160];
 
-    mqttSvc->formatTopic(mqttSvc->ctx, "rt/io/input/state", stateTopicBuf, sizeof(stateTopicBuf));
     for (uint8_t i = 0; i < 10; ++i) {
         char moduleName[32];
         char keyName[16];
@@ -405,15 +445,18 @@ bool HAModule::publishDataStoreEntities()
         snprintf(keyName, sizeof(keyName), "a%u_name", (unsigned)i);
         if (!readConfigString(moduleName, keyName, label, sizeof(label))) continue;
 
+        char stateSuffix[32];
+        snprintf(stateSuffix, sizeof(stateSuffix), "rt/io/input/a%u", (unsigned)i);
+        mqttSvc->formatTopic(mqttSvc->ctx, stateSuffix, stateTopicBuf, sizeof(stateTopicBuf));
+
         char tpl[64];
-        snprintf(tpl, sizeof(tpl), "{{ value_json.a%u.value }}", (unsigned)i);
+        snprintf(tpl, sizeof(tpl), "{{ value_json.value }}");
 
         snprintf(idRaw, sizeof(idRaw), "flowio_%s", label);
         sanitizeId(idRaw, objectId, sizeof(objectId));
         any = publishSensor(objectId, label, stateTopicBuf, tpl, nullptr, iconForInput(i, label), unitForInput(i, label)) || any;
     }
 
-    mqttSvc->formatTopic(mqttSvc->ctx, "rt/io/output/state", stateTopicBuf, sizeof(stateTopicBuf));
     char commandTopic[192];
     mqttSvc->formatTopic(mqttSvc->ctx, "cmd", commandTopic, sizeof(commandTopic));
     for (uint8_t i = 0; i < 10; ++i) {
@@ -424,16 +467,71 @@ bool HAModule::publishDataStoreEntities()
         snprintf(keyName, sizeof(keyName), "d%u_name", (unsigned)i);
         if (!readConfigString(moduleName, keyName, label, sizeof(label))) continue;
 
+        char stateSuffix[32];
+        snprintf(stateSuffix, sizeof(stateSuffix), "rt/io/output/d%u", (unsigned)i);
+        mqttSvc->formatTopic(mqttSvc->ctx, stateSuffix, stateTopicBuf, sizeof(stateTopicBuf));
+
         char tpl[96];
-        snprintf(tpl, sizeof(tpl), "{%% if value_json.d%u.value %%}ON{%% else %%}OFF{%% endif %%}", (unsigned)i);
+        snprintf(tpl, sizeof(tpl), "{%% if value_json.value %%}ON{%% else %%}OFF{%% endif %%}");
         char payloadOn[96];
         char payloadOff[96];
-        snprintf(payloadOn, sizeof(payloadOn), "{\\\"cmd\\\":\\\"io.write\\\",\\\"args\\\":{\\\"id\\\":\\\"d%u\\\",\\\"value\\\":true}}", (unsigned)i);
-        snprintf(payloadOff, sizeof(payloadOff), "{\\\"cmd\\\":\\\"io.write\\\",\\\"args\\\":{\\\"id\\\":\\\"d%u\\\",\\\"value\\\":false}}", (unsigned)i);
+
+        bool usePoolWrite = false;
+        if (dsSvc && dsSvc->store && i < POOL_DEVICE_MAX) {
+            const PoolDeviceRuntimeEntry& pd = dsSvc->store->data().pool.devices[i];
+            usePoolWrite = pd.valid;
+        }
+
+        if (usePoolWrite) {
+            snprintf(payloadOn, sizeof(payloadOn), "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"id\\\":\\\"pd%u\\\",\\\"value\\\":true}}", (unsigned)i);
+            snprintf(payloadOff, sizeof(payloadOff), "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"id\\\":\\\"pd%u\\\",\\\"value\\\":false}}", (unsigned)i);
+        } else {
+            snprintf(payloadOn, sizeof(payloadOn), "{\\\"cmd\\\":\\\"io.write\\\",\\\"args\\\":{\\\"id\\\":\\\"d%u\\\",\\\"value\\\":true}}", (unsigned)i);
+            snprintf(payloadOff, sizeof(payloadOff), "{\\\"cmd\\\":\\\"io.write\\\",\\\"args\\\":{\\\"id\\\":\\\"d%u\\\",\\\"value\\\":false}}", (unsigned)i);
+        }
 
         snprintf(idRaw, sizeof(idRaw), "flowio_%s", label);
         sanitizeId(idRaw, objectId, sizeof(objectId));
         any = publishSwitch(objectId, label, stateTopicBuf, tpl, commandTopic, payloadOn, payloadOff, iconForOutput(label)) || any;
+    }
+
+    char cfgSetTopic[192];
+    mqttSvc->formatTopic(mqttSvc->ctx, "cfg/set", cfgSetTopic, sizeof(cfgSetTopic));
+    for (uint8_t i = 0; i < POOL_DEVICE_MAX; ++i) {
+        char pdModule[24];
+        snprintf(pdModule, sizeof(pdModule), "pdm/pd%u", (unsigned)i);
+        bool truncated = false;
+        bool pdExists = cfgSvc->toJsonModule(cfgSvc->ctx, pdModule, moduleJsonBuf, sizeof(moduleJsonBuf), &truncated);
+        if (!pdExists) continue;
+
+        char label[24];
+        char ioModule[24];
+        char ioKey[16];
+        snprintf(ioModule, sizeof(ioModule), "io/output/d%u", (unsigned)i);
+        snprintf(ioKey, sizeof(ioKey), "d%u_name", (unsigned)i);
+        if (!readConfigString(ioModule, ioKey, label, sizeof(label))) {
+            snprintf(label, sizeof(label), "Pool Device %u", (unsigned)i);
+        }
+
+        char cfgStateSuffix[32];
+        snprintf(cfgStateSuffix, sizeof(cfgStateSuffix), "cfg/pdm/pd%u", (unsigned)i);
+        mqttSvc->formatTopic(mqttSvc->ctx, cfgStateSuffix, stateTopicBuf, sizeof(stateTopicBuf));
+
+        char idFlowRaw[160];
+        char nameFlow[96];
+        char valueTplFlow[64];
+        char cmdTplFlow[128];
+        snprintf(idFlowRaw, sizeof(idFlowRaw), "flowio_%s_flow_l_h", label);
+        sanitizeId(idFlowRaw, objectId, sizeof(objectId));
+        snprintf(nameFlow, sizeof(nameFlow), "%s Flowrate", label);
+        snprintf(valueTplFlow, sizeof(valueTplFlow), "{{ value_json.flow_l_h }}");
+        snprintf(cmdTplFlow, sizeof(cmdTplFlow), "{\\\"pdm/pd%u\\\":{\\\"flow_l_h\\\":{{ value | float(0) }}}}", (unsigned)i);
+        any = publishNumber(objectId, nameFlow,
+                            stateTopicBuf, valueTplFlow,
+                            cfgSetTopic, cmdTplFlow,
+                            0.0f, 3.0f, 0.1f,
+                            "slider", "config", "mdi:water-sync", "L/h") || any;
+
     }
 
     return any;
@@ -492,7 +590,39 @@ void HAModule::onEvent(const Event& e)
     if (e.id != EventId::DataChanged) return;
     const DataChangedPayload* payload = static_cast<const DataChangedPayload*>(e.payload);
     if (!payload) return;
-    if (payload->id != DATAKEY_MQTT_READY) return;
+    if (!dsSvc || !dsSvc->store) return;
+
+    if (payload->id == DATAKEY_WIFI_READY) {
+        if (wifiReady(*dsSvc->store)) {
+            signalAutoconfigCheck();
+        }
+        return;
+    }
+
+    if (payload->id == DATAKEY_MQTT_READY) {
+        if (wifiReady(*dsSvc->store)) {
+            signalAutoconfigCheck();
+        }
+        return;
+    }
+}
+
+void HAModule::signalAutoconfigCheck()
+{
+    autoconfigPending = true;
+    TaskHandle_t th = getTaskHandle();
+    if (th) {
+        xTaskNotifyGive(th);
+    }
+}
+
+void HAModule::loop()
+{
+    if (!autoconfigPending) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    }
+    if (!autoconfigPending) return;
+    autoconfigPending = false;
     tryPublishAutoconfig();
 }
 
@@ -517,5 +647,7 @@ void HAModule::init(ConfigStore& cfg, ServiceRegistry& services)
         eventBusSvc->bus->subscribe(EventId::DataChanged, &HAModule::onEventStatic, this);
     }
 
-    tryPublishAutoconfig();
+    if (dsSvc && dsSvc->store && wifiReady(*dsSvc->store)) {
+        signalAutoconfigCheck();
+    }
 }

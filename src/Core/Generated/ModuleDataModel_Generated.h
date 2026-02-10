@@ -16,6 +16,7 @@
 #include "Modules/Network/MQTTModule/MQTTModuleDataModel.h"
 #include "Modules/Network/NTPModule/NTPModuleDataModel.h"
 #include "Modules/Network/WifiModule/WifiModuleDataModel.h"
+#include "Modules/PoolDeviceModule/PoolDeviceModuleDataModel.h"
 
 struct RuntimeData {
     RUNTIME_DATA_CORE_FIELDS
@@ -24,4 +25,5 @@ struct RuntimeData {
     MQTTRuntimeData mqtt;
     NTPRuntimeData ntp;
     WifiRuntimeData wifi;
+    PoolDeviceRuntimeData pool;
 };

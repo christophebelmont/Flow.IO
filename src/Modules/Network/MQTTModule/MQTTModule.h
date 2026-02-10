@@ -62,10 +62,12 @@ public:
     bool publish(const char* topic, const char* payload, int qos = 0, bool retain = false);
     void formatTopic(char* out, size_t outLen, const char* suffix) const;
     bool isConnected() const { return state == MQTTState::Connected; }
+    uint32_t activeSensorsDirtyMask() const { return sensorsActiveDirtyMask; }
     void setSensorsPublisher(const char* topic, bool (*build)(MQTTModule* self, char* out, size_t outLen)) {
         sensorsTopic = topic;
         sensorsBuild = build;
         sensorsPending = true;
+        sensorsPendingDirtyMask = 0xFFFFFFFFUL;
         lastSensorsPublishMs = 0;
     }
     DataStore* dataStorePtr() const { return dataStore; }
@@ -103,7 +105,8 @@ private:
     const char* sensorsTopic = nullptr;
     bool (*sensorsBuild)(MQTTModule* self, char* out, size_t outLen) = nullptr;
     bool sensorsPending = false;
-    bool sensorsBypassThrottlePending = false;
+    uint32_t sensorsPendingDirtyMask = 0;
+    uint32_t sensorsActiveDirtyMask = 0;
     uint32_t lastSensorsPublishMs = 0;
 
     struct RxMsg {

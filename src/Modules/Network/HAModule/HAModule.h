@@ -4,7 +4,7 @@
  * @brief Home Assistant auto-discovery publisher.
  */
 
-#include "Core/ModulePassive.h"
+#include "Core/Module.h"
 #include "Core/EventBus/EventBus.h"
 #include "Core/Services/Services.h"
 #include "Core/Runtime.h"
@@ -12,11 +12,14 @@
 #include <stddef.h>
 
 /**
- * @brief Passive module that publishes Home Assistant MQTT discovery topics once at startup.
+ * @brief Active module that publishes Home Assistant MQTT discovery topics without blocking EventBus callbacks.
  */
-class HAModule : public ModulePassive {
+class HAModule : public Module {
 public:
     const char* moduleId() const override { return "ha"; }
+    const char* taskName() const override { return "ha"; }
+    uint16_t taskStackSize() const override { return 4096; }
+    void loop() override;
 
     uint8_t dependencyCount() const override { return 4; }
     const char* dependency(uint8_t i) const override {
@@ -51,6 +54,7 @@ private:
     const MqttService* mqttSvc = nullptr;
 
     HAConfig cfgData{};
+    volatile bool autoconfigPending = false;
     bool published = false;
     char deviceId[32] = {0};
     char deviceIdent[96] = {0};
@@ -84,6 +88,7 @@ private:
 
     static void onEventStatic(const Event& e, void* user);
     void onEvent(const Event& e);
+    void signalAutoconfigCheck();
     void refreshIdentityFromConfig();
     void tryPublishAutoconfig();
     bool publishAutoconfig();
@@ -106,6 +111,14 @@ private:
                        const char* commandTopic,
                        const char* payloadOn, const char* payloadOff,
                        const char* icon = nullptr);
+    bool publishNumber(const char* objectId, const char* name,
+                       const char* stateTopic, const char* valueTemplate,
+                       const char* commandTopic, const char* commandTemplate,
+                       float minValue, float maxValue, float step,
+                       const char* mode = "slider",
+                       const char* entityCategory = nullptr,
+                       const char* icon = nullptr,
+                       const char* unit = nullptr);
     bool publishDiscovery(const char* component, const char* objectId, const char* payload);
     const char* iconForInput(uint8_t idx, const char* label) const;
     const char* unitForInput(uint8_t idx, const char* label) const;

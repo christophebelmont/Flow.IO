@@ -13,6 +13,7 @@
 #include "Core/ConfigStore.h"
 #include "Core/DataStore/DataStore.h"
 #include "Core/ModuleManager.h"
+#include "Core/RuntimeSnapshotProvider.h"
 #include "Core/ServiceRegistry.h"
 
 /// Load Modules
@@ -34,6 +35,7 @@
 
 #include "Modules/IOModule/IOModule.h"
 #include "Modules/IOModule/IOBus/OneWireBus.h"
+#include "Modules/PoolDeviceModule/PoolDeviceModule.h"
 #include "Modules/EventBusModule/EventBusModule.h"
 #include "Modules/CommandModule/CommandModule.h"
 
@@ -41,6 +43,7 @@
 #include "Core/SystemStats.h"
 #include <WiFi.h>
 #include <esp_system.h>
+#include <string.h>
 
 /// Only necessary services (global)
 #include "Core/Services/iLogger.h"
@@ -66,24 +69,33 @@ static LogDispatcherModule  logDispatcherModule;
 static LogHubModule         logHubModule;
 static EventBusModule       eventBusModule;
 static IOModule             ioModule;
+static PoolDeviceModule     poolDeviceModule;
 static DataStore*           gIoDataStore = nullptr;
 
 static OneWireBus oneWireWater(19);
 static OneWireBus oneWireAir(18);
 static TaskHandle_t ledRandomTaskHandle = nullptr;
 
-static char topicIoInputState[128] = {0};
-static char topicIoOutputState[128] = {0};
+static char topicRuntimeMux[128] = {0};
 static char topicNetworkState[128] = {0};
 static char topicSystemState[128] = {0};
+
+static constexpr uint8_t MAX_RUNTIME_ROUTES = 32;
+struct RuntimeSnapshotRoute {
+    const IRuntimeSnapshotProvider* provider = nullptr;
+    uint8_t snapshotIdx = 0;
+    char topic[128] = {0};
+    uint32_t dirtyMask = DIRTY_SENSORS;
+    uint32_t lastPublishedTs = 0;
+};
+static RuntimeSnapshotRoute gRuntimeRoutes[MAX_RUNTIME_ROUTES]{};
+static uint8_t gRuntimeRouteCount = 0;
 
 static constexpr uint8_t IO_IDX_PH = 0;
 static constexpr uint8_t IO_IDX_ORP = 1;
 static constexpr uint8_t IO_IDX_PSI = 2;
 static constexpr uint8_t IO_IDX_WATER_TEMP = 3;
 static constexpr uint8_t IO_IDX_AIR_TEMP = 4;
-static uint32_t gIoInputLastPublishedTs = 0;
-static uint32_t gIoOutputLastPublishedTs = 0;
 
 static void onIoFloatValue(void* ctx, float value) {
     if (!gIoDataStore) return;
@@ -91,107 +103,50 @@ static void onIoFloatValue(void* ctx, float value) {
     setIoEndpointFloat(*gIoDataStore, idx, value, millis(), DIRTY_SENSORS);
 }
 
-static bool isInputEndpointId(const char* id)
-{
-    return id && id[0] == 'a' && id[1] >= '0' && id[1] <= '9' && id[2] == '\0';
-}
+static bool registerRuntimeProvider(MQTTModule& mqtt, const IRuntimeSnapshotProvider* provider) {
+    if (!provider) return false;
 
-static bool isOutputEndpointId(const char* id)
-{
-    if (!id || id[0] == '\0') return false;
-    if (id[0] == 'd' && id[1] >= '0' && id[1] <= '9' && id[2] == '\0') return true;
-    return strcmp(id, "status_leds_mask") == 0;
-}
+    bool any = false;
+    const uint8_t count = provider->runtimeSnapshotCount();
+    for (uint8_t idx = 0; idx < count; ++idx) {
+        if (gRuntimeRouteCount >= MAX_RUNTIME_ROUTES) break;
+        const char* suffix = provider->runtimeSnapshotSuffix(idx);
+        if (!suffix || suffix[0] == '\0') continue;
 
-static bool buildIoGroupSnapshot(char* out, size_t len, bool inputGroup, uint32_t& maxTsOut)
-{
-    size_t used = 0;
-    int wrote = snprintf(out, len, "{");
-    if (wrote < 0 || (size_t)wrote >= len) return false;
-    used += (size_t)wrote;
-
-    IORegistry& reg = ioModule.registry();
-    bool first = true;
-    uint32_t maxTs = 0;
-    for (uint8_t i = 0; i < reg.count(); ++i) {
-        IOEndpoint* ep = reg.at(i);
-        if (!ep) continue;
-        if ((ep->capabilities() & IO_CAP_READ) == 0) continue;
-        const char* id = ep->id();
-        if (!id || id[0] == '\0') continue;
-        if (inputGroup && !isInputEndpointId(id)) continue;
-        if (!inputGroup && !isOutputEndpointId(id)) continue;
-
-        IOEndpointValue v{};
-        bool ok = ep->read(v);
-        if (!ok) v.valid = false;
-
-        const char* label = ioModule.endpointLabel(id);
-        wrote = snprintf(out + used, len - used, "%s\"%s\":{\"name\":\"%s\",\"value\":",
-                         first ? "" : ",",
-                         id,
-                         (label && label[0] != '\0') ? label : id);
-        if (wrote < 0 || (size_t)wrote >= (len - used)) return false;
-        used += (size_t)wrote;
-        first = false;
-
-        if (!v.valid) {
-            wrote = snprintf(out + used, len - used, "null");
-        } else if (v.valueType == IO_EP_VALUE_BOOL) {
-            wrote = snprintf(out + used, len - used, "%s", v.v.b ? "true" : "false");
-        } else if (v.valueType == IO_EP_VALUE_FLOAT) {
-            wrote = snprintf(out + used, len - used, "%.3f", (double)v.v.f);
-        } else if (v.valueType == IO_EP_VALUE_INT32) {
-            wrote = snprintf(out + used, len - used, "%ld", (long)v.v.i);
-        } else {
-            wrote = snprintf(out + used, len - used, "null");
-        }
-        if (wrote < 0 || (size_t)wrote >= (len - used)) return false;
-        used += (size_t)wrote;
-
-        wrote = snprintf(out + used, len - used, "}");
-        if (wrote < 0 || (size_t)wrote >= (len - used)) return false;
-        used += (size_t)wrote;
-
-        if (v.timestampMs > maxTs) maxTs = v.timestampMs;
+        RuntimeSnapshotRoute& route = gRuntimeRoutes[gRuntimeRouteCount++];
+        route.provider = provider;
+        route.snapshotIdx = idx;
+        route.dirtyMask = (strncmp(suffix, "rt/io/output/", 13) == 0) ? DIRTY_ACTUATORS : DIRTY_SENSORS;
+        route.lastPublishedTs = 0;
+        mqtt.formatTopic(route.topic, sizeof(route.topic), suffix);
+        any = true;
     }
-
-    wrote = snprintf(out + used, len - used, ",\"ts\":%lu}", (unsigned long)millis());
-    if (wrote < 0 || (size_t)wrote >= (len - used)) return false;
-
-    maxTsOut = maxTs;
-    return true;
+    return any;
 }
 
-static bool publishIoStates(MQTTModule* mqtt, char* out, size_t len) {
+static bool publishRuntimeStates(MQTTModule* mqtt, char* out, size_t len) {
     if (!mqtt) return false;
     DataStore* ds = mqtt->dataStorePtr();
     if (!ds) return false;
-    (void)ds;
+    gIoDataStore = ds;
+    uint32_t activeDirtyMask = mqtt->activeSensorsDirtyMask();
+    if (activeDirtyMask == 0U) activeDirtyMask = (DIRTY_SENSORS | DIRTY_ACTUATORS);
 
-    bool published = false;
-    uint32_t inputTs = 0;
-    if (buildIoGroupSnapshot(out, len, true, inputTs)) {
-        if (inputTs > gIoInputLastPublishedTs) {
-            if (mqtt->publish(topicIoInputState, out, 0, false)) {
-                gIoInputLastPublishedTs = inputTs;
-                published = true;
-            }
+    for (uint8_t i = 0; i < gRuntimeRouteCount; ++i) {
+        RuntimeSnapshotRoute& route = gRuntimeRoutes[i];
+        if (!route.provider) continue;
+        if ((route.dirtyMask & activeDirtyMask) == 0U) continue;
+
+        uint32_t ts = 0;
+        if (!route.provider->buildRuntimeSnapshot(route.snapshotIdx, out, len, ts)) continue;
+        if (ts <= route.lastPublishedTs) continue;
+
+        if (mqtt->publish(route.topic, out, 0, false)) {
+            route.lastPublishedTs = ts;
         }
     }
 
-    uint32_t outputTs = 0;
-    if (buildIoGroupSnapshot(out, len, false, outputTs)) {
-        if (outputTs > gIoOutputLastPublishedTs) {
-            if (mqtt->publish(topicIoOutputState, out, 0, false)) {
-                gIoOutputLastPublishedTs = outputTs;
-                published = true;
-            }
-        }
-    }
-
-    // Prevent publisher from posting on its bound topic; we publish manually above.
-    (void)published;
+    // Prevent publisher from posting on its bound topic; snapshots are published manually above.
     return false;
 }
 
@@ -267,6 +222,7 @@ void setup() {
     moduleManager.add(&haModule);
     moduleManager.add(&systemModule);
     moduleManager.add(&ioModule);
+    moduleManager.add(&poolDeviceModule);
 
     systemMonitorModule.setModuleManager(&moduleManager);
     moduleManager.add(&systemMonitorModule);
@@ -380,6 +336,32 @@ void setup() {
     d7.initialOn = false;
     ioModule.defineDigitalOutput(d7);
 
+    PoolDeviceDefinition pd0{};
+    snprintf(pd0.label, sizeof(pd0.label), "Filtration Pump");
+    snprintf(pd0.ioId, sizeof(pd0.ioId), "d0");
+    pd0.type = POOL_DEVICE_FILTRATION;
+    poolDeviceModule.defineDevice(pd0);
+
+    PoolDeviceDefinition pd1{};
+    snprintf(pd1.label, sizeof(pd1.label), "pH Pump");
+    snprintf(pd1.ioId, sizeof(pd1.ioId), "d1");
+    pd1.type = POOL_DEVICE_PERISTALTIC;
+    pd1.flowLPerHour = 1.2f;
+    pd1.tankCapacityMl = 20000.0f;
+    pd1.tankInitialMl = 20000.0f;
+    pd1.dependsOnMask = (uint8_t)(1u << 0);
+    poolDeviceModule.defineDevice(pd1);
+
+    PoolDeviceDefinition pd2{};
+    snprintf(pd2.label, sizeof(pd2.label), "Chlorine Pump");
+    snprintf(pd2.ioId, sizeof(pd2.ioId), "d2");
+    pd2.type = POOL_DEVICE_PERISTALTIC;
+    pd2.flowLPerHour = 1.2f;
+    pd2.tankCapacityMl = 20000.0f;
+    pd2.tankInitialMl = 20000.0f;
+    pd2.dependsOnMask = (uint8_t)(1u << 0);
+    poolDeviceModule.defineDevice(pd2);
+
     
     bool ok = moduleManager.initAll(registry, services);
     if (!ok) {
@@ -389,11 +371,13 @@ void setup() {
     const DataStoreService* dsSvc = services.get<DataStoreService>("datastore");
     gIoDataStore = dsSvc ? dsSvc->store : nullptr;
 
-    mqttModule.formatTopic(topicIoInputState, sizeof(topicIoInputState), "rt/io/input/state");
-    mqttModule.formatTopic(topicIoOutputState, sizeof(topicIoOutputState), "rt/io/output/state");
+    mqttModule.formatTopic(topicRuntimeMux, sizeof(topicRuntimeMux), "rt/runtime/state");
+    gRuntimeRouteCount = 0;
+    (void)registerRuntimeProvider(mqttModule, &ioModule);
+    (void)registerRuntimeProvider(mqttModule, &poolDeviceModule);
     mqttModule.formatTopic(topicNetworkState, sizeof(topicNetworkState), "rt/network/state");
     mqttModule.formatTopic(topicSystemState, sizeof(topicSystemState), "rt/system/state");
-    mqttModule.setSensorsPublisher(topicIoInputState, publishIoStates);
+    mqttModule.setSensorsPublisher(topicRuntimeMux, publishRuntimeStates);
     mqttModule.addRuntimePublisher(topicNetworkState, 60000, 0, false, buildNetworkSnapshot);
     mqttModule.addRuntimePublisher(topicSystemState, 60000, 0, false, buildSystemSnapshot);
 

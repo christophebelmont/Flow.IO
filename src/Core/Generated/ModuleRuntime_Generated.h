@@ -12,3 +12,4 @@
 #include "Modules/Network/MQTTModule/MQTTRuntime.h"
 #include "Modules/Network/NTPModule/NTPRuntime.h"
 #include "Modules/Network/WifiModule/WifiRuntime.h"
+#include "Modules/PoolDeviceModule/PoolDeviceRuntime.h"

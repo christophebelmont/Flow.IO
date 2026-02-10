@@ -96,7 +96,8 @@ void MQTTModule::onConnect(bool) {
 
     if (sensorsTopic && sensorsBuild) {
         sensorsPending = true;
-        sensorsBypassThrottlePending = false;
+        sensorsPendingDirtyMask = (DIRTY_SENSORS | DIRTY_ACTUATORS);
+        sensorsActiveDirtyMask = 0;
         lastSensorsPublishMs = 0;
     }
 }
@@ -312,16 +313,37 @@ void MQTTModule::loop() {
         if (_pendingPublish) _pendingPublish = false;
         uint32_t now = millis();
         if (sensorsPending && sensorsTopic && sensorsBuild) {
-            bool bypassThrottle = sensorsBypassThrottlePending;
+            const uint32_t relevantMask = (DIRTY_SENSORS | DIRTY_ACTUATORS);
+            if ((sensorsPendingDirtyMask & relevantMask) == 0U) {
+                sensorsPendingDirtyMask = relevantMask;
+            }
             uint32_t minMs = cfgData.sensorMinPublishMs;
-            if (bypassThrottle || minMs == 0 || (uint32_t)(now - lastSensorsPublishMs) >= minMs) {
+            uint32_t elapsed = (uint32_t)(now - lastSensorsPublishMs);
+            bool withinThrottle = (minMs != 0U) && (elapsed < minMs);
+            bool hasActuators = (sensorsPendingDirtyMask & DIRTY_ACTUATORS) != 0U;
+            bool hasSensors = (sensorsPendingDirtyMask & DIRTY_SENSORS) != 0U;
+
+            if (hasActuators && withinThrottle) {
+                sensorsActiveDirtyMask = DIRTY_ACTUATORS;
                 if (sensorsBuild(this, publishBuf, sizeof(publishBuf))) {
                     publish(sensorsTopic, publishBuf, 0, false);
                 }
-                // Update throttle window even if callback published manually.
+                sensorsActiveDirtyMask = 0;
+                sensorsPendingDirtyMask &= ~DIRTY_ACTUATORS;
+                if (!hasSensors) {
+                    sensorsPending = false;
+                    sensorsPendingDirtyMask = 0;
+                }
+            } else if (!withinThrottle || minMs == 0U) {
+                sensorsActiveDirtyMask = sensorsPendingDirtyMask & relevantMask;
+                if (sensorsActiveDirtyMask == 0U) sensorsActiveDirtyMask = relevantMask;
+                if (sensorsBuild(this, publishBuf, sizeof(publishBuf))) {
+                    publish(sensorsTopic, publishBuf, 0, false);
+                }
+                sensorsActiveDirtyMask = 0;
                 lastSensorsPublishMs = now;
                 sensorsPending = false;
-                sensorsBypassThrottlePending = false;
+                sensorsPendingDirtyMask = 0;
             }
         }
         for (uint8_t i = 0; i < publisherCount; ++i) {
@@ -396,11 +418,10 @@ void MQTTModule::onEvent(const Event& e)
     if (e.id == EventId::DataSnapshotAvailable) {
         const DataSnapshotPayload* p = (const DataSnapshotPayload*)e.payload;
         if (!p) return;
-        bool sensorsChanged = (p->dirtyFlags & DIRTY_SENSORS) != 0;
-        bool actuatorsChanged = (p->dirtyFlags & DIRTY_ACTUATORS) != 0;
-        if (!sensorsChanged && !actuatorsChanged) return;
+        uint32_t relevant = p->dirtyFlags & (DIRTY_SENSORS | DIRTY_ACTUATORS);
+        if (relevant == 0U) return;
         sensorsPending = true;
-        if (actuatorsChanged) sensorsBypassThrottlePending = true;
+        sensorsPendingDirtyMask |= relevant;
         return;
     }
 

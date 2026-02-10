@@ -35,6 +35,18 @@ static const char* skipWsLocal(const char* p)
     return p;
 }
 
+static bool isInputEndpointIdLocal(const char* id)
+{
+    return id && id[0] == 'a' && id[1] >= '0' && id[1] <= '9' && id[2] == '\0';
+}
+
+static bool isOutputEndpointIdLocal(const char* id)
+{
+    if (!id || id[0] == '\0') return false;
+    if (id[0] == 'd' && id[1] >= '0' && id[1] <= '9' && id[2] == '\0') return true;
+    return strcmp(id, "status_leds_mask") == 0;
+}
+
 void IOModule::setOneWireBuses(OneWireBus* water, OneWireBus* air)
 {
     oneWireWater_ = water;
@@ -113,6 +125,183 @@ const char* IOModule::endpointLabel(const char* endpointId) const
         if (idx < DIGITAL_CFG_SLOTS && digitalCfg_[idx].name[0] != '\0') return digitalCfg_[idx].name;
     }
     return nullptr;
+}
+
+bool IOModule::buildInputSnapshot(char* out, size_t len, uint32_t& maxTsOut) const
+{
+    return buildGroupSnapshot_(out, len, true, maxTsOut);
+}
+
+bool IOModule::buildOutputSnapshot(char* out, size_t len, uint32_t& maxTsOut) const
+{
+    return buildGroupSnapshot_(out, len, false, maxTsOut);
+}
+
+uint8_t IOModule::runtimeSnapshotCount() const
+{
+    uint8_t count = 0;
+    for (uint8_t i = 0; i < MAX_ANALOG_ENDPOINTS; ++i) {
+        if (analogSlots_[i].used) ++count;
+    }
+    for (uint8_t i = 0; i < MAX_DIGITAL_OUTPUTS; ++i) {
+        if (digitalOutSlots_[i].used) ++count;
+    }
+    return count;
+}
+
+bool IOModule::runtimeSnapshotRouteFromIndex_(uint8_t snapshotIdx, bool& inputGroupOut, uint8_t& slotIdxOut) const
+{
+    uint8_t seen = 0;
+    for (uint8_t i = 0; i < MAX_ANALOG_ENDPOINTS; ++i) {
+        if (!analogSlots_[i].used) continue;
+        if (seen == snapshotIdx) {
+            inputGroupOut = true;
+            slotIdxOut = i;
+            return true;
+        }
+        ++seen;
+    }
+    for (uint8_t i = 0; i < MAX_DIGITAL_OUTPUTS; ++i) {
+        if (!digitalOutSlots_[i].used) continue;
+        if (seen == snapshotIdx) {
+            inputGroupOut = false;
+            slotIdxOut = i;
+            return true;
+        }
+        ++seen;
+    }
+    return false;
+}
+
+bool IOModule::buildEndpointSnapshot_(IOEndpoint* ep, char* out, size_t len, uint32_t& maxTsOut) const
+{
+    if (!ep || !out || len == 0) return false;
+    if ((ep->capabilities() & IO_CAP_READ) == 0) return false;
+
+    IOEndpointValue v{};
+    bool ok = ep->read(v);
+    if (!ok) v.valid = false;
+
+    const char* id = ep->id();
+    const char* label = endpointLabel(id);
+    int wrote = snprintf(out, len, "{\"id\":\"%s\",\"name\":\"%s\",\"value\":",
+                         (id && id[0] != '\0') ? id : "",
+                         (label && label[0] != '\0') ? label : ((id && id[0] != '\0') ? id : ""));
+    if (wrote < 0 || (size_t)wrote >= len) return false;
+    size_t used = (size_t)wrote;
+
+    if (!v.valid) {
+        wrote = snprintf(out + used, len - used, "null");
+    } else if (v.valueType == IO_EP_VALUE_BOOL) {
+        wrote = snprintf(out + used, len - used, "%s", v.v.b ? "true" : "false");
+    } else if (v.valueType == IO_EP_VALUE_FLOAT) {
+        wrote = snprintf(out + used, len - used, "%.3f", (double)v.v.f);
+    } else if (v.valueType == IO_EP_VALUE_INT32) {
+        wrote = snprintf(out + used, len - used, "%ld", (long)v.v.i);
+    } else {
+        wrote = snprintf(out + used, len - used, "null");
+    }
+    if (wrote < 0 || (size_t)wrote >= (len - used)) return false;
+    used += (size_t)wrote;
+
+    wrote = snprintf(out + used, len - used, ",\"ts\":%lu}", (unsigned long)millis());
+    if (wrote < 0 || (size_t)wrote >= (len - used)) return false;
+
+    // Ensure one initial publish even if endpoint timestamp has not been set yet.
+    maxTsOut = (v.timestampMs == 0U) ? 1U : v.timestampMs;
+    return true;
+}
+
+const char* IOModule::runtimeSnapshotSuffix(uint8_t idx) const
+{
+    bool inputGroup = false;
+    uint8_t slotIdx = 0xFF;
+    if (!runtimeSnapshotRouteFromIndex_(idx, inputGroup, slotIdx)) return nullptr;
+
+    static char suffix[24];
+    if (inputGroup) {
+        snprintf(suffix, sizeof(suffix), "rt/io/input/a%u", (unsigned)slotIdx);
+    } else {
+        snprintf(suffix, sizeof(suffix), "rt/io/output/d%u", (unsigned)slotIdx);
+    }
+    return suffix;
+}
+
+bool IOModule::buildRuntimeSnapshot(uint8_t idx, char* out, size_t len, uint32_t& maxTsOut) const
+{
+    bool inputGroup = false;
+    uint8_t slotIdx = 0xFF;
+    if (!runtimeSnapshotRouteFromIndex_(idx, inputGroup, slotIdx)) return false;
+
+    IOEndpoint* ep = nullptr;
+    if (inputGroup) {
+        ep = static_cast<IOEndpoint*>(analogSlots_[slotIdx].endpoint);
+    } else {
+        ep = static_cast<IOEndpoint*>(digitalOutSlots_[slotIdx].endpoint);
+    }
+    return buildEndpointSnapshot_(ep, out, len, maxTsOut);
+}
+
+bool IOModule::buildGroupSnapshot_(char* out, size_t len, bool inputGroup, uint32_t& maxTsOut) const
+{
+    if (!out || len == 0) return false;
+
+    size_t used = 0;
+    int wrote = snprintf(out, len, "{");
+    if (wrote < 0 || (size_t)wrote >= len) return false;
+    used += (size_t)wrote;
+
+    bool first = true;
+    uint32_t maxTs = 0;
+    for (uint8_t i = 0; i < registry_.count(); ++i) {
+        IOEndpoint* ep = registry_.at(i);
+        if (!ep) continue;
+        if ((ep->capabilities() & IO_CAP_READ) == 0) continue;
+
+        const char* id = ep->id();
+        if (!id || id[0] == '\0') continue;
+        if (inputGroup && !isInputEndpointIdLocal(id)) continue;
+        if (!inputGroup && !isOutputEndpointIdLocal(id)) continue;
+
+        IOEndpointValue v{};
+        bool ok = ep->read(v);
+        if (!ok) v.valid = false;
+
+        const char* label = endpointLabel(id);
+        wrote = snprintf(out + used, len - used, "%s\"%s\":{\"name\":\"%s\",\"value\":",
+                         first ? "" : ",",
+                         id,
+                         (label && label[0] != '\0') ? label : id);
+        if (wrote < 0 || (size_t)wrote >= (len - used)) return false;
+        used += (size_t)wrote;
+        first = false;
+
+        if (!v.valid) {
+            wrote = snprintf(out + used, len - used, "null");
+        } else if (v.valueType == IO_EP_VALUE_BOOL) {
+            wrote = snprintf(out + used, len - used, "%s", v.v.b ? "true" : "false");
+        } else if (v.valueType == IO_EP_VALUE_FLOAT) {
+            wrote = snprintf(out + used, len - used, "%.3f", (double)v.v.f);
+        } else if (v.valueType == IO_EP_VALUE_INT32) {
+            wrote = snprintf(out + used, len - used, "%ld", (long)v.v.i);
+        } else {
+            wrote = snprintf(out + used, len - used, "null");
+        }
+        if (wrote < 0 || (size_t)wrote >= (len - used)) return false;
+        used += (size_t)wrote;
+
+        wrote = snprintf(out + used, len - used, "}");
+        if (wrote < 0 || (size_t)wrote >= (len - used)) return false;
+        used += (size_t)wrote;
+
+        if (v.timestampMs > maxTs) maxTs = v.timestampMs;
+    }
+
+    wrote = snprintf(out + used, len - used, ",\"ts\":%lu}", (unsigned long)millis());
+    if (wrote < 0 || (size_t)wrote >= (len - used)) return false;
+
+    maxTsOut = maxTs;
+    return true;
 }
 
 bool IOModule::tickFastAds_(void* ctx, uint32_t nowMs)

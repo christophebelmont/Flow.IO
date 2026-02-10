@@ -314,7 +314,7 @@ uint8_t ConfigStore::listModules(const char** out, uint8_t max) const
 bool ConfigStore::applyJson(const char* json)
 {
     Log::debug(LOG_TAG_CORE, "applyJson: start");
-    for (uint8_t i = 0; i < _metaCount; ++i) {
+    for (uint16_t i = 0; i < _metaCount; ++i) {
         auto& m = _meta[i];
         const char* p = findJsonValueStart(json, m.module, m.name);
         if (!p) continue;

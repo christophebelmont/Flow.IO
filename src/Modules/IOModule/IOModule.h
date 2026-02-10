@@ -5,6 +5,7 @@
  */
 
 #include "Core/Module.h"
+#include "Core/RuntimeSnapshotProvider.h"
 #include "Core/Services/Services.h"
 #include "Modules/IOModule/IOBus/I2CBus.h"
 #include "Modules/IOModule/IOBus/OneWireBus.h"
@@ -98,16 +99,17 @@ struct IOLedMaskService {
     void* ctx;
 };
 
-class IOModule : public Module {
+class IOModule : public Module, public IRuntimeSnapshotProvider {
 public:
     const char* moduleId() const override { return "io"; }
     const char* taskName() const override { return "io"; }
 
-    uint8_t dependencyCount() const override { return 3; }
+    uint8_t dependencyCount() const override { return 4; }
     const char* dependency(uint8_t i) const override {
         if (i == 0) return "loghub";
         if (i == 1) return "datastore";
         if (i == 2) return "cmd";
+        if (i == 3) return "mqtt";
         return nullptr;
     }
 
@@ -119,6 +121,11 @@ public:
     bool defineDigitalOutput(const IODigitalOutputDefinition& def);
     const char* analogSlotName(uint8_t idx) const;
     const char* endpointLabel(const char* endpointId) const;
+    bool buildInputSnapshot(char* out, size_t len, uint32_t& maxTsOut) const;
+    bool buildOutputSnapshot(char* out, size_t len, uint32_t& maxTsOut) const;
+    uint8_t runtimeSnapshotCount() const override;
+    const char* runtimeSnapshotSuffix(uint8_t idx) const override;
+    bool buildRuntimeSnapshot(uint8_t idx, char* out, size_t len, uint32_t& maxTsOut) const override;
 
     IORegistry& registry() { return registry_; }
 
@@ -139,6 +146,9 @@ private:
     uint8_t pcfLogicalFromPhysical_(uint8_t physicalMask) const;
 
     bool configureRuntime_();
+    bool runtimeSnapshotRouteFromIndex_(uint8_t snapshotIdx, bool& inputGroupOut, uint8_t& slotIdxOut) const;
+    bool buildEndpointSnapshot_(IOEndpoint* ep, char* out, size_t len, uint32_t& maxTsOut) const;
+    bool buildGroupSnapshot_(char* out, size_t len, bool inputGroup, uint32_t& maxTsOut) const;
     bool processAnalogDefinition_(uint8_t idx, uint32_t nowMs);
     bool endpointIndexFromId_(const char* id, uint8_t& idxOut) const;
     static bool writeDigitalOut_(void* ctx, bool on);

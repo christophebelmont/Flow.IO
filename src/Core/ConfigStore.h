@@ -43,7 +43,7 @@ struct MigrationStep {
 class ConfigStore {
 public:
     static constexpr size_t JSON_BUFFER_SIZE = 1024;
-    static constexpr size_t MAX_CONFIG_VARS = 128;
+    static constexpr size_t MAX_CONFIG_VARS = 500;
 
     //explicit ConfigStore(Preferences& prefs);
     ConfigStore() = default;
@@ -87,7 +87,7 @@ private:
     Preferences* _prefs = nullptr;
     EventBus* _eventBus = nullptr;
     ConfigMeta _meta[MAX_CONFIG_VARS];
-    uint8_t _metaCount = 0;
+    uint16_t _metaCount = 0;
 
     void notifyChanged(const char* nvsKey);
     bool writePersistent(const ConfigMeta& m);
