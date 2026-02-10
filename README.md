@@ -1,80 +1,80 @@
-# Flow.io - Gestion et regulation de piscine sur ESP32
+# Flow.IO - Pool Monitoring and Control on ESP32
 
-Flow.io est un firmware ESP32 conçu pour piloter une piscine de façon fiable et industrialisable: mesures en continu (pH, ORP, pression, temperatures), commande d'equipements (pompes, electrolyseur, eclairage, chauffage, remplissage), supervision runtime et remontee des metriques vers MQTT/Home Assistant. L'objectif produit est simple: transformer une installation piscine en systeme connecte, pilotable et observable en temps reel, avec une architecture robuste et evolutive.
+Flow.IO is an ESP32 firmware designed to operate a pool with reliable, production-oriented control: continuous sensor acquisition (pH, ORP, pressure, temperatures), equipment control (pumps, chlorinator, lighting, heater, filling), runtime supervision, and metrics publishing to MQTT/Home Assistant. The product goal is straightforward: turn a pool installation into a connected, controllable, and observable real-time system with a robust, extensible architecture.
 
-## Architecture modulaire ESP32
+## Fully Modular ESP32 Architecture
 
-Le programme est entierement modulaire:
+The program is fully modular:
 
-- chaque fonctionnalite est implementee dans un module autonome (`Module` ou `ModulePassive`)
-- les dependances entre modules sont explicites (`dependencyCount`, `dependency`)
-- les services inter-modules sont types et enregistres dans `ServiceRegistry`
-- l'etat runtime partage est centralise dans `DataStore` (avec dirty flags et evenements)
-- la configuration persistante est centralisee dans `ConfigStore` (NVS + import/export JSON)
-- les modules actifs tournent dans leur propre task FreeRTOS
+- each capability is implemented as an isolated module (`Module` or `ModulePassive`)
+- module dependencies are explicit (`dependencyCount`, `dependency`)
+- inter-module contracts are typed services registered in `ServiceRegistry`
+- shared runtime state is centralized in `DataStore` (with dirty flags and events)
+- persistent configuration is centralized in `ConfigStore` (NVS + JSON import/export)
+- active modules run in dedicated FreeRTOS tasks
 
-Ce design est adapte a l'ESP32: couplage faible, evolutions maitrisees et integration progressive de nouveaux capteurs/actionneurs.
+This model fits ESP32 constraints well: low coupling, controlled evolution, and incremental integration of new sensors and actuators.
 
-## Structure globale du projet
+## Documentation Languages
+
+- English: [docs/en/README.md](docs/en/README.md)
+- Français: [docs/fr/README.md](docs/fr/README.md)
+
+## Global Project Structure
 
 ```text
 src/
   Core/
-    Module*.h/.cpp                 # socle module manager + services + runtime
-    Services/                      # interfaces de services (IWifi, IMqtt, ITime, ...)
-    DataStore/                     # etat runtime + notifications EventBus
-    EventBus/                      # bus d'evenements inter-modules
+    Module*.h/.cpp                 # module manager + services + runtime foundations
+    Services/                      # service interfaces (IWifi, IMqtt, ITime, ...)
+    DataStore/                     # runtime state + EventBus notifications
+    EventBus/                      # inter-module event bus
   Modules/
-    Logs/                          # hub de logs + dispatcher + sink serie
+    Logs/                          # log hub + dispatcher + serial sink
     Stores/                        # ConfigStoreModule + DataStoreModule
-    System/                        # commandes systeme + monitoring
-    Network/                       # Wifi, Time, MQTT, Home Assistant
-    IOModule/                      # capteurs/actionneurs, bus, drivers, endpoints
-    PoolDeviceModule/              # couche metier equipements piscine
-    EventBusModule/                # service eventbus
-    CommandModule/                 # registre de commandes
+    System/                        # system commands + monitoring
+    Network/                       # Wi-Fi, Time, MQTT, Home Assistant
+    IOModule/                      # sensors/actuators, buses, drivers, endpoints
+    PoolDeviceModule/              # pool equipment domain layer
+    EventBusModule/                # event bus service host
+    CommandModule/                 # command registry service
 docs/
-  modules/                         # documentation detaillee module par module
-  CoreServicesGuidelines.md        # regles de design des services core
-  ModuleDevGuide.md                # guide pour creer un nouveau module
+  en/                              # English documentation
+  fr/                              # French documentation
+  modules/                         # legacy module docs (backward compatibility)
+  CoreServicesGuidelines.md        # legacy root docs (backward compatibility)
 ```
 
-## Modules disponibles
+## Available Modules
 
 - Logs: `loghub`, `log.dispatcher`, `log.sink.serial`
 - Core runtime: `eventbus`, `config`, `datastore`, `cmd`
-- Systeme: `system`, `sysmon`
-- Reseau: `wifi`, `time`, `mqtt`, `ha`
-- Metier piscine: `io`, `pooldev`
+- System: `system`, `sysmon`
+- Network: `wifi`, `time`, `mqtt`, `ha`
+- Pool domain: `io`, `pooldev`
 
-## Documentation complete
+## Complete Documentation
 
-### Documentation module par module (meme structure)
+### Module Documentation (same structure for every module)
 
-- [LogHubModule](docs/modules/LogHubModule.md)
-- [LogDispatcherModule](docs/modules/LogDispatcherModule.md)
-- [LogSerialSinkModule](docs/modules/LogSerialSinkModule.md)
-- [EventBusModule](docs/modules/EventBusModule.md)
-- [CommandModule](docs/modules/CommandModule.md)
-- [ConfigStoreModule](docs/modules/ConfigStoreModule.md)
-- [DataStoreModule](docs/modules/DataStoreModule.md)
-- [SystemModule](docs/modules/SystemModule.md)
-- [SystemMonitorModule](docs/modules/SystemMonitorModule.md)
-- [WifiModule](docs/modules/WifiModule.md)
-- [TimeModule](docs/modules/TimeModule.md)
-- [MQTTModule](docs/modules/MQTTModule.md)
-- [HAModule](docs/modules/HAModule.md)
-- [IOModule](docs/modules/IOModule.md)
-- [PoolDeviceModule](docs/modules/PoolDeviceModule.md)
+- [LogHubModule](docs/en/modules/LogHubModule.md)
+- [LogDispatcherModule](docs/en/modules/LogDispatcherModule.md)
+- [LogSerialSinkModule](docs/en/modules/LogSerialSinkModule.md)
+- [EventBusModule](docs/en/modules/EventBusModule.md)
+- [CommandModule](docs/en/modules/CommandModule.md)
+- [ConfigStoreModule](docs/en/modules/ConfigStoreModule.md)
+- [DataStoreModule](docs/en/modules/DataStoreModule.md)
+- [SystemModule](docs/en/modules/SystemModule.md)
+- [SystemMonitorModule](docs/en/modules/SystemMonitorModule.md)
+- [WifiModule](docs/en/modules/WifiModule.md)
+- [TimeModule](docs/en/modules/TimeModule.md)
+- [MQTTModule](docs/en/modules/MQTTModule.md)
+- [HAModule](docs/en/modules/HAModule.md)
+- [IOModule](docs/en/modules/IOModule.md)
+- [PoolDeviceModule](docs/en/modules/PoolDeviceModule.md)
 
-### Guides transverses
+### Cross-Cutting Guides
 
-- [CoreServicesGuidelines](docs/CoreServicesGuidelines.md)
-- [ModuleDevGuide](docs/ModuleDevGuide.md)
-- [DevGuide (historique)](docs/DevGuide.md)
-
-## Build
-
-```bash
-pio run
-```
+- [CoreServicesGuidelines](docs/en/CoreServicesGuidelines.md)
+- [ModuleDevGuide](docs/en/ModuleDevGuide.md)
+- [DevGuide (legacy)](docs/en/DevGuide.md)

@@ -913,15 +913,15 @@ bool TimeModule::isRecurringActiveNow_(const TimeSchedulerSlot& def, uint8_t wee
 
 bool TimeModule::loadScheduleFromBlob_()
 {
-    SchedulerSlotRuntime parsed[TIME_SCHED_MAX_SLOTS]{};
+    // Build directly in live scheduler table to avoid large stack allocations
+    // in the time task (ESP32 stack is tight and this path runs at boot).
+    portENTER_CRITICAL(&schedMux_);
     for (uint8_t i = 0; i < TIME_SCHED_MAX_SLOTS; ++i) {
-        parsed[i].def.slot = i;
+        sched_[i] = SchedulerSlotRuntime{};
+        sched_[i].def.slot = i;
     }
 
-    char blob[TIME_SCHED_BLOB_SIZE] = {0};
-    strncpy(blob, scheduleBlob_, sizeof(blob) - 1);
-
-    const char* p = blob;
+    const char* p = scheduleBlob_;
     while (p && *p) {
         while (*p == ';' || *p == ' ' || *p == '\n' || *p == '\r' || *p == '\t') ++p;
         if (*p == '\0') break;
@@ -982,7 +982,7 @@ bool TimeModule::loadScheduleFromBlob_()
 
         if (!valid) continue;
 
-        SchedulerSlotRuntime& s = parsed[def.slot];
+        SchedulerSlotRuntime& s = sched_[def.slot];
         s.used = true;
         s.def = def;
         s.active = false;
@@ -990,12 +990,7 @@ bool TimeModule::loadScheduleFromBlob_()
     }
 
     // Ensure the first 3 slots are always reserved for system cadence events.
-    applySystemSlots_(parsed, TIME_SCHED_MAX_SLOTS);
-
-    portENTER_CRITICAL(&schedMux_);
-    for (uint8_t i = 0; i < TIME_SCHED_MAX_SLOTS; ++i) {
-        sched_[i] = parsed[i];
-    }
+    applySystemSlots_(sched_, TIME_SCHED_MAX_SLOTS);
     activeMaskValue_ = 0;
     schedInitialized_ = false;
     schedNeedsReload_ = false;
@@ -1010,16 +1005,12 @@ bool TimeModule::serializeSchedule_(char* out, size_t outLen) const
     if (!out || outLen == 0) return false;
     out[0] = '\0';
 
-    SchedulerSlotRuntime snapshot[TIME_SCHED_MAX_SLOTS]{};
-    portENTER_CRITICAL(&schedMux_);
-    for (uint8_t i = 0; i < TIME_SCHED_MAX_SLOTS; ++i) {
-        snapshot[i] = sched_[i];
-    }
-    portEXIT_CRITICAL(&schedMux_);
-
     size_t pos = 0;
     for (uint8_t i = 0; i < TIME_SCHED_MAX_SLOTS; ++i) {
-        const SchedulerSlotRuntime& s = snapshot[i];
+        SchedulerSlotRuntime s{};
+        portENTER_CRITICAL(&schedMux_);
+        s = sched_[i];
+        portEXIT_CRITICAL(&schedMux_);
         if (!s.used) continue;
 
         const uint32_t flags =
@@ -1059,9 +1050,8 @@ bool TimeModule::serializeSchedule_(char* out, size_t outLen) const
 bool TimeModule::persistSchedule_()
 {
     if (!cfgStore) return false;
-    char buf[TIME_SCHED_BLOB_SIZE] = {0};
-    if (!serializeSchedule_(buf, sizeof(buf))) return false;
-    return cfgStore->set(scheduleBlobVar, buf);
+    if (!serializeSchedule_(schedulePersistBuf_, sizeof(schedulePersistBuf_))) return false;
+    return cfgStore->set(scheduleBlobVar, schedulePersistBuf_);
 }
 
 bool TimeModule::setSlot_(const TimeSchedulerSlot& slotDef)
