@@ -348,23 +348,31 @@ bool IOModule::processAnalogDefinition_(uint8_t idx, uint32_t nowMs)
 
     float raw = 0.0f;
     int16_t rawBinary = 0;
+    uint32_t sampleSeq = 0;
+    bool hasSampleSeq = false;
     bool valid = false;
 
     if (slot.def.source == IO_SRC_ADS_INTERNAL_SINGLE) {
         if (!adsInternal_) return false;
         bool rawOk = adsInternal_->readRawChannel(slot.def.channel, rawBinary);
         bool vOk = adsInternal_->readVoltsChannel(slot.def.channel, raw);
-        valid = rawOk && vOk;
+        bool seqOk = adsInternal_->readSampleSeqChannel(slot.def.channel, sampleSeq);
+        hasSampleSeq = true;
+        valid = rawOk && vOk && seqOk;
     } else if (slot.def.source == IO_SRC_ADS_EXTERNAL_DIFF) {
         if (!adsExternal_) return false;
         if (slot.def.channel == 0) {
             bool rawOk = adsExternal_->readRawDifferential01(rawBinary);
             bool vOk = adsExternal_->readVoltsDifferential01(raw);
-            valid = rawOk && vOk;
+            bool seqOk = adsExternal_->readSampleSeqDifferential01(sampleSeq);
+            hasSampleSeq = true;
+            valid = rawOk && vOk && seqOk;
         } else {
             bool rawOk = adsExternal_->readRawDifferential23(rawBinary);
             bool vOk = adsExternal_->readVoltsDifferential23(raw);
-            valid = rawOk && vOk;
+            bool seqOk = adsExternal_->readSampleSeqDifferential23(sampleSeq);
+            hasSampleSeq = true;
+            valid = rawOk && vOk && seqOk;
         }
     } else if (slot.def.source == IO_SRC_DS18_WATER) {
         if (!dsWater_) return false;
@@ -375,6 +383,13 @@ bool IOModule::processAnalogDefinition_(uint8_t idx, uint32_t nowMs)
     }
 
     if (!valid) return false;
+
+    // ADS values are processed only when a fresh sample arrives for that channel/pair.
+    if (hasSampleSeq) {
+        if (slot.lastAdsSampleSeqValid && sampleSeq == slot.lastAdsSampleSeq) return false;
+        slot.lastAdsSampleSeq = sampleSeq;
+        slot.lastAdsSampleSeqValid = true;
+    }
 
     if (raw < slot.def.minValid || raw > slot.def.maxValid) {
         slot.endpoint->update(raw, false, nowMs);

@@ -166,6 +166,8 @@ private:
         IOAnalogDefinition def{};
         AnalogSensorEndpoint* endpoint = nullptr;
         RunningMedianAverageFloat median{11, 5};
+        bool lastAdsSampleSeqValid = false;
+        uint32_t lastAdsSampleSeq = 0;
         bool lastRoundedValid = false;
         float lastRounded = 0.0f;
     };

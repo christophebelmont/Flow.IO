@@ -33,6 +33,9 @@ public:
     bool readVoltsChannel(uint8_t ch, float& outV) const;
     bool readVoltsDifferential01(float& outV) const;
     bool readVoltsDifferential23(float& outV) const;
+    bool readSampleSeqChannel(uint8_t ch, uint32_t& outSeq) const;
+    bool readSampleSeqDifferential01(uint32_t& outSeq) const;
+    bool readSampleSeqDifferential23(uint32_t& outSeq) const;
 
 private:
     void requestNext_();
@@ -53,10 +56,13 @@ private:
     bool validSingle_[4] = {false, false, false, false};
     int16_t rawSingle_[4] = {0, 0, 0, 0};
     float vSingle_[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    uint32_t seqSingle_[4] = {0, 0, 0, 0};
     bool validDiff01_ = false;
     bool validDiff23_ = false;
     int16_t rawDiff01_ = 0;
     int16_t rawDiff23_ = 0;
     float vDiff01_ = 0.0f;
     float vDiff23_ = 0.0f;
+    uint32_t seqDiff01_ = 0;
+    uint32_t seqDiff23_ = 0;
 };

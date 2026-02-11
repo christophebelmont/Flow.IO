@@ -162,8 +162,8 @@ Data keys: `DATAKEY_IO_BASE + idx` (`DATAKEY_IO_BASE = 40`).
 
 Published snapshots:
 
-- `rt/io/input/state` for analog inputs (`aN`)
-- `rt/io/output/state` for outputs (`dN`, `status_leds_mask`)
+- `rt/io/input/aN` for analog inputs (`aN`)
+- `rt/io/output/dN` for digital outputs (`dN`)
 
 Each key is published as:
 
@@ -172,3 +172,106 @@ Each key is published as:
 ```
 
 with top-level timestamp `ts`.
+
+## 6) Detailed ADS1115 Capture Chain (Binary Port -> MQTT)
+
+This section documents the exact chain currently implemented in code for ADS1115-backed analog inputs.
+
+### 6.1 End-to-End Stages
+
+1. Scheduler tick (`ads_fast`) every `ads_poll_ms` (minimum enforced to `20 ms`).
+2. ADS1115 async state machine:
+   - if previous conversion is ready: read raw 16-bit signed value (`int16_t`)
+   - convert raw to voltage
+   - immediately request next conversion (round-robin channel/pair)
+3. Analog definition processing (`aN`):
+   - read `rawBinary` + `raw` voltage from driver cache
+   - for ADS sources, continue only on a fresh per-channel/per-pair sample sequence
+   - check valid range `[aN_min, aN_max]`
+   - apply running median central average filter (`window=11`, `avgCount=5`)
+   - apply calibration: `calibrated = aN_c0 * filtered + aN_c1`
+   - apply precision rounding: `rounded = round(calibrated, aN_prec)`
+4. Endpoint update (`AnalogSensorEndpoint`).
+5. Domain callback (`onValueChanged`) only if rounded value changed.
+6. DataStore write with `DIRTY_SENSORS`.
+7. MQTTModule receives `DataSnapshotAvailable`, applies throttling (`sensor_min_publish_ms`), then publishes runtime snapshot on `rt/io/input/aN`.
+
+### 6.2 Parameters Along the Chain
+
+| Stage | Parameter | Effect |
+|---|---|---|
+| I2C/driver setup | `ads_internal_addr`, `ads_external_addr` | Selects ADS device addresses |
+| ADS conversion | `ads_gain` | ADC full-scale and voltage-per-bit mapping |
+| ADS conversion | `ads_rate` | ADS conversion speed index (`0..7`) |
+| Scheduler cadence | `ads_poll_ms` | How often driver tick and analog processing run |
+| Source routing | `aN_source`, `aN_channel` | Select internal single-ended channel or external differential pair |
+| Input validation | `aN_min`, `aN_max` | Rejects out-of-range raw values before filtering |
+| Calibration | `aN_c0`, `aN_c1` | Linear scaling (`y = c0*x + c1`) |
+| Output quantization | `aN_prec` | Decimal precision used for runtime value and change detection |
+| MQTT pacing | `mqtt.sensor_min_publish_ms` | Throttle for sensor publications |
+
+Notes:
+- `ads_rate` is passed directly to ADS1X15 library (`0..7` index).
+- ADS1115 effective SPS by index (from library docs): `0:8`, `1:16`, `2:32`, `3:64`, `4:128`, `5:250`, `6:475`, `7:860`.
+- In this firmware, scheduler cadence and channel multiplexing also determine effective per-channel freshness.
+
+### 6.3 Binary Capture and Voltage Conversion Details
+
+- Driver reads the ADC conversion register as signed `int16_t` (`rawBinary`).
+- Voltage uses `toVoltage(rawBinary)` from ADS1X15.
+- If library returns invalid voltage sentinel, fallback conversion is `rawBinary * voltLsb` (default `0.0001875 V/bit`).
+
+This is the exact "binary port state -> physical value" transition used for logs and processing.
+
+### 6.4 Running Median Behavior (Sample-by-Sample)
+
+The filter helper is:
+- `RunningMedianAverageFloat(windowSize=11, avgCount=5)`
+- update rule per sample:
+  - add new value to the 11-sample ring buffer
+  - sort current window
+  - return average of the 5 central sorted values (`getAverage(5)`)
+
+So this is not a pure median output. It is a robust "central average around median".
+
+#### Example timeline at synchronous cadence
+
+Assume:
+- `ads_poll_ms = 125 ms`
+- internal ADS in single-ended mode (round-robin CH0 -> CH1 -> CH2 -> CH3)
+- slot `a0` bound to CH0
+
+Tick sequence:
+1. Tick 1: CH0 value just completed -> read/store CH0, request CH1.
+2. Tick 2: CH1 completed, request CH2.
+3. Tick 3: CH2 completed, request CH3.
+4. Tick 4: CH3 completed, request CH0.
+5. Tick 5: next CH0 completed.
+
+Implication for `a0`:
+- processing function runs each tick, but the running median is updated only when CH0 has a fresh sample sequence.
+- with `125 ms` tick, new CH0 physics sample period is about `500 ms` (`2 Hz`), and the filter update cadence for CH0 is the same `500 ms`.
+
+#### Window evolution view
+
+Let `xk` be successive *new* CH0 conversions.
+Fresh-sample gating avoids reinjecting repeated cached values between conversions.
+
+Typical evolution (conceptual):
+- after first stable phase: `[x0, x1, x2, x3, x4, x5, x6, x7, x8, x9, x10]`
+- filter output = mean of central 5 sorted values
+
+This keeps channel-level statistics physically meaningful while preserving robust outlier rejection.
+
+### 6.5 Spike Rejection and Correction Profile
+
+1. Hard out-of-range spike:
+   - if raw is outside `[aN_min, aN_max]`, sample is rejected before filter, endpoint marked invalid.
+2. In-range impulse spike (single conversion glitch):
+   - central-average filter strongly attenuates it if it remains minority in window center.
+3. Multiplexed-channel behavior:
+   - each channel contributes one sample per real conversion only; no duplicate weighting from scheduler-only repetitions.
+4. Real step changes:
+   - treated as signal, not noise; filter follows with smoothing delay.
+
+Operationally, this filter is best at removing short impulsive spikes and occasional outliers while keeping slow process values (pH/ORP/PSI) stable for MQTT publication.

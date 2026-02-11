@@ -44,16 +44,19 @@ void Ads1115Driver::tick(uint32_t nowMs)
                 validDiff23_ = true;
                 rawDiff23_ = raw;
                 vDiff23_ = v;
+                ++seqDiff23_;
             } else {
                 validDiff01_ = true;
                 rawDiff01_ = raw;
                 vDiff01_ = v;
+                ++seqDiff01_;
             }
         } else {
             uint8_t prevCh = (uint8_t)((nextSingleCh_ + 3) % 4);
             validSingle_[prevCh] = true;
             rawSingle_[prevCh] = raw;
             vSingle_[prevCh] = v;
+            ++seqSingle_[prevCh];
         }
 
         requestNext_();
@@ -101,6 +104,27 @@ bool Ads1115Driver::readRawDifferential23(int16_t& outRaw) const
 {
     if (!validDiff23_) return false;
     outRaw = rawDiff23_;
+    return true;
+}
+
+bool Ads1115Driver::readSampleSeqChannel(uint8_t ch, uint32_t& outSeq) const
+{
+    if (ch > 3 || !validSingle_[ch]) return false;
+    outSeq = seqSingle_[ch];
+    return true;
+}
+
+bool Ads1115Driver::readSampleSeqDifferential01(uint32_t& outSeq) const
+{
+    if (!validDiff01_) return false;
+    outSeq = seqDiff01_;
+    return true;
+}
+
+bool Ads1115Driver::readSampleSeqDifferential23(uint32_t& outSeq) const
+{
+    if (!validDiff23_) return false;
+    outSeq = seqDiff23_;
     return true;
 }
 
