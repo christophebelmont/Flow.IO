@@ -27,5 +27,5 @@ Index de la documentation Flow.IO en français.
 - [TimeModule](modules/TimeModule.md)
 - [MQTTModule](modules/MQTTModule.md)
 - [HAModule](modules/HAModule.md)
-- [IOModule](modules/IOModule.md)
+- [IOModule](IOModule.md)
 - [PoolDeviceModule](modules/PoolDeviceModule.md)

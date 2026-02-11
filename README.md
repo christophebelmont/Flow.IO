@@ -69,7 +69,7 @@ docs/
 - [TimeModule](docs/en/modules/TimeModule.md)
 - [MQTTModule](docs/en/modules/MQTTModule.md)
 - [HAModule](docs/en/modules/HAModule.md)
-- [IOModule](docs/en/modules/IOModule.md)
+- [IOModule](docs/en/IOModule.md)
 - [PoolDeviceModule](docs/en/modules/PoolDeviceModule.md)
 
 ### Cross-Cutting Guides
