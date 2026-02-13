@@ -5,6 +5,7 @@
 #include "TimeModule.h"
 #include "Core/Runtime.h"
 #include "Core/CommandRegistry.h"
+#include <ArduinoJson.h>
 #include <time.h>
 #include <cstdlib>
 #include <cstring>
@@ -31,83 +32,120 @@ static const char* schedulerEdgeStr(uint8_t edge)
     return "trigger";
 }
 
-static const char* findJsonStringValueLocal(const char* json, const char* key)
+static bool parseCmdArgsObject_(const CommandRequest& req, JsonObjectConst& outObj)
 {
-    static char pat[48];
-    snprintf(pat, sizeof(pat), "\"%s\":\"", key ? key : "");
-    const char* p = strstr(json ? json : "", pat);
-    if (!p) return nullptr;
-    return p + strlen(pat);
-}
+    static constexpr size_t CMD_DOC_CAPACITY = 768;
+    static StaticJsonDocument<CMD_DOC_CAPACITY> doc;
+    doc.clear();
+    const char* json = req.args ? req.args : req.json;
+    if (!json || json[0] == '\0') return false;
 
-static const char* findJsonValueLocal(const char* json, const char* key)
-{
-    static char pat[48];
-    snprintf(pat, sizeof(pat), "\"%s\":", key ? key : "");
-    const char* p = strstr(json ? json : "", pat);
-    if (!p) return nullptr;
-    return p + strlen(pat);
-}
-
-static const char* skipWsLocal(const char* p)
-{
-    while (p && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) ++p;
-    return p;
-}
-
-static bool parseBoolValueLocal(const char* json, const char* key, bool& out, bool required)
-{
-    const char* v = skipWsLocal(findJsonValueLocal(json, key));
-    if (!v) return !required;
-    if (strncmp(v, "true", 4) == 0) {
-        out = true;
+    DeserializationError err = deserializeJson(doc, json);
+    if (!err && doc.is<JsonObject>()) {
+        outObj = doc.as<JsonObjectConst>();
         return true;
     }
-    if (strncmp(v, "false", 5) == 0) {
-        out = false;
+
+    if (req.json && req.json[0] != '\0' && req.args != req.json) {
+        doc.clear();
+        err = deserializeJson(doc, req.json);
+        if (err || !doc.is<JsonObjectConst>()) return false;
+        JsonVariantConst argsVar = doc["args"];
+        if (argsVar.is<JsonObjectConst>()) {
+            outObj = argsVar.as<JsonObjectConst>();
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool parseBoolField_(JsonObjectConst obj, const char* key, bool& out, bool required)
+{
+    if (!obj.containsKey(key)) return !required;
+    JsonVariantConst v = obj[key];
+    if (v.is<bool>()) {
+        out = v.as<bool>();
         return true;
     }
-    char* end = nullptr;
-    long num = strtol(v, &end, 10);
-    if (end == v) return false;
-    out = (num != 0);
-    return true;
+    if (v.is<int32_t>() || v.is<uint32_t>() || v.is<float>()) {
+        out = (v.as<float>() != 0.0f);
+        return true;
+    }
+    if (v.is<const char*>()) {
+        const char* s = v.as<const char*>();
+        if (!s) return false;
+        if (strcmp(s, "true") == 0) {
+            out = true;
+            return true;
+        }
+        if (strcmp(s, "false") == 0) {
+            out = false;
+            return true;
+        }
+        char* end = nullptr;
+        long num = strtol(s, &end, 10);
+        if (end == s) return false;
+        out = (num != 0);
+        return true;
+    }
+    return false;
 }
 
-static bool parseU32ValueLocal(const char* json, const char* key, uint32_t& out, bool required)
+static bool parseU32Field_(JsonObjectConst obj, const char* key, uint32_t& out, bool required)
 {
-    const char* v = skipWsLocal(findJsonValueLocal(json, key));
-    if (!v) return !required;
-    char* end = nullptr;
-    unsigned long num = strtoul(v, &end, 10);
-    if (end == v) return false;
-    out = (uint32_t)num;
-    return true;
+    if (!obj.containsKey(key)) return !required;
+    JsonVariantConst v = obj[key];
+    if (v.is<uint32_t>()) {
+        out = v.as<uint32_t>();
+        return true;
+    }
+    if (v.is<int32_t>()) {
+        const int32_t n = v.as<int32_t>();
+        if (n < 0) return false;
+        out = (uint32_t)n;
+        return true;
+    }
+    if (v.is<const char*>()) {
+        const char* s = v.as<const char*>();
+        if (!s) return false;
+        char* end = nullptr;
+        unsigned long n = strtoul(s, &end, 10);
+        if (end == s) return false;
+        out = (uint32_t)n;
+        return true;
+    }
+    return false;
 }
 
-static bool parseU64ValueLocal(const char* json, const char* key, uint64_t& out, bool required)
+static bool parseU64Field_(JsonObjectConst obj, const char* key, uint64_t& out, bool required)
 {
-    const char* v = skipWsLocal(findJsonValueLocal(json, key));
-    if (!v) return !required;
-    char* end = nullptr;
-    unsigned long long num = strtoull(v, &end, 10);
-    if (end == v) return false;
-    out = (uint64_t)num;
-    return true;
-}
-
-static bool parseStringValueLocal(const char* json, const char* key, char* out, size_t outLen, bool required)
-{
-    if (!out || outLen == 0) return false;
-    const char* start = skipWsLocal(findJsonStringValueLocal(json, key));
-    if (!start) return !required;
-    const char* end = strchr(start, '"');
-    if (!end) return false;
-    size_t n = (size_t)(end - start);
-    if (n >= outLen) n = outLen - 1;
-    memcpy(out, start, n);
-    out[n] = '\0';
-    return true;
+    if (!obj.containsKey(key)) return !required;
+    JsonVariantConst v = obj[key];
+    if (v.is<uint64_t>()) {
+        out = v.as<uint64_t>();
+        return true;
+    }
+    if (v.is<uint32_t>()) {
+        out = (uint64_t)v.as<uint32_t>();
+        return true;
+    }
+    if (v.is<int32_t>()) {
+        const int32_t n = v.as<int32_t>();
+        if (n < 0) return false;
+        out = (uint64_t)n;
+        return true;
+    }
+    if (v.is<const char*>()) {
+        const char* s = v.as<const char*>();
+        if (!s) return false;
+        char* end = nullptr;
+        unsigned long long n = strtoull(s, &end, 10);
+        if (end == s) return false;
+        out = (uint64_t)n;
+        return true;
+    }
+    return false;
 }
 
 #ifdef TIME_TEST_FAST_CLOCK
@@ -557,14 +595,14 @@ bool TimeModule::handleCmdSchedInfo_(const CommandRequest&, char* reply, size_t 
 
 bool TimeModule::handleCmdSchedGet_(const CommandRequest& req, char* reply, size_t replyLen)
 {
-    const char* json = req.args ? req.args : req.json;
-    if (!json) {
+    JsonObjectConst args;
+    if (!parseCmdArgsObject_(req, args)) {
         snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"missing_args\"}");
         return false;
     }
 
     uint32_t slot = 0;
-    if (!parseU32ValueLocal(json, "slot", slot, true) || slot >= TIME_SCHED_MAX_SLOTS) {
+    if (!parseU32Field_(args, "slot", slot, true) || slot >= TIME_SCHED_MAX_SLOTS) {
         snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"invalid_slot\"}");
         return false;
     }
@@ -600,14 +638,14 @@ bool TimeModule::handleCmdSchedGet_(const CommandRequest& req, char* reply, size
 
 bool TimeModule::handleCmdSchedSet_(const CommandRequest& req, char* reply, size_t replyLen)
 {
-    const char* json = req.args ? req.args : req.json;
-    if (!json) {
+    JsonObjectConst args;
+    if (!parseCmdArgsObject_(req, args)) {
         snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"missing_args\"}");
         return false;
     }
 
     uint32_t slot = 0;
-    if (!parseU32ValueLocal(json, "slot", slot, true) || slot >= TIME_SCHED_MAX_SLOTS) {
+    if (!parseU32Field_(args, "slot", slot, true) || slot >= TIME_SCHED_MAX_SLOTS) {
         snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"invalid_slot\"}");
         return false;
     }
@@ -629,9 +667,9 @@ bool TimeModule::handleCmdSchedSet_(const CommandRequest& req, char* reply, size
     def.slot = (uint8_t)slot;
 
     uint32_t eventId = 0;
-    const bool hasEventId = (findJsonValueLocal(json, "event_id") != nullptr);
+    const bool hasEventId = args.containsKey("event_id");
     if (hasEventId) {
-        if (!parseU32ValueLocal(json, "event_id", eventId, true)) {
+        if (!parseU32Field_(args, "event_id", eventId, true)) {
             snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"invalid_event_id\"}");
             return false;
         }
@@ -641,72 +679,75 @@ bool TimeModule::handleCmdSchedSet_(const CommandRequest& req, char* reply, size
         return false;
     }
 
-    char modeBuf[20] = {0};
-    if (findJsonStringValueLocal(json, "mode")) {
-        if (!parseStringValueLocal(json, "mode", modeBuf, sizeof(modeBuf), true)) {
-            snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"invalid_mode\"}");
-            return false;
-        }
-        if (strcmp(modeBuf, "one_shot_epoch") == 0 ||
-            strcmp(modeBuf, "oneshot_epoch") == 0 ||
-            strcmp(modeBuf, "oneshot") == 0 ||
-            strcmp(modeBuf, "epoch") == 0) {
-            def.mode = TimeSchedulerMode::OneShotEpoch;
-        } else if (strcmp(modeBuf, "recurring_clock") == 0 ||
-                   strcmp(modeBuf, "recurring") == 0 ||
-                   strcmp(modeBuf, "clock") == 0) {
-            def.mode = TimeSchedulerMode::RecurringClock;
+    if (args.containsKey("mode")) {
+        JsonVariantConst modeVar = args["mode"];
+        if (modeVar.is<const char*>()) {
+            const char* modeBuf = modeVar.as<const char*>();
+            if (!modeBuf) {
+                snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"invalid_mode\"}");
+                return false;
+            }
+            if (strcmp(modeBuf, "one_shot_epoch") == 0 ||
+                strcmp(modeBuf, "oneshot_epoch") == 0 ||
+                strcmp(modeBuf, "oneshot") == 0 ||
+                strcmp(modeBuf, "epoch") == 0) {
+                def.mode = TimeSchedulerMode::OneShotEpoch;
+            } else if (strcmp(modeBuf, "recurring_clock") == 0 ||
+                       strcmp(modeBuf, "recurring") == 0 ||
+                       strcmp(modeBuf, "clock") == 0) {
+                def.mode = TimeSchedulerMode::RecurringClock;
+            } else {
+                snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"invalid_mode\"}");
+                return false;
+            }
         } else {
-            snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"invalid_mode\"}");
-            return false;
+            uint32_t modeNum = 0;
+            if (!parseU32Field_(args, "mode", modeNum, true)) {
+                snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"invalid_mode\"}");
+                return false;
+            }
+            def.mode = (modeNum == 0) ? TimeSchedulerMode::RecurringClock : TimeSchedulerMode::OneShotEpoch;
         }
-    } else if (findJsonValueLocal(json, "mode")) {
-        uint32_t modeNum = 0;
-        if (!parseU32ValueLocal(json, "mode", modeNum, true)) {
-            snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"invalid_mode\"}");
-            return false;
-        }
-        def.mode = (modeNum == 0) ? TimeSchedulerMode::RecurringClock : TimeSchedulerMode::OneShotEpoch;
     }
 
-    if (!parseBoolValueLocal(json, "enabled", def.enabled, false) ||
-        !parseBoolValueLocal(json, "has_end", def.hasEnd, false) ||
-        !parseBoolValueLocal(json, "replay_start_on_boot", def.replayStartOnBoot, false)) {
+    if (!parseBoolField_(args, "enabled", def.enabled, false) ||
+        !parseBoolField_(args, "has_end", def.hasEnd, false) ||
+        !parseBoolField_(args, "replay_start_on_boot", def.replayStartOnBoot, false)) {
         snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"invalid_bool\"}");
         return false;
     }
 
     uint32_t value = 0;
-    if (findJsonValueLocal(json, "weekday_mask")) {
-        if (!parseU32ValueLocal(json, "weekday_mask", value, true)) {
+    if (args.containsKey("weekday_mask")) {
+        if (!parseU32Field_(args, "weekday_mask", value, true)) {
             snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"invalid_weekday_mask\"}");
             return false;
         }
         def.weekdayMask = (uint8_t)value;
     }
-    if (findJsonValueLocal(json, "start_hour")) {
-        if (!parseU32ValueLocal(json, "start_hour", value, true)) {
+    if (args.containsKey("start_hour")) {
+        if (!parseU32Field_(args, "start_hour", value, true)) {
             snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"invalid_start_hour\"}");
             return false;
         }
         def.startHour = (uint8_t)value;
     }
-    if (findJsonValueLocal(json, "start_minute")) {
-        if (!parseU32ValueLocal(json, "start_minute", value, true)) {
+    if (args.containsKey("start_minute")) {
+        if (!parseU32Field_(args, "start_minute", value, true)) {
             snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"invalid_start_minute\"}");
             return false;
         }
         def.startMinute = (uint8_t)value;
     }
-    if (findJsonValueLocal(json, "end_hour")) {
-        if (!parseU32ValueLocal(json, "end_hour", value, true)) {
+    if (args.containsKey("end_hour")) {
+        if (!parseU32Field_(args, "end_hour", value, true)) {
             snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"invalid_end_hour\"}");
             return false;
         }
         def.endHour = (uint8_t)value;
     }
-    if (findJsonValueLocal(json, "end_minute")) {
-        if (!parseU32ValueLocal(json, "end_minute", value, true)) {
+    if (args.containsKey("end_minute")) {
+        if (!parseU32Field_(args, "end_minute", value, true)) {
             snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"invalid_end_minute\"}");
             return false;
         }
@@ -714,24 +755,29 @@ bool TimeModule::handleCmdSchedSet_(const CommandRequest& req, char* reply, size
     }
 
     uint64_t value64 = 0;
-    if (findJsonValueLocal(json, "start_epoch_sec")) {
-        if (!parseU64ValueLocal(json, "start_epoch_sec", value64, true)) {
+    if (args.containsKey("start_epoch_sec")) {
+        if (!parseU64Field_(args, "start_epoch_sec", value64, true)) {
             snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"invalid_start_epoch\"}");
             return false;
         }
         def.startEpochSec = value64;
     }
-    if (findJsonValueLocal(json, "end_epoch_sec")) {
-        if (!parseU64ValueLocal(json, "end_epoch_sec", value64, true)) {
+    if (args.containsKey("end_epoch_sec")) {
+        if (!parseU64Field_(args, "end_epoch_sec", value64, true)) {
             snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"invalid_end_epoch\"}");
             return false;
         }
         def.endEpochSec = value64;
     }
 
-    char label[TIME_SCHED_LABEL_MAX] = {0};
-    if (findJsonStringValueLocal(json, "label")) {
-        if (!parseStringValueLocal(json, "label", label, sizeof(label), true)) {
+    if (args.containsKey("label")) {
+        JsonVariantConst labelVar = args["label"];
+        if (!labelVar.is<const char*>()) {
+            snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"invalid_label\"}");
+            return false;
+        }
+        const char* label = labelVar.as<const char*>();
+        if (!label) {
             snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"invalid_label\"}");
             return false;
         }
@@ -750,14 +796,14 @@ bool TimeModule::handleCmdSchedSet_(const CommandRequest& req, char* reply, size
 
 bool TimeModule::handleCmdSchedClear_(const CommandRequest& req, char* reply, size_t replyLen)
 {
-    const char* json = req.args ? req.args : req.json;
-    if (!json) {
+    JsonObjectConst args;
+    if (!parseCmdArgsObject_(req, args)) {
         snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"missing_args\"}");
         return false;
     }
 
     uint32_t slot = 0;
-    if (!parseU32ValueLocal(json, "slot", slot, true) || slot >= TIME_SCHED_MAX_SLOTS) {
+    if (!parseU32Field_(args, "slot", slot, true) || slot >= TIME_SCHED_MAX_SLOTS) {
         snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"invalid_slot\"}");
         return false;
     }

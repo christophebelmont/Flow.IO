@@ -4,6 +4,7 @@
  */
 #include "Core/ConfigStore.h"
 #include "Core/Log.h"
+#include <ArduinoJson.h>
 #include <stdio.h>
 
 #define LOG_TAG_CORE "CfgStore"
@@ -11,36 +12,6 @@
 static bool strEquals(const char* a, const char* b) {
     if (!a || !b) return false;
     return strcmp(a, b) == 0;
-}
-
-static const char* skipWs(const char* p) {
-    while (p && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r')) ++p;
-    return p;
-}
-
-static const char* findJsonValueStart(const char* json, const char* module, const char* name) {
-    if (!json || !module || !name) return nullptr;
-
-    char modPat[64];
-    snprintf(modPat, sizeof(modPat), "\"%s\"", module);
-    const char* p = strstr(json, modPat);
-    if (!p) return nullptr;
-    p += strlen(modPat);
-    p = skipWs(p);
-    if (!p || *p != ':') return nullptr;
-    p = skipWs(p + 1);
-    if (!p || *p != '{') return nullptr;
-    p = skipWs(p + 1);
-
-    char namePat[64];
-    snprintf(namePat, sizeof(namePat), "\"%s\"", name);
-    const char* q = strstr(p, namePat);
-    if (!q) return nullptr;
-    q += strlen(namePat);
-    q = skipWs(q);
-    if (!q || *q != ':') return nullptr;
-    q = skipWs(q + 1);
-    return q;
 }
 
 void ConfigStore::notifyChanged(const char* nvsKey)
@@ -383,44 +354,124 @@ uint8_t ConfigStore::listModules(const char** out, uint8_t max) const
 
 bool ConfigStore::applyJson(const char* json)
 {
+    if (!json || json[0] == '\0') return false;
+
+    static constexpr size_t APPLY_JSON_DOC_CAPACITY = JSON_BUFFER_SIZE * 4;
+    static StaticJsonDocument<APPLY_JSON_DOC_CAPACITY> doc;
+    doc.clear();
+    const DeserializationError err = deserializeJson(doc, json);
+    if (err || !doc.is<JsonObjectConst>()) {
+        Log::warn(LOG_TAG_CORE, "applyJson: invalid json");
+        return false;
+    }
+    JsonObjectConst root = doc.as<JsonObjectConst>();
+
     Log::debug(LOG_TAG_CORE, "applyJson: start");
     for (uint16_t i = 0; i < _metaCount; ++i) {
         auto& m = _meta[i];
-        const char* p = findJsonValueStart(json, m.module, m.name);
-        if (!p) continue;
+        if (!m.module || !m.name) continue;
+
+        JsonVariantConst moduleVar = root[m.module];
+        if (!moduleVar.is<JsonObjectConst>()) continue;
+        JsonObjectConst moduleObj = moduleVar.as<JsonObjectConst>();
+
+        JsonVariantConst valueVar = moduleObj[m.name];
+        if (valueVar.isNull()) continue;
 
         bool changed = false;
 
         switch (m.type) {
         case ConfigType::Int32: {
-            int32_t v = atoi(p);
+            int32_t v = *(int32_t*)m.valuePtr;
+            if (valueVar.is<int32_t>()) {
+                v = valueVar.as<int32_t>();
+            } else if (valueVar.is<uint32_t>()) {
+                v = (int32_t)valueVar.as<uint32_t>();
+            } else if (valueVar.is<const char*>()) {
+                const char* s = valueVar.as<const char*>();
+                if (!s) break;
+                v = (int32_t)strtol(s, nullptr, 10);
+            } else {
+                break;
+            }
             if (*(int32_t*)m.valuePtr != v) { *(int32_t*)m.valuePtr = v; changed = true; }
             break;
         }
         case ConfigType::UInt8: {
-            uint8_t v = (uint8_t)atoi(p);
+            uint8_t v = *(uint8_t*)m.valuePtr;
+            if (valueVar.is<uint8_t>()) {
+                v = valueVar.as<uint8_t>();
+            } else if (valueVar.is<uint16_t>()) {
+                uint16_t u = valueVar.as<uint16_t>();
+                if (u > 255U) u = 255U;
+                v = (uint8_t)u;
+            } else if (valueVar.is<int32_t>()) {
+                int32_t n = valueVar.as<int32_t>();
+                if (n < 0) n = 0;
+                if (n > 255) n = 255;
+                v = (uint8_t)n;
+            } else if (valueVar.is<const char*>()) {
+                const char* s = valueVar.as<const char*>();
+                if (!s) break;
+                long n = strtol(s, nullptr, 10);
+                if (n < 0) n = 0;
+                if (n > 255) n = 255;
+                v = (uint8_t)n;
+            } else {
+                break;
+            }
             if (*(uint8_t*)m.valuePtr != v) { *(uint8_t*)m.valuePtr = v; changed = true; }
             break;
         }
         case ConfigType::Bool: {
-            bool v = (strncmp(p, "true", 4) == 0);
+            bool v = *(bool*)m.valuePtr;
+            if (valueVar.is<bool>()) {
+                v = valueVar.as<bool>();
+            } else if (valueVar.is<int32_t>() || valueVar.is<uint32_t>() || valueVar.is<float>()) {
+                v = (valueVar.as<float>() != 0.0f);
+            } else if (valueVar.is<const char*>()) {
+                const char* s = valueVar.as<const char*>();
+                if (!s) break;
+                v = (strcmp(s, "true") == 0 || strcmp(s, "1") == 0);
+            } else {
+                break;
+            }
             if (*(bool*)m.valuePtr != v) { *(bool*)m.valuePtr = v; changed = true; }
             break;
         }
         case ConfigType::Float: {
-            float v = (float)atof(p);
+            float v = *(float*)m.valuePtr;
+            if (valueVar.is<float>() || valueVar.is<double>() || valueVar.is<int32_t>() || valueVar.is<uint32_t>()) {
+                v = valueVar.as<float>();
+            } else if (valueVar.is<const char*>()) {
+                const char* s = valueVar.as<const char*>();
+                if (!s) break;
+                v = (float)atof(s);
+            } else {
+                break;
+            }
             if (*(float*)m.valuePtr != v) { *(float*)m.valuePtr = v; changed = true; }
             break;
         }
         case ConfigType::Double: {
-            double v = atof(p);
+            double v = *(double*)m.valuePtr;
+            if (valueVar.is<double>() || valueVar.is<float>() || valueVar.is<int32_t>() || valueVar.is<uint32_t>()) {
+                v = valueVar.as<double>();
+            } else if (valueVar.is<const char*>()) {
+                const char* s = valueVar.as<const char*>();
+                if (!s) break;
+                v = atof(s);
+            } else {
+                break;
+            }
             if (*(double*)m.valuePtr != v) { *(double*)m.valuePtr = v; changed = true; }
             break;
         }
         case ConfigType::CharArray: {
-            const char* s = strchr(p, '"'); if (!s) break; s++;
-            const char* e = strchr(s, '"'); if (!e) break;
-            size_t len = (size_t)(e - s);
+            if (!valueVar.is<const char*>()) break;
+            const char* s = valueVar.as<const char*>();
+            if (!s) break;
+            size_t len = strlen(s);
             if (len >= m.size) len = m.size - 1;
 
             /// compare before writing to avoid unnecessary events

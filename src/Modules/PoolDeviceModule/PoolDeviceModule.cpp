@@ -7,37 +7,39 @@
 #define LOG_TAG "PoolDevc"
 #include "Core/ModuleLog.h"
 #include "Modules/PoolDeviceModule/PoolDeviceRuntime.h"
+#include <ArduinoJson.h>
 #include <Arduino.h>
 #include <stdlib.h>
-#include <errno.h>
 #include <string.h>
 #include <time.h>
 
-static const char* findJsonValueLocal(const char* json, const char* key)
+static bool parseCmdArgsObject_(const CommandRequest& req, JsonObjectConst& outObj)
 {
-    static char pat[48];
-    snprintf(pat, sizeof(pat), "\"%s\":", key);
-    const char* p = strstr(json ? json : "", pat);
-    if (!p) return nullptr;
-    return p + strlen(pat);
-}
+    static constexpr size_t CMD_DOC_CAPACITY = 256;
+    static StaticJsonDocument<CMD_DOC_CAPACITY> doc;
 
-static const char* skipWsLocal(const char* p)
-{
-    while (p && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) ++p;
-    return p;
-}
+    doc.clear();
+    const char* json = req.args ? req.args : req.json;
+    if (!json || json[0] == '\0') return false;
 
-static bool parseUint8Local(const char* p, uint8_t& out)
-{
-    if (!p) return false;
-    errno = 0;
-    char* end = nullptr;
-    long v = strtol(p, &end, 10);
-    if (errno != 0 || end == p) return false;
-    if (v < 0 || v > 255) return false;
-    out = (uint8_t)v;
-    return true;
+    const DeserializationError err = deserializeJson(doc, json);
+    if (!err && doc.is<JsonObject>()) {
+        outObj = doc.as<JsonObjectConst>();
+        return true;
+    }
+
+    if (req.json && req.json[0] != '\0' && req.args != req.json) {
+        doc.clear();
+        const DeserializationError rootErr = deserializeJson(doc, req.json);
+        if (rootErr || !doc.is<JsonObjectConst>()) return false;
+        JsonVariantConst argsVar = doc["args"];
+        if (argsVar.is<JsonObjectConst>()) {
+            outObj = argsVar.as<JsonObjectConst>();
+            return true;
+        }
+    }
+
+    return false;
 }
 
 bool PoolDeviceModule::defineDevice(const PoolDeviceDefinition& def)
@@ -333,38 +335,46 @@ bool PoolDeviceModule::cmdPoolRefill_(void* userCtx, const CommandRequest& req, 
 
 bool PoolDeviceModule::handlePoolWrite_(const CommandRequest& req, char* reply, size_t replyLen)
 {
-    const char* json = req.args ? req.args : req.json;
-    if (!json) {
+    JsonObjectConst args;
+    if (!parseCmdArgsObject_(req, args)) {
         snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"missing_args\"}");
         return false;
     }
 
-    const char* slotPos = findJsonValueLocal(json, "slot");
-    slotPos = skipWsLocal(slotPos);
-    if (!slotPos) {
+    if (!args.containsKey("slot")) {
         snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"missing_slot\"}");
         return false;
     }
-    uint8_t slot = 0;
-    if (!parseUint8Local(slotPos, slot) || slot >= POOL_DEVICE_MAX) {
+    if (!args["slot"].is<uint8_t>()) {
+        snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"bad_slot\"}");
+        return false;
+    }
+    const uint8_t slot = args["slot"].as<uint8_t>();
+    if (slot >= POOL_DEVICE_MAX) {
         snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"bad_slot\"}");
         return false;
     }
 
-    const char* valuePos = findJsonValueLocal(json, "value");
-    valuePos = skipWsLocal(valuePos);
-    if (!valuePos) {
+    if (!args.containsKey("value")) {
         snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"missing_value\"}");
         return false;
     }
 
+    JsonVariantConst value = args["value"];
     bool requested = false;
-    if (strncmp(valuePos, "true", 4) == 0) {
-        requested = true;
-    } else if (strncmp(valuePos, "false", 5) == 0) {
-        requested = false;
+    if (value.is<bool>()) {
+        requested = value.as<bool>();
+    } else if (value.is<int32_t>() || value.is<uint32_t>() || value.is<float>()) {
+        requested = (value.as<float>() != 0.0f);
+    } else if (value.is<const char*>()) {
+        const char* s = value.as<const char*>();
+        if (!s) s = "0";
+        if (strcmp(s, "true") == 0) requested = true;
+        else if (strcmp(s, "false") == 0) requested = false;
+        else requested = (atoi(s) != 0);
     } else {
-        requested = (atoi(valuePos) != 0);
+        snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"missing_value\"}");
+        return false;
     }
 
     const PoolDeviceSvcStatus st = svcWriteDesiredImpl_(slot, requested ? 1U : 0U);
@@ -385,28 +395,36 @@ bool PoolDeviceModule::handlePoolWrite_(const CommandRequest& req, char* reply, 
 
 bool PoolDeviceModule::handlePoolRefill_(const CommandRequest& req, char* reply, size_t replyLen)
 {
-    const char* json = req.args ? req.args : req.json;
-    if (!json) {
+    JsonObjectConst args;
+    if (!parseCmdArgsObject_(req, args)) {
         snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"missing_args\"}");
         return false;
     }
 
-    const char* slotPos = findJsonValueLocal(json, "slot");
-    slotPos = skipWsLocal(slotPos);
-    if (!slotPos) {
+    if (!args.containsKey("slot")) {
         snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"missing_slot\"}");
         return false;
     }
-    uint8_t slot = 0;
-    if (!parseUint8Local(slotPos, slot) || slot >= POOL_DEVICE_MAX) {
+    if (!args["slot"].is<uint8_t>()) {
+        snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"bad_slot\"}");
+        return false;
+    }
+    const uint8_t slot = args["slot"].as<uint8_t>();
+    if (slot >= POOL_DEVICE_MAX) {
         snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"bad_slot\"}");
         return false;
     }
 
     float remaining = slots_[slot].def.tankCapacityMl;
-    const char* remPos = findJsonValueLocal(json, "remaining_ml");
-    remPos = skipWsLocal(remPos);
-    if (remPos) remaining = (float)atof(remPos);
+    if (args.containsKey("remaining_ml")) {
+        JsonVariantConst rem = args["remaining_ml"];
+        if (rem.is<float>() || rem.is<double>() || rem.is<int32_t>() || rem.is<uint32_t>()) {
+            remaining = rem.as<float>();
+        } else if (rem.is<const char*>()) {
+            const char* s = rem.as<const char*>();
+            remaining = s ? (float)atof(s) : remaining;
+        }
+    }
 
     const PoolDeviceSvcStatus st = svcRefillTankImpl_(slot, remaining);
     if (st != POOLDEV_SVC_OK) {

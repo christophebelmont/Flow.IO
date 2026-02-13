@@ -161,9 +161,6 @@ private:
     bool publishConfigBlocksFromPatch(const char* patchJson, bool retained);
     void publishTimeSchedulerSlots(bool retained, const char* rootTopic);
 
-    const char* findJsonStringValue(const char* json, const char* key);
-    const char* findJsonObjectStart(const char* json, const char* key);
-
     void onConnect(bool sessionPresent);
     void onDisconnect(AsyncMqttClientDisconnectReason reason);
     void onMessage(char* topic, char* payload, AsyncMqttClientMessageProperties properties,

@@ -5,10 +5,10 @@
 #include "MQTTModule.h"
 #include "Core/Runtime.h"
 #include "Core/SystemStats.h"
+#include <ArduinoJson.h>
 #include <WiFi.h>
 #include <esp_system.h>
 #include "Core/EventBus/EventPayloads.h"
-#include <cctype>
 #define LOG_TAG "MqttModu"
 #include "Core/ModuleLog.h"
 
@@ -139,36 +139,6 @@ void MQTTModule::refreshConfigModules()
     }
 }
 
-const char* MQTTModule::findJsonStringValue(const char* json, const char* key) {
-    if (!json || !key) return nullptr;
-    static char pat[48];
-    snprintf(pat, sizeof(pat), "\"%s\"", key);
-    const char* p = strstr(json, pat);
-    if (!p) return nullptr;
-    p += strlen(pat);
-    while (*p && isspace((unsigned char)*p)) ++p;
-    if (*p != ':') return nullptr;
-    ++p;
-    while (*p && isspace((unsigned char)*p)) ++p;
-    if (*p != '"') return nullptr;
-    return p + 1;
-}
-
-const char* MQTTModule::findJsonObjectStart(const char* json, const char* key) {
-    if (!json || !key) return nullptr;
-    static char pat[48];
-    snprintf(pat, sizeof(pat), "\"%s\"", key);
-    const char* p = strstr(json, pat);
-    if (!p) return nullptr;
-    p += strlen(pat);
-    while (*p && isspace((unsigned char)*p)) ++p;
-    if (*p != ':') return nullptr;
-    ++p;
-    while (*p && isspace((unsigned char)*p)) ++p;
-    if (*p != '{') return nullptr;
-    return p;
-}
-
 void MQTTModule::publishConfigBlocks(bool retained) {
     if (!cfgSvc || !cfgSvc->toJsonModule) return;
     refreshConfigModules();
@@ -206,13 +176,18 @@ bool MQTTModule::publishConfigBlocksFromPatch(const char* patchJson, bool retain
 {
     if (!patchJson || patchJson[0] == '\0') return false;
     if (!cfgSvc || !cfgSvc->toJsonModule) return false;
+    static constexpr size_t PATCH_DOC_CAPACITY = 1024;
+    StaticJsonDocument<PATCH_DOC_CAPACITY> patchDoc;
+    const DeserializationError patchErr = deserializeJson(patchDoc, patchJson);
+    if (patchErr || !patchDoc.is<JsonObjectConst>()) return false;
+    JsonObjectConst patch = patchDoc.as<JsonObjectConst>();
 
     refreshConfigModules();
     bool publishedAny = false;
     for (size_t i = 0; i < cfgModuleCount; ++i) {
         const char* module = cfgModules[i];
         if (!module || module[0] == '\0') continue;
-        if (!findJsonObjectStart(patchJson, module)) continue;
+        if (!patch.containsKey(module)) continue;
         publishedAny = publishConfigModuleAt(i, retained) || publishedAny;
     }
     return publishedAny;
@@ -298,8 +273,21 @@ bool MQTTModule::addRuntimePublisher(const char* topic, uint32_t periodMs, int q
 }
 void MQTTModule::processRx(const RxMsg& msg) {
     if (strcmp(msg.topic, topicCmd) == 0) {
-        const char* cmdVal = findJsonStringValue(msg.payload, "cmd");
-        if (!cmdVal) {
+        static constexpr size_t CMD_DOC_CAPACITY = 1024;
+        StaticJsonDocument<CMD_DOC_CAPACITY> doc;
+        DeserializationError err = deserializeJson(doc, msg.payload);
+        if (err || !doc.is<JsonObjectConst>()) {
+            client.publish(topicAck, 0, false, "{\"ok\":false,\"err\":\"bad_cmd_json\"}");
+            return;
+        }
+        JsonObjectConst root = doc.as<JsonObjectConst>();
+        JsonVariantConst cmdVar = root["cmd"];
+        if (!cmdVar.is<const char*>()) {
+            client.publish(topicAck, 0, false, "{\"ok\":false,\"err\":\"missing_cmd\"}");
+            return;
+        }
+        const char* cmdVal = cmdVar.as<const char*>();
+        if (!cmdVal || cmdVal[0] == '\0') {
             client.publish(topicAck, 0, false, "{\"ok\":false,\"err\":\"missing_cmd\"}");
             return;
         }
@@ -308,20 +296,24 @@ void MQTTModule::processRx(const RxMsg& msg) {
             return;
         }
 
-        const char* cmdEnd = strchr(cmdVal, '"');
-        if (!cmdEnd) {
-            client.publish(topicAck, 0, false, "{\"ok\":false,\"err\":\"bad_cmd_json\"}");
-            return;
-        }
-
         char cmd[64];
-        size_t clen = (size_t)(cmdEnd - cmdVal);
+        size_t clen = strlen(cmdVal);
         if (clen >= sizeof(cmd)) clen = sizeof(cmd) - 1;
         memcpy(cmd, cmdVal, clen); cmd[clen] = '\0';
 
-        const char* argsObj = findJsonObjectStart(msg.payload, "args");
+        const char* argsJson = nullptr;
+        char argsBuf[320] = {0};
+        JsonVariantConst argsVar = root["args"];
+        if (!argsVar.isNull()) {
+            const size_t written = serializeJson(argsVar, argsBuf, sizeof(argsBuf));
+            if (written == 0 || written >= sizeof(argsBuf)) {
+                client.publish(topicAck, 0, false, "{\"ok\":false,\"err\":\"args_too_large\"}");
+                return;
+            }
+            argsJson = argsBuf;
+        }
 
-        bool ok = cmdSvc->execute(cmdSvc->ctx, cmd, msg.payload, argsObj, replyBuf, sizeof(replyBuf));
+        bool ok = cmdSvc->execute(cmdSvc->ctx, cmd, msg.payload, argsJson, replyBuf, sizeof(replyBuf));
         snprintf(ackBuf, sizeof(ackBuf), "{\"ok\":%s,\"cmd\":\"%s\",\"reply\":%s}",
                  ok ? "true" : "false", cmd, replyBuf);
         client.publish(topicAck, 0, false, ackBuf);
