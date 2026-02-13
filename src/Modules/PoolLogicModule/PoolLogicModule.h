@@ -17,14 +17,13 @@ public:
     const char* moduleId() const override { return "poollogic"; }
     const char* taskName() const override { return "poollogic"; }
 
-    uint8_t dependencyCount() const override { return 6; }
+    uint8_t dependencyCount() const override { return 5; }
     const char* dependency(uint8_t i) const override {
         if (i == 0) return "loghub";
-        if (i == 1) return "datastore";
-        if (i == 2) return "eventbus";
-        if (i == 3) return "time";
-        if (i == 4) return "cmd";
-        if (i == 5) return "pooldev";
+        if (i == 1) return "eventbus";
+        if (i == 2) return "time";
+        if (i == 3) return "io";
+        if (i == 4) return "pooldev";
         return nullptr;
     }
 
@@ -43,11 +42,11 @@ private:
     static constexpr uint8_t SLOT_DAILY_RECALC = 3;
     static constexpr uint8_t SLOT_FILTR_WINDOW = 4;
 
-    static constexpr uint8_t IO_IDX_ORP_DEFAULT = 1;
-    static constexpr uint8_t IO_IDX_PSI_DEFAULT = 2;
-    static constexpr uint8_t IO_IDX_WATER_TEMP_DEFAULT = 3;
-    static constexpr uint8_t IO_IDX_AIR_TEMP_DEFAULT = 4;
-    static constexpr uint8_t IO_IDX_LEVEL_DEFAULT = 20;
+    static constexpr uint8_t IO_ID_ORP_DEFAULT = (uint8_t)(IO_ID_AI_BASE + 0);
+    static constexpr uint8_t IO_ID_PSI_DEFAULT = (uint8_t)(IO_ID_AI_BASE + 2);
+    static constexpr uint8_t IO_ID_WATER_TEMP_DEFAULT = (uint8_t)(IO_ID_AI_BASE + 4);
+    static constexpr uint8_t IO_ID_AIR_TEMP_DEFAULT = (uint8_t)(IO_ID_AI_BASE + 5);
+    static constexpr uint8_t IO_ID_LEVEL_DEFAULT = (uint8_t)(IO_ID_DI_BASE + 0);
 
     bool enabled_ = true;
 
@@ -65,12 +64,13 @@ private:
     uint8_t filtrationStartMin_ = 8;
     uint8_t filtrationStopMax_ = 23;
 
-    // Sensor indices in DataStore IO runtime
-    uint8_t orpIoIndex_ = IO_IDX_ORP_DEFAULT;
-    uint8_t psiIoIndex_ = IO_IDX_PSI_DEFAULT;
-    uint8_t waterTempIoIndex_ = IO_IDX_WATER_TEMP_DEFAULT;
-    uint8_t airTempIoIndex_ = IO_IDX_AIR_TEMP_DEFAULT;
-    uint8_t levelIoIndex_ = IO_IDX_LEVEL_DEFAULT;
+    // Sensor IO ids for IOServiceV2 reads.
+    // Stored as uint8_t because current static id map stays <= 255.
+    uint8_t orpIoId_ = IO_ID_ORP_DEFAULT;
+    uint8_t psiIoId_ = IO_ID_PSI_DEFAULT;
+    uint8_t waterTempIoId_ = IO_ID_WATER_TEMP_DEFAULT;
+    uint8_t airTempIoId_ = IO_ID_AIR_TEMP_DEFAULT;
+    uint8_t levelIoId_ = IO_ID_LEVEL_DEFAULT;
 
     // Thresholds / delays
     float psiLowThreshold_ = 0.15f;
@@ -87,10 +87,10 @@ private:
     uint8_t fillingMinOnSec_ = 30;
 
     // Controlled pool devices
-    char filtrationDeviceId_[8] = "pd0";
-    char swgDeviceId_[8] = "pd2";
-    char robotDeviceId_[8] = "pd3";
-    char fillingDeviceId_[8] = "pd4";
+    uint8_t filtrationDeviceSlot_ = 0;
+    uint8_t swgDeviceSlot_ = 2;
+    uint8_t robotDeviceSlot_ = 3;
+    uint8_t fillingDeviceSlot_ = 4;
 
     // Runtime flags
     DeviceFsm filtrationFsm_{};
@@ -110,10 +110,10 @@ private:
     portMUX_TYPE pendingMux_ = portMUX_INITIALIZER_UNLOCKED;
 
     ConfigStore* cfgStore_ = nullptr;
-    DataStore* dataStore_ = nullptr;
     EventBus* eventBus_ = nullptr;
     const TimeSchedulerService* schedSvc_ = nullptr;
-    const CommandService* cmdSvc_ = nullptr;
+    const IOServiceV2* ioSvc_ = nullptr;
+    const PoolDeviceService* poolSvc_ = nullptr;
     const LogHubService* logHub_ = nullptr;
 
     ConfigVariable<bool,0> enabledVar_{NVS_KEY("pl_en"), "enabled", "poollogic", ConfigType::Bool,
@@ -141,16 +141,16 @@ private:
     ConfigVariable<uint8_t,0> stopMaxVar_{NVS_KEY("pl_smax"), "filtration_stop_max", "poollogic", ConfigType::UInt8,
                                           &filtrationStopMax_, ConfigPersistence::Persistent, 0};
 
-    ConfigVariable<uint8_t,0> orpIdxVar_{NVS_KEY("pl_oidx"), "orp_io_idx", "poollogic", ConfigType::UInt8,
-                                         &orpIoIndex_, ConfigPersistence::Persistent, 0};
-    ConfigVariable<uint8_t,0> psiIdxVar_{NVS_KEY("pl_pidx"), "psi_io_idx", "poollogic", ConfigType::UInt8,
-                                         &psiIoIndex_, ConfigPersistence::Persistent, 0};
-    ConfigVariable<uint8_t,0> waterTempIdxVar_{NVS_KEY("pl_widx"), "water_temp_io_idx", "poollogic", ConfigType::UInt8,
-                                               &waterTempIoIndex_, ConfigPersistence::Persistent, 0};
-    ConfigVariable<uint8_t,0> airTempIdxVar_{NVS_KEY("pl_aidx"), "air_temp_io_idx", "poollogic", ConfigType::UInt8,
-                                             &airTempIoIndex_, ConfigPersistence::Persistent, 0};
-    ConfigVariable<uint8_t,0> levelIdxVar_{NVS_KEY("pl_lidx"), "pool_level_io_idx", "poollogic", ConfigType::UInt8,
-                                           &levelIoIndex_, ConfigPersistence::Persistent, 0};
+    ConfigVariable<uint8_t,0> orpIdVar_{NVS_KEY("pl_oiid"), "orp_io_id", "poollogic", ConfigType::UInt8,
+                                        &orpIoId_, ConfigPersistence::Persistent, 0};
+    ConfigVariable<uint8_t,0> psiIdVar_{NVS_KEY("pl_piid"), "psi_io_id", "poollogic", ConfigType::UInt8,
+                                        &psiIoId_, ConfigPersistence::Persistent, 0};
+    ConfigVariable<uint8_t,0> waterTempIdVar_{NVS_KEY("pl_wiid"), "water_temp_io_id", "poollogic", ConfigType::UInt8,
+                                              &waterTempIoId_, ConfigPersistence::Persistent, 0};
+    ConfigVariable<uint8_t,0> airTempIdVar_{NVS_KEY("pl_aiid"), "air_temp_io_id", "poollogic", ConfigType::UInt8,
+                                            &airTempIoId_, ConfigPersistence::Persistent, 0};
+    ConfigVariable<uint8_t,0> levelIdVar_{NVS_KEY("pl_liid"), "pool_level_io_id", "poollogic", ConfigType::UInt8,
+                                          &levelIoId_, ConfigPersistence::Persistent, 0};
 
     ConfigVariable<float,0> psiLowVar_{NVS_KEY("pl_psil"), "psi_low_threshold", "poollogic", ConfigType::Float,
                                        &psiLowThreshold_, ConfigPersistence::Persistent, 0};
@@ -178,14 +178,14 @@ private:
     ConfigVariable<uint8_t,0> fillingMinOnVar_{NVS_KEY("pl_fmin"), "filling_min_on_sec", "poollogic", ConfigType::UInt8,
                                                &fillingMinOnSec_, ConfigPersistence::Persistent, 0};
 
-    ConfigVariable<char,0> filtrationDeviceVar_{NVS_KEY("pl_dfil"), "filtration_device_id", "poollogic", ConfigType::CharArray,
-                                                (char*)filtrationDeviceId_, ConfigPersistence::Persistent, sizeof(filtrationDeviceId_)};
-    ConfigVariable<char,0> swgDeviceVar_{NVS_KEY("pl_dswg"), "swg_device_id", "poollogic", ConfigType::CharArray,
-                                         (char*)swgDeviceId_, ConfigPersistence::Persistent, sizeof(swgDeviceId_)};
-    ConfigVariable<char,0> robotDeviceVar_{NVS_KEY("pl_drob"), "robot_device_id", "poollogic", ConfigType::CharArray,
-                                           (char*)robotDeviceId_, ConfigPersistence::Persistent, sizeof(robotDeviceId_)};
-    ConfigVariable<char,0> fillingDeviceVar_{NVS_KEY("pl_dfil2"), "filling_device_id", "poollogic", ConfigType::CharArray,
-                                             (char*)fillingDeviceId_, ConfigPersistence::Persistent, sizeof(fillingDeviceId_)};
+    ConfigVariable<uint8_t,0> filtrationDeviceVar_{NVS_KEY("pl_sfil"), "filtration_slot", "poollogic", ConfigType::UInt8,
+                                                   &filtrationDeviceSlot_, ConfigPersistence::Persistent, 0};
+    ConfigVariable<uint8_t,0> swgDeviceVar_{NVS_KEY("pl_sswg"), "swg_slot", "poollogic", ConfigType::UInt8,
+                                            &swgDeviceSlot_, ConfigPersistence::Persistent, 0};
+    ConfigVariable<uint8_t,0> robotDeviceVar_{NVS_KEY("pl_srob"), "robot_slot", "poollogic", ConfigType::UInt8,
+                                              &robotDeviceSlot_, ConfigPersistence::Persistent, 0};
+    ConfigVariable<uint8_t,0> fillingDeviceVar_{NVS_KEY("pl_sfill"), "filling_slot", "poollogic", ConfigType::UInt8,
+                                                &fillingDeviceSlot_, ConfigPersistence::Persistent, 0};
 
     static void onEventStatic_(const Event& e, void* user);
     void onEvent_(const Event& e);
@@ -194,15 +194,14 @@ private:
     bool computeFiltrationWindow_(float waterTemp, uint8_t& startHourOut, uint8_t& stopHourOut, uint8_t& durationOut);
     void recalcAndApplyFiltrationWindow_();
 
-    bool parsePoolDeviceIndex_(const char* deviceId, uint8_t& idxOut) const;
-    bool readDeviceActualOn_(const char* deviceId, bool& onOut) const;
-    bool writeDeviceDesired_(const char* deviceId, bool on);
+    bool readDeviceActualOn_(uint8_t deviceSlot, bool& onOut) const;
+    bool writeDeviceDesired_(uint8_t deviceSlot, bool on);
 
-    void syncDeviceState_(const char* deviceId, DeviceFsm& fsm, uint32_t nowMs, bool& turnedOnOut, bool& turnedOffOut);
+    void syncDeviceState_(uint8_t deviceSlot, DeviceFsm& fsm, uint32_t nowMs, bool& turnedOnOut, bool& turnedOffOut);
     uint32_t stateUptimeSec_(const DeviceFsm& fsm, uint32_t nowMs) const;
-    bool loadFloatSensor_(uint8_t idx, float& out) const;
-    bool loadBoolSensor_(uint8_t idx, bool& out) const;
+    bool loadAnalogSensor_(uint8_t ioId, float& out) const;
+    bool loadDigitalSensor_(uint8_t ioId, bool& out) const;
 
-    void applyDeviceControl_(const char* deviceId, const char* label, DeviceFsm& fsm, bool desired, uint32_t nowMs);
+    void applyDeviceControl_(uint8_t deviceSlot, const char* label, DeviceFsm& fsm, bool desired, uint32_t nowMs);
     void runControlLoop_(uint32_t nowMs);
 };

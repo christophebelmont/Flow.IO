@@ -6,21 +6,12 @@
 #include "PoolDeviceModule.h"
 #define LOG_TAG "PoolDevc"
 #include "Core/ModuleLog.h"
-#include "Modules/IOModule/IOModuleDataModel.h"
 #include "Modules/PoolDeviceModule/PoolDeviceRuntime.h"
 #include <Arduino.h>
 #include <stdlib.h>
+#include <errno.h>
 #include <string.h>
 #include <time.h>
-
-static const char* findJsonStringValueLocal(const char* json, const char* key)
-{
-    static char pat[48];
-    snprintf(pat, sizeof(pat), "\"%s\":\"", key);
-    const char* p = strstr(json ? json : "", pat);
-    if (!p) return nullptr;
-    return p + strlen(pat);
-}
 
 static const char* findJsonValueLocal(const char* json, const char* key)
 {
@@ -37,6 +28,18 @@ static const char* skipWsLocal(const char* p)
     return p;
 }
 
+static bool parseUint8Local(const char* p, uint8_t& out)
+{
+    if (!p) return false;
+    errno = 0;
+    char* end = nullptr;
+    long v = strtol(p, &end, 10);
+    if (errno != 0 || end == p) return false;
+    if (v < 0 || v > 255) return false;
+    out = (uint8_t)v;
+    return true;
+}
+
 bool PoolDeviceModule::defineDevice(const PoolDeviceDefinition& def)
 {
     for (uint8_t i = 0; i < POOL_DEVICE_MAX; ++i) {
@@ -51,16 +54,12 @@ bool PoolDeviceModule::defineDevice(const PoolDeviceDefinition& def)
             strncpy(s.def.label, s.id, sizeof(s.def.label) - 1);
             s.def.label[sizeof(s.def.label) - 1] = '\0';
         }
-        if (s.def.ioId[0] == '\0') {
-            snprintf(s.def.ioId, sizeof(s.def.ioId), "d%u", (unsigned)i);
-        }
-
-        uint8_t ioIdx = 0xFF;
-        if (!parseDigitalIoId_(s.def.ioId, ioIdx)) {
+        if (s.def.ioId == IO_ID_INVALID) {
+            LOGW("Pool device %s missing ioId", s.id);
             s.used = false;
             return false;
         }
-        s.ioIdx = ioIdx;
+        s.ioId = s.def.ioId;
         s.desiredOn = false;
         s.actualOn = false;
         s.blockReason = POOL_DEVICE_BLOCK_NONE;
@@ -187,6 +186,137 @@ bool PoolDeviceModule::buildRuntimeSnapshot(uint8_t idx, char* out, size_t len, 
     return buildDeviceSnapshot_(slotIdx, out, len, maxTsOut);
 }
 
+uint8_t PoolDeviceModule::svcCount_(void* ctx)
+{
+    PoolDeviceModule* self = static_cast<PoolDeviceModule*>(ctx);
+    return self ? self->activeCount_() : 0;
+}
+
+PoolDeviceSvcStatus PoolDeviceModule::svcMeta_(void* ctx, uint8_t slot, PoolDeviceSvcMeta* outMeta)
+{
+    PoolDeviceModule* self = static_cast<PoolDeviceModule*>(ctx);
+    if (!self) return POOLDEV_SVC_ERR_INVALID_ARG;
+    return self->svcMetaImpl_(slot, outMeta);
+}
+
+PoolDeviceSvcStatus PoolDeviceModule::svcReadActualOn_(void* ctx, uint8_t slot, uint8_t* outOn, uint32_t* outTsMs)
+{
+    PoolDeviceModule* self = static_cast<PoolDeviceModule*>(ctx);
+    if (!self) return POOLDEV_SVC_ERR_INVALID_ARG;
+    return self->svcReadActualOnImpl_(slot, outOn, outTsMs);
+}
+
+PoolDeviceSvcStatus PoolDeviceModule::svcWriteDesired_(void* ctx, uint8_t slot, uint8_t on)
+{
+    PoolDeviceModule* self = static_cast<PoolDeviceModule*>(ctx);
+    if (!self) return POOLDEV_SVC_ERR_INVALID_ARG;
+    return self->svcWriteDesiredImpl_(slot, on);
+}
+
+PoolDeviceSvcStatus PoolDeviceModule::svcRefillTank_(void* ctx, uint8_t slot, float remainingMl)
+{
+    PoolDeviceModule* self = static_cast<PoolDeviceModule*>(ctx);
+    if (!self) return POOLDEV_SVC_ERR_INVALID_ARG;
+    return self->svcRefillTankImpl_(slot, remainingMl);
+}
+
+uint8_t PoolDeviceModule::activeCount_() const
+{
+    uint8_t count = 0;
+    for (uint8_t i = 0; i < POOL_DEVICE_MAX; ++i) {
+        if (slots_[i].used) ++count;
+    }
+    return count;
+}
+
+PoolDeviceSvcStatus PoolDeviceModule::svcMetaImpl_(uint8_t slot, PoolDeviceSvcMeta* outMeta) const
+{
+    if (!outMeta) return POOLDEV_SVC_ERR_INVALID_ARG;
+    if (slot >= POOL_DEVICE_MAX) return POOLDEV_SVC_ERR_UNKNOWN_SLOT;
+    const PoolDeviceSlot& s = slots_[slot];
+    if (!s.used) return POOLDEV_SVC_ERR_UNKNOWN_SLOT;
+
+    *outMeta = PoolDeviceSvcMeta{};
+    outMeta->slot = slot;
+    outMeta->used = 1;
+    outMeta->type = s.def.type;
+    outMeta->enabled = s.def.enabled ? 1U : 0U;
+    outMeta->blockReason = s.blockReason;
+    outMeta->ioId = s.ioId;
+    strncpy(outMeta->runtimeId, s.id, sizeof(outMeta->runtimeId) - 1);
+    outMeta->runtimeId[sizeof(outMeta->runtimeId) - 1] = '\0';
+    strncpy(outMeta->label, s.def.label, sizeof(outMeta->label) - 1);
+    outMeta->label[sizeof(outMeta->label) - 1] = '\0';
+    return POOLDEV_SVC_OK;
+}
+
+PoolDeviceSvcStatus PoolDeviceModule::svcReadActualOnImpl_(uint8_t slot, uint8_t* outOn, uint32_t* outTsMs) const
+{
+    if (!outOn) return POOLDEV_SVC_ERR_INVALID_ARG;
+    if (slot >= POOL_DEVICE_MAX) return POOLDEV_SVC_ERR_UNKNOWN_SLOT;
+    const PoolDeviceSlot& s = slots_[slot];
+    if (!s.used) return POOLDEV_SVC_ERR_UNKNOWN_SLOT;
+    if (!runtimeReady_) return POOLDEV_SVC_ERR_NOT_READY;
+
+    *outOn = s.actualOn ? 1U : 0U;
+    if (outTsMs) *outTsMs = s.runtimeTsMs;
+    return POOLDEV_SVC_OK;
+}
+
+PoolDeviceSvcStatus PoolDeviceModule::svcWriteDesiredImpl_(uint8_t slot, uint8_t on)
+{
+    if (slot >= POOL_DEVICE_MAX) return POOLDEV_SVC_ERR_UNKNOWN_SLOT;
+    PoolDeviceSlot& s = slots_[slot];
+    if (!s.used) return POOLDEV_SVC_ERR_UNKNOWN_SLOT;
+    if (!runtimeReady_) return POOLDEV_SVC_ERR_NOT_READY;
+
+    const bool requested = (on != 0U);
+    if (requested) {
+        if (!s.def.enabled) {
+            s.blockReason = POOL_DEVICE_BLOCK_DISABLED;
+            return POOLDEV_SVC_ERR_DISABLED;
+        }
+        if (!dependenciesSatisfied_(slot)) {
+            s.blockReason = POOL_DEVICE_BLOCK_INTERLOCK;
+            return POOLDEV_SVC_ERR_INTERLOCK;
+        }
+    }
+
+    s.desiredOn = requested;
+    if (!requested) s.blockReason = POOL_DEVICE_BLOCK_NONE;
+
+    if (s.actualOn != requested) {
+        if (writeIo_(s.ioId, requested)) {
+            s.actualOn = requested;
+            s.blockReason = POOL_DEVICE_BLOCK_NONE;
+        } else {
+            s.blockReason = POOL_DEVICE_BLOCK_IO_ERROR;
+            tickDevices_(millis());
+            return POOLDEV_SVC_ERR_IO;
+        }
+    }
+
+    tickDevices_(millis());
+    return POOLDEV_SVC_OK;
+}
+
+PoolDeviceSvcStatus PoolDeviceModule::svcRefillTankImpl_(uint8_t slot, float remainingMl)
+{
+    if (slot >= POOL_DEVICE_MAX) return POOLDEV_SVC_ERR_UNKNOWN_SLOT;
+    PoolDeviceSlot& s = slots_[slot];
+    if (!s.used) return POOLDEV_SVC_ERR_UNKNOWN_SLOT;
+
+    float remaining = remainingMl;
+    if (remaining < 0.0f) remaining = 0.0f;
+    if (s.def.tankCapacityMl > 0.0f && remaining > s.def.tankCapacityMl) {
+        remaining = s.def.tankCapacityMl;
+    }
+
+    s.tankRemainingMl = remaining;
+    if (runtimeReady_) tickDevices_(millis());
+    return POOLDEV_SVC_OK;
+}
+
 bool PoolDeviceModule::cmdPoolWrite_(void* userCtx, const CommandRequest& req, char* reply, size_t replyLen)
 {
     PoolDeviceModule* self = static_cast<PoolDeviceModule*>(userCtx);
@@ -209,27 +339,15 @@ bool PoolDeviceModule::handlePoolWrite_(const CommandRequest& req, char* reply, 
         return false;
     }
 
-    const char* idStart = findJsonStringValueLocal(json, "id");
-    idStart = skipWsLocal(idStart);
-    if (!idStart) {
-        snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"missing_id\"}");
+    const char* slotPos = findJsonValueLocal(json, "slot");
+    slotPos = skipWsLocal(slotPos);
+    if (!slotPos) {
+        snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"missing_slot\"}");
         return false;
     }
-    const char* idEnd = strchr(idStart, '"');
-    if (!idEnd) {
-        snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"bad_id\"}");
-        return false;
-    }
-
-    char id[24] = {0};
-    size_t idLen = (size_t)(idEnd - idStart);
-    if (idLen >= sizeof(id)) idLen = sizeof(id) - 1;
-    memcpy(id, idStart, idLen);
-    id[idLen] = '\0';
-
-    uint8_t idx = 0;
-    if (!findSlotById_(id, idx)) {
-        snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"unknown_device\"}");
+    uint8_t slot = 0;
+    if (!parseUint8Local(slotPos, slot) || slot >= POOL_DEVICE_MAX) {
+        snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"bad_slot\"}");
         return false;
     }
 
@@ -249,37 +367,20 @@ bool PoolDeviceModule::handlePoolWrite_(const CommandRequest& req, char* reply, 
         requested = (atoi(valuePos) != 0);
     }
 
-    PoolDeviceSlot& s = slots_[idx];
-    if (requested) {
-        if (!s.def.enabled) {
-            s.blockReason = POOL_DEVICE_BLOCK_DISABLED;
-            snprintf(reply, replyLen, "{\"ok\":false,\"id\":\"%s\",\"err\":\"disabled\"}", id);
-            return false;
-        }
-        if (!dependenciesSatisfied_(idx)) {
-            s.blockReason = POOL_DEVICE_BLOCK_INTERLOCK;
-            snprintf(reply, replyLen, "{\"ok\":false,\"id\":\"%s\",\"err\":\"interlock_blocked\"}", id);
-            return false;
-        }
+    const PoolDeviceSvcStatus st = svcWriteDesiredImpl_(slot, requested ? 1U : 0U);
+    if (st != POOLDEV_SVC_OK) {
+        const char* err = "failed";
+        if (st == POOLDEV_SVC_ERR_UNKNOWN_SLOT) err = "unknown_slot";
+        else if (st == POOLDEV_SVC_ERR_NOT_READY) err = "not_ready";
+        else if (st == POOLDEV_SVC_ERR_DISABLED) err = "disabled";
+        else if (st == POOLDEV_SVC_ERR_INTERLOCK) err = "interlock_blocked";
+        else if (st == POOLDEV_SVC_ERR_IO) err = "io_error";
+        snprintf(reply, replyLen, "{\"ok\":false,\"slot\":%u,\"err\":\"%s\"}", (unsigned)slot, err);
+        return false;
     }
 
-    s.desiredOn = requested;
-    if (!requested) s.blockReason = POOL_DEVICE_BLOCK_NONE;
-
-    bool ok = true;
-    if (s.actualOn != requested) {
-        ok = writeIo_(s.def.ioId, requested);
-        if (ok) {
-            s.actualOn = requested;
-            s.blockReason = POOL_DEVICE_BLOCK_NONE;
-        } else {
-            s.blockReason = POOL_DEVICE_BLOCK_IO_ERROR;
-        }
-    }
-
-    tickDevices_(millis());
-    snprintf(reply, replyLen, "{\"ok\":%s,\"id\":\"%s\"}", ok ? "true" : "false", id);
-    return ok;
+    snprintf(reply, replyLen, "{\"ok\":true,\"slot\":%u}", (unsigned)slot);
+    return true;
 }
 
 bool PoolDeviceModule::handlePoolRefill_(const CommandRequest& req, char* reply, size_t replyLen)
@@ -290,55 +391,54 @@ bool PoolDeviceModule::handlePoolRefill_(const CommandRequest& req, char* reply,
         return false;
     }
 
-    const char* idStart = findJsonStringValueLocal(json, "id");
-    idStart = skipWsLocal(idStart);
-    if (!idStart) {
-        snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"missing_id\"}");
+    const char* slotPos = findJsonValueLocal(json, "slot");
+    slotPos = skipWsLocal(slotPos);
+    if (!slotPos) {
+        snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"missing_slot\"}");
         return false;
     }
-    const char* idEnd = strchr(idStart, '"');
-    if (!idEnd) {
-        snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"bad_id\"}");
-        return false;
-    }
-
-    char id[24] = {0};
-    size_t idLen = (size_t)(idEnd - idStart);
-    if (idLen >= sizeof(id)) idLen = sizeof(id) - 1;
-    memcpy(id, idStart, idLen);
-    id[idLen] = '\0';
-
-    uint8_t idx = 0;
-    if (!findSlotById_(id, idx)) {
-        snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"unknown_device\"}");
+    uint8_t slot = 0;
+    if (!parseUint8Local(slotPos, slot) || slot >= POOL_DEVICE_MAX) {
+        snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"bad_slot\"}");
         return false;
     }
 
-    PoolDeviceSlot& s = slots_[idx];
-    float remaining = s.def.tankCapacityMl;
+    float remaining = slots_[slot].def.tankCapacityMl;
     const char* remPos = findJsonValueLocal(json, "remaining_ml");
     remPos = skipWsLocal(remPos);
     if (remPos) remaining = (float)atof(remPos);
 
-    if (remaining < 0.0f) remaining = 0.0f;
-    if (s.def.tankCapacityMl > 0.0f && remaining > s.def.tankCapacityMl) {
-        remaining = s.def.tankCapacityMl;
+    const PoolDeviceSvcStatus st = svcRefillTankImpl_(slot, remaining);
+    if (st != POOLDEV_SVC_OK) {
+        const char* err = (st == POOLDEV_SVC_ERR_UNKNOWN_SLOT) ? "unknown_slot" : "failed";
+        snprintf(reply, replyLen, "{\"ok\":false,\"slot\":%u,\"err\":\"%s\"}", (unsigned)slot, err);
+        return false;
     }
-    s.tankRemainingMl = remaining;
 
-    tickDevices_(millis());
-    snprintf(reply, replyLen, "{\"ok\":true,\"id\":\"%s\",\"remaining_ml\":%.1f}", id, (double)remaining);
+    const float applied = slots_[slot].tankRemainingMl;
+    snprintf(reply, replyLen, "{\"ok\":true,\"slot\":%u,\"remaining_ml\":%.1f}", (unsigned)slot, (double)applied);
     return true;
 }
 
 bool PoolDeviceModule::configureRuntime_()
 {
     if (runtimeReady_) return true;
+    if (!ioSvc_) return false;
 
     const uint32_t now = millis();
     for (uint8_t i = 0; i < POOL_DEVICE_MAX; ++i) {
         PoolDeviceSlot& s = slots_[i];
         if (!s.used) continue;
+
+        IoEndpointMeta meta{};
+        if (ioSvc_->meta(ioSvc_->ctx, s.ioId, &meta) != IO_OK) {
+            LOGW("Pool device %s invalid ioId=%u", s.id, (unsigned)s.ioId);
+            return false;
+        }
+        if (meta.kind != IO_KIND_DIGITAL_OUT || (meta.capabilities & IO_CAP_W) == 0) {
+            LOGW("Pool device %s ioId=%u is not writable digital output", s.id, (unsigned)s.ioId);
+            return false;
+        }
 
         if (s.def.tankCapacityMl > 0.0f) {
             float initial = (s.def.tankInitialMl > 0.0f) ? s.def.tankInitialMl : s.def.tankCapacityMl;
@@ -476,7 +576,7 @@ void PoolDeviceModule::tickDevices_(uint32_t nowMs)
 
         if (s.actualOn && !dependenciesSatisfied_(i)) {
             s.desiredOn = false;
-            if (writeIo_(s.def.ioId, false)) {
+            if (writeIo_(s.ioId, false)) {
                 s.actualOn = false;
                 s.blockReason = POOL_DEVICE_BLOCK_INTERLOCK;
             } else {
@@ -487,7 +587,7 @@ void PoolDeviceModule::tickDevices_(uint32_t nowMs)
 
         if (s.desiredOn && !s.actualOn) {
             if (dependenciesSatisfied_(i)) {
-                if (writeIo_(s.def.ioId, true)) {
+                if (writeIo_(s.ioId, true)) {
                     s.actualOn = true;
                     s.blockReason = POOL_DEVICE_BLOCK_NONE;
                 } else {
@@ -500,7 +600,7 @@ void PoolDeviceModule::tickDevices_(uint32_t nowMs)
                 changed = true;
             }
         } else if (!s.desiredOn && s.actualOn) {
-            if (writeIo_(s.def.ioId, false)) {
+            if (writeIo_(s.ioId, false)) {
                 s.actualOn = false;
                 s.blockReason = POOL_DEVICE_BLOCK_NONE;
             } else {
@@ -580,57 +680,17 @@ bool PoolDeviceModule::dependenciesSatisfied_(uint8_t slotIdx) const
 
 bool PoolDeviceModule::readIoState_(const PoolDeviceSlot& slot, bool& onOut) const
 {
-    if (!dataStore_) return false;
-    if (slot.ioIdx >= IO_MAX_ENDPOINTS) return false;
-
-    const IOEndpointRuntime& ep = dataStore_->data().io.endpoints[slot.ioIdx];
-    if (!ep.valid) return false;
-    if (ep.valueType != IO_VALUE_BOOL) return false;
-    onOut = ep.boolValue;
+    if (!ioSvc_ || !ioSvc_->readDigital) return false;
+    uint8_t on = 0;
+    if (ioSvc_->readDigital(ioSvc_->ctx, slot.ioId, &on, nullptr, nullptr) != IO_OK) return false;
+    onOut = (on != 0);
     return true;
 }
 
-bool PoolDeviceModule::writeIo_(const char* ioId, bool on)
+bool PoolDeviceModule::writeIo_(IoId ioId, bool on)
 {
-    if (!cmdSvc_ || !cmdSvc_->execute || !ioId || ioId[0] == '\0') return false;
-
-    char args[96];
-    char reply[128];
-    snprintf(args, sizeof(args), "{\"id\":\"%s\",\"value\":%s}", ioId, on ? "true" : "false");
-    return cmdSvc_->execute(cmdSvc_->ctx, "io.write", nullptr, args, reply, sizeof(reply));
-}
-
-bool PoolDeviceModule::findSlotById_(const char* id, uint8_t& idxOut) const
-{
-    if (!id || id[0] == '\0') return false;
-    for (uint8_t i = 0; i < POOL_DEVICE_MAX; ++i) {
-        const PoolDeviceSlot& s = slots_[i];
-        if (!s.used) continue;
-        if (strcmp(s.id, id) == 0) {
-            idxOut = i;
-            return true;
-        }
-    }
-    return false;
-}
-
-bool PoolDeviceModule::parseDigitalIoId_(const char* ioId, uint8_t& ioIdxOut) const
-{
-    if (!ioId) return false;
-    if (ioId[0] != 'd') return false;
-    if (ioId[1] == '\0') return false;
-
-    uint16_t v = 0;
-    const char* p = ioId + 1;
-    while (*p) {
-        if (*p < '0' || *p > '9') return false;
-        v = (uint16_t)((v * 10u) + (uint16_t)(*p - '0'));
-        if (v >= IO_MAX_ENDPOINTS) return false;
-        ++p;
-    }
-
-    ioIdxOut = (uint8_t)v;
-    return true;
+    if (!ioSvc_ || !ioSvc_->writeDigital) return false;
+    return ioSvc_->writeDigital(ioSvc_->ctx, ioId, on ? 1U : 0U, millis()) == IO_OK;
 }
 
 uint32_t PoolDeviceModule::toSeconds_(uint64_t ms)
@@ -642,12 +702,18 @@ uint32_t PoolDeviceModule::toSeconds_(uint64_t ms)
 void PoolDeviceModule::init(ConfigStore& cfg, ServiceRegistry& services)
 {
     logHub_ = services.get<LogHubService>("loghub");
+    ioSvc_ = services.get<IOServiceV2>("io");
+    (void)services.add("pooldev", &poolSvc_);
     cmdSvc_ = services.get<CommandService>("cmd");
     haSvc_ = services.get<HAService>("ha");
     const EventBusService* ebSvc = services.get<EventBusService>("eventbus");
     eventBus_ = ebSvc ? ebSvc->bus : nullptr;
     const DataStoreService* dsSvc = services.get<DataStoreService>("datastore");
     dataStore_ = dsSvc ? dsSvc->store : nullptr;
+
+    if (!ioSvc_) {
+        LOGW("PoolDevice waiting for IOServiceV2");
+    }
 
     if (eventBus_) {
         eventBus_->subscribe(EventId::SchedulerEventTriggered, &PoolDeviceModule::onEventStatic_, this);

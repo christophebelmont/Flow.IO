@@ -21,7 +21,6 @@
 #include "Modules/IOModule/IORegistry/IORegistry.h"
 #include "Modules/IOModule/IOScheduler/IOScheduler.h"
 #include "Modules/IOModule/IOModuleDataModel.h"
-#include "Core/CommandRegistry.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/timers.h"
 
@@ -62,6 +61,8 @@ enum IODigitalPullMode : uint8_t {
 
 struct IOAnalogDefinition {
     char id[24] = {0};
+    /** Required explicit AI id in [IO_ID_AI_BASE..IO_ID_AI_BASE+MAX_ANALOG_ENDPOINTS). */
+    IoId ioId = IO_ID_INVALID;
     uint8_t source = IO_SRC_ADS_INTERNAL_SINGLE;
     uint8_t channel = 0;
     float c0 = 1.0f;
@@ -86,6 +87,8 @@ struct IOAnalogSlotConfig {
 
 struct IODigitalOutputDefinition {
     char id[24] = {0};
+    /** Required explicit DO id in [IO_ID_DO_BASE..IO_ID_DO_BASE+MAX_DIGITAL_OUTPUTS). */
+    IoId ioId = IO_ID_INVALID;
     uint8_t pin = 0;
     bool activeHigh = false;
     bool initialOn = false;
@@ -104,6 +107,8 @@ struct IODigitalOutputSlotConfig {
 
 struct IODigitalInputDefinition {
     char id[24] = {0};
+    /** Required explicit DI id in [IO_ID_DI_BASE..IO_ID_DI_BASE+MAX_DIGITAL_INPUTS). */
+    IoId ioId = IO_ID_INVALID;
     uint8_t pin = 0;
     bool activeHigh = true;
     uint8_t pullMode = IO_PULL_NONE;
@@ -116,13 +121,12 @@ public:
     const char* moduleId() const override { return "io"; }
     const char* taskName() const override { return "io"; }
 
-    uint8_t dependencyCount() const override { return 5; }
+    uint8_t dependencyCount() const override { return 4; }
     const char* dependency(uint8_t i) const override {
         if (i == 0) return "loghub";
         if (i == 1) return "datastore";
-        if (i == 2) return "cmd";
-        if (i == 3) return "mqtt";
-        if (i == 4) return "ha";
+        if (i == 2) return "mqtt";
+        if (i == 3) return "ha";
         return nullptr;
     }
 
@@ -148,10 +152,28 @@ private:
     static bool tickSlowDs_(void* ctx, uint32_t nowMs);
     static bool tickDigitalInputs_(void* ctx, uint32_t nowMs);
 
+    static uint8_t svcCount_(void* ctx);
+    static IoStatus svcIdAt_(void* ctx, uint8_t index, IoId* outId);
+    static IoStatus svcMeta_(void* ctx, IoId id, IoEndpointMeta* outMeta);
+    static IoStatus svcReadDigital_(void* ctx, IoId id, uint8_t* outOn, uint32_t* outTsMs, IoSeq* outSeq);
+    static IoStatus svcWriteDigital_(void* ctx, IoId id, uint8_t on, uint32_t tsMs);
+    static IoStatus svcReadAnalog_(void* ctx, IoId id, float* outValue, uint32_t* outTsMs, IoSeq* outSeq);
+    static IoStatus svcTick_(void* ctx, uint32_t nowMs);
+    static IoStatus svcLastCycle_(void* ctx, IoCycleInfo* outCycle);
+
     static bool svcSetMask_(void* ctx, uint8_t mask);
     static bool svcTurnOn_(void* ctx, uint8_t bit);
     static bool svcTurnOff_(void* ctx, uint8_t bit);
     static bool svcGetMask_(void* ctx, uint8_t* mask);
+
+    uint8_t ioCount_() const;
+    IoStatus ioIdAt_(uint8_t index, IoId* outId) const;
+    IoStatus ioMeta_(IoId id, IoEndpointMeta* outMeta) const;
+    IoStatus ioReadDigital_(IoId id, uint8_t* outOn, uint32_t* outTsMs, IoSeq* outSeq) const;
+    IoStatus ioWriteDigital_(IoId id, uint8_t on, uint32_t tsMs);
+    IoStatus ioReadAnalog_(IoId id, float* outValue, uint32_t* outTsMs, IoSeq* outSeq) const;
+    IoStatus ioTick_(uint32_t nowMs);
+    IoStatus ioLastCycle_(IoCycleInfo* outCycle) const;
 
     bool setLedMask_(uint8_t mask, uint32_t tsMs);
     bool turnLedOn_(uint8_t bit, uint32_t tsMs);
@@ -174,11 +196,11 @@ private:
     bool endpointIndexFromId_(const char* id, uint8_t& idxOut) const;
     bool digitalLogicalUsed_(uint8_t kind, uint8_t logicalIdx) const;
     bool findDigitalSlotByLogical_(uint8_t kind, uint8_t logicalIdx, uint8_t& slotIdxOut) const;
-    bool findDigitalSlotById_(const char* id, uint8_t& slotIdxOut) const;
+    bool findDigitalSlotByIoId_(IoId id, uint8_t& slotIdxOut) const;
+    void beginIoCycle_(uint32_t nowMs);
+    void markIoCycleChanged_(IoId id);
     static bool writeDigitalOut_(void* ctx, bool on);
     static void digitalPulseTimerCb_(TimerHandle_t timer);
-    static bool cmdIoWrite_(void* userCtx, const CommandRequest& req, char* reply, size_t replyLen);
-    bool handleIoWrite_(const CommandRequest& req, char* reply, size_t replyLen);
 
     static constexpr uint8_t MAX_ANALOG_ENDPOINTS = 12;
     static constexpr uint8_t MAX_DIGITAL_INPUTS = 8;
@@ -186,9 +208,14 @@ private:
     static constexpr uint8_t MAX_DIGITAL_SLOTS = MAX_DIGITAL_INPUTS + MAX_DIGITAL_OUTPUTS;
     static constexpr uint8_t ANALOG_CFG_SLOTS = 5;
     static constexpr uint8_t DIGITAL_CFG_SLOTS = 8;
+    /** End-exclusive upper bounds for each static id range. */
+    static constexpr IoId IO_ID_DO_MAX = IO_ID_DO_BASE + MAX_DIGITAL_OUTPUTS;
+    static constexpr IoId IO_ID_DI_MAX = IO_ID_DI_BASE + MAX_DIGITAL_INPUTS;
+    static constexpr IoId IO_ID_AI_MAX = IO_ID_AI_BASE + MAX_ANALOG_ENDPOINTS;
 
     struct AnalogSlot {
         bool used = false;
+        IoId ioId = IO_ID_INVALID;
         IOAnalogDefinition def{};
         AnalogSensorEndpoint* endpoint = nullptr;
         RunningMedianAverageFloat median{11, 5};
@@ -203,6 +230,8 @@ private:
     };
     struct DigitalSlot {
         bool used = false;
+        IoId ioId = IO_ID_INVALID;
+        IOModule* owner = nullptr;
         uint8_t kind = DIGITAL_SLOT_INPUT;
         uint8_t logicalIdx = 0;
         char endpointId[8] = {0};
@@ -220,8 +249,6 @@ private:
     IODigitalOutputSlotConfig digitalCfg_[DIGITAL_CFG_SLOTS]{};
 
     const LogHubService* logHub_ = nullptr;
-    ServiceRegistry* services_ = nullptr;
-    const CommandService* cmdSvc_ = nullptr;
     const HAService* haSvc_ = nullptr;
     DataStore* dataStore_ = nullptr;
 
@@ -241,10 +268,21 @@ private:
 
     Pcf8574Driver* pcf_ = nullptr;
     Pcf8574MaskEndpoint* ledMaskEp_ = nullptr;
-    IOLedMaskService ledSvc_{ svcSetMask_, svcTurnOn_, svcTurnOff_, svcGetMask_, this };
+    IOServiceV2 ioSvc_{
+        svcCount_,
+        svcIdAt_,
+        svcMeta_,
+        svcReadDigital_,
+        svcWriteDigital_,
+        svcReadAnalog_,
+        svcTick_,
+        svcLastCycle_,
+        this
+    };
     bool pcfLastEnabled_ = false;
     uint8_t pcfLogicalMask_ = 0;
     bool pcfLogicalValid_ = false;
+    IoCycleInfo lastCycle_{};
 
     AnalogSlot analogSlots_[MAX_ANALOG_ENDPOINTS]{};
     DigitalSlot digitalSlots_[MAX_DIGITAL_SLOTS]{};

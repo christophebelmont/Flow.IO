@@ -19,7 +19,8 @@ enum PoolDeviceType : uint8_t {
 
 struct PoolDeviceDefinition {
     char label[24] = {0};
-    char ioId[8] = {0};            // expected: d0..d23
+    /** Required IOServiceV2 digital output id bound to this pool device. */
+    IoId ioId = IO_ID_INVALID;
     uint8_t type = POOL_DEVICE_RELAY_STD;
     bool enabled = true;
     float flowLPerHour = 0.0f;     // used for dosing volumes
@@ -64,7 +65,8 @@ private:
         bool used = false;
         char id[8] = {0};          // stable runtime id: pdN
         PoolDeviceDefinition def{};
-        uint8_t ioIdx = 0xFF;
+        /** Cached hardware endpoint id (copied from definition at registration). */
+        IoId ioId = IO_ID_INVALID;
 
         bool desiredOn = false;
         bool actualOn = false;
@@ -89,6 +91,18 @@ private:
     bool handlePoolWrite_(const CommandRequest& req, char* reply, size_t replyLen);
     bool handlePoolRefill_(const CommandRequest& req, char* reply, size_t replyLen);
 
+    static uint8_t svcCount_(void* ctx);
+    static PoolDeviceSvcStatus svcMeta_(void* ctx, uint8_t slot, PoolDeviceSvcMeta* outMeta);
+    static PoolDeviceSvcStatus svcReadActualOn_(void* ctx, uint8_t slot, uint8_t* outOn, uint32_t* outTsMs);
+    static PoolDeviceSvcStatus svcWriteDesired_(void* ctx, uint8_t slot, uint8_t on);
+    static PoolDeviceSvcStatus svcRefillTank_(void* ctx, uint8_t slot, float remainingMl);
+
+    uint8_t activeCount_() const;
+    PoolDeviceSvcStatus svcMetaImpl_(uint8_t slot, PoolDeviceSvcMeta* outMeta) const;
+    PoolDeviceSvcStatus svcReadActualOnImpl_(uint8_t slot, uint8_t* outOn, uint32_t* outTsMs) const;
+    PoolDeviceSvcStatus svcWriteDesiredImpl_(uint8_t slot, uint8_t on);
+    PoolDeviceSvcStatus svcRefillTankImpl_(uint8_t slot, float remainingMl);
+
     bool configureRuntime_();
     void tickDevices_(uint32_t nowMs);
     static void onEventStatic_(const Event& e, void* user);
@@ -100,16 +114,23 @@ private:
     bool buildDeviceSnapshot_(uint8_t slotIdx, char* out, size_t len, uint32_t& maxTsOut) const;
     bool dependenciesSatisfied_(uint8_t slotIdx) const;
     bool readIoState_(const PoolDeviceSlot& slot, bool& onOut) const;
-    bool writeIo_(const char* ioId, bool on);
-    bool findSlotById_(const char* id, uint8_t& idxOut) const;
-    bool parseDigitalIoId_(const char* ioId, uint8_t& ioIdxOut) const;
+    bool writeIo_(IoId ioId, bool on);
     static uint32_t toSeconds_(uint64_t ms);
     static const char* typeStr_(uint8_t type);
     static const char* blockReasonStr_(uint8_t reason);
 
     const LogHubService* logHub_ = nullptr;
+    const IOServiceV2* ioSvc_ = nullptr;
     const CommandService* cmdSvc_ = nullptr;
     const HAService* haSvc_ = nullptr;
+    PoolDeviceService poolSvc_{
+        svcCount_,
+        svcMeta_,
+        svcReadActualOn_,
+        svcWriteDesired_,
+        svcRefillTank_,
+        this
+    };
     EventBus* eventBus_ = nullptr;
     DataStore* dataStore_ = nullptr;
     bool runtimeReady_ = false;

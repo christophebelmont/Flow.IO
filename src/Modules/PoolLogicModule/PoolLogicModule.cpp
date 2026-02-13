@@ -11,8 +11,6 @@
 
 #define LOG_TAG "PoolLogc"
 #include "Core/ModuleLog.h"
-#include "Modules/IOModule/IORuntime.h"
-#include "Modules/PoolDeviceModule/PoolDeviceRuntime.h"
 
 void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
 {
@@ -32,11 +30,11 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
     cfg.registerVar(startMinVar_);
     cfg.registerVar(stopMaxVar_);
 
-    cfg.registerVar(orpIdxVar_);
-    cfg.registerVar(psiIdxVar_);
-    cfg.registerVar(waterTempIdxVar_);
-    cfg.registerVar(airTempIdxVar_);
-    cfg.registerVar(levelIdxVar_);
+    cfg.registerVar(orpIdVar_);
+    cfg.registerVar(psiIdVar_);
+    cfg.registerVar(waterTempIdVar_);
+    cfg.registerVar(airTempIdVar_);
+    cfg.registerVar(levelIdVar_);
 
     cfg.registerVar(psiLowVar_);
     cfg.registerVar(psiHighVar_);
@@ -58,12 +56,17 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
     cfg.registerVar(fillingDeviceVar_);
 
     logHub_ = services.get<LogHubService>("loghub");
-    const DataStoreService* dsSvc = services.get<DataStoreService>("datastore");
-    dataStore_ = dsSvc ? dsSvc->store : nullptr;
     const EventBusService* ebSvc = services.get<EventBusService>("eventbus");
     eventBus_ = ebSvc ? ebSvc->bus : nullptr;
     schedSvc_ = services.get<TimeSchedulerService>("time.scheduler");
-    cmdSvc_ = services.get<CommandService>("cmd");
+    ioSvc_ = services.get<IOServiceV2>("io");
+    poolSvc_ = services.get<PoolDeviceService>("pooldev");
+    if (!ioSvc_) {
+        LOGW("PoolLogic waiting for IOServiceV2");
+    }
+    if (!poolSvc_) {
+        LOGW("PoolLogic waiting for PoolDeviceService");
+    }
 
     if (eventBus_) {
         eventBus_->subscribe(EventId::SchedulerEventTriggered, &PoolLogicModule::onEventStatic_, this);
@@ -230,8 +233,8 @@ bool PoolLogicModule::computeFiltrationWindow_(float waterTemp, uint8_t& startHo
 
 void PoolLogicModule::recalcAndApplyFiltrationWindow_()
 {
-    if (!dataStore_) {
-        LOGW("No datastore available for water temperature");
+    if (!ioSvc_ || !ioSvc_->readAnalog) {
+        LOGW("No IOServiceV2 available for water temperature");
         return;
     }
     if (!schedSvc_ || !schedSvc_->setSlot) {
@@ -240,8 +243,8 @@ void PoolLogicModule::recalcAndApplyFiltrationWindow_()
     }
 
     float waterTemp = 0.0f;
-    if (!ioEndpointFloat(*dataStore_, waterTempIoIndex_, waterTemp)) {
-        LOGW("Water temperature unavailable on io idx=%u", (unsigned)waterTempIoIndex_);
+    if (!loadAnalogSensor_(waterTempIoId_, waterTemp)) {
+        LOGW("Water temperature unavailable on ioId=%u", (unsigned)waterTempIoId_);
         return;
     }
 
@@ -282,59 +285,36 @@ void PoolLogicModule::recalcAndApplyFiltrationWindow_()
          (unsigned)stopHour);
 }
 
-bool PoolLogicModule::parsePoolDeviceIndex_(const char* deviceId, uint8_t& idxOut) const
+bool PoolLogicModule::readDeviceActualOn_(uint8_t deviceSlot, bool& onOut) const
 {
-    if (!deviceId || deviceId[0] == '\0') return false;
-    if (deviceId[0] != 'p' || deviceId[1] != 'd') return false;
-
-    uint16_t v = 0;
-    const char* p = deviceId + 2;
-    if (*p == '\0') return false;
-    while (*p) {
-        if (*p < '0' || *p > '9') return false;
-        v = (uint16_t)(v * 10u + (uint16_t)(*p - '0'));
-        if (v >= POOL_DEVICE_MAX) return false;
-        ++p;
-    }
-
-    idxOut = (uint8_t)v;
+    if (!poolSvc_ || !poolSvc_->readActualOn) return false;
+    uint8_t on = 0;
+    if (poolSvc_->readActualOn(poolSvc_->ctx, deviceSlot, &on, nullptr) != POOLDEV_SVC_OK) return false;
+    onOut = (on != 0U);
     return true;
 }
 
-bool PoolLogicModule::readDeviceActualOn_(const char* deviceId, bool& onOut) const
+bool PoolLogicModule::writeDeviceDesired_(uint8_t deviceSlot, bool on)
 {
-    if (!dataStore_) return false;
-
-    uint8_t idx = 0xFF;
-    if (!parsePoolDeviceIndex_(deviceId, idx)) return false;
-
-    PoolDeviceRuntimeEntry rt{};
-    if (!poolDeviceRuntime(*dataStore_, idx, rt)) return false;
-    onOut = rt.actualOn;
+    if (!poolSvc_ || !poolSvc_->writeDesired) return false;
+    const PoolDeviceSvcStatus st = poolSvc_->writeDesired(poolSvc_->ctx, deviceSlot, on ? 1U : 0U);
+    if (st != POOLDEV_SVC_OK) {
+        LOGW("pooldev.writeDesired failed slot=%u desired=%u st=%u",
+             (unsigned)deviceSlot,
+             on ? 1u : 0u,
+             (unsigned)st);
+        return false;
+    }
     return true;
 }
 
-bool PoolLogicModule::writeDeviceDesired_(const char* deviceId, bool on)
-{
-    if (!cmdSvc_ || !cmdSvc_->execute || !deviceId || deviceId[0] == '\0') return false;
-
-    char args[96];
-    char reply[128];
-    snprintf(args, sizeof(args), "{\"id\":\"%s\",\"value\":%s}", deviceId, on ? "true" : "false");
-    bool ok = cmdSvc_->execute(cmdSvc_->ctx, "pool.write", nullptr, args, reply, sizeof(reply));
-    if (!ok) {
-        LOGW("pool.write failed id=%s desired=%u reply=%s", deviceId, on ? 1u : 0u, reply);
-    }
-    return ok;
-}
-
-void PoolLogicModule::syncDeviceState_(const char* deviceId, DeviceFsm& fsm, uint32_t nowMs, bool& turnedOnOut, bool& turnedOffOut)
+void PoolLogicModule::syncDeviceState_(uint8_t deviceSlot, DeviceFsm& fsm, uint32_t nowMs, bool& turnedOnOut, bool& turnedOffOut)
 {
     turnedOnOut = false;
     turnedOffOut = false;
 
     bool actualOn = false;
-    if (!readDeviceActualOn_(deviceId, actualOn)) {
+    if (!readDeviceActualOn_(deviceSlot, actualOn)) {
         return;
     }
 
@@ -359,19 +339,22 @@ uint32_t PoolLogicModule::stateUptimeSec_(const DeviceFsm& fsm, uint32_t nowMs) 
     return (uint32_t)((nowMs - fsm.stateSinceMs) / 1000UL);
 }
 
-bool PoolLogicModule::loadFloatSensor_(uint8_t idx, float& out) const
+bool PoolLogicModule::loadAnalogSensor_(uint8_t ioId, float& out) const
 {
-    if (!dataStore_) return false;
-    return ioEndpointFloat(*dataStore_, idx, out);
+    if (!ioSvc_ || !ioSvc_->readAnalog) return false;
+    return ioSvc_->readAnalog(ioSvc_->ctx, (IoId)ioId, &out, nullptr, nullptr) == IO_OK;
 }
 
-bool PoolLogicModule::loadBoolSensor_(uint8_t idx, bool& out) const
+bool PoolLogicModule::loadDigitalSensor_(uint8_t ioId, bool& out) const
 {
-    if (!dataStore_) return false;
-    return ioEndpointBool(*dataStore_, idx, out);
+    if (!ioSvc_ || !ioSvc_->readDigital) return false;
+    uint8_t on = 0;
+    if (ioSvc_->readDigital(ioSvc_->ctx, (IoId)ioId, &on, nullptr, nullptr) != IO_OK) return false;
+    out = (on != 0U);
+    return true;
 }
 
-void PoolLogicModule::applyDeviceControl_(const char* deviceId,
+void PoolLogicModule::applyDeviceControl_(uint8_t deviceSlot,
                                           const char* label,
                                           DeviceFsm& fsm,
                                           bool desired,
@@ -381,8 +364,8 @@ void PoolLogicModule::applyDeviceControl_(const char* deviceId,
     const bool needRetry = (fsm.known && (fsm.on != desired) && (uint32_t)(nowMs - fsm.lastCmdMs) >= 5000U);
 
     if (desiredChanged || needRetry) {
-        if (writeDeviceDesired_(deviceId, desired)) {
-            LOGI("%s %s", desired ? "Start" : "Stop", label ? label : deviceId);
+        if (writeDeviceDesired_(deviceSlot, desired)) {
+            LOGI("%s %s", desired ? "Start" : "Stop", label ? label : "Pool Device");
         }
         fsm.lastCmdMs = nowMs;
     }
@@ -398,10 +381,10 @@ void PoolLogicModule::runControlLoop_(uint32_t nowMs)
     bool unusedStart = false;
     bool unusedStop = false;
 
-    syncDeviceState_(filtrationDeviceId_, filtrationFsm_, nowMs, filtrationStarted, filtrationStopped);
-    syncDeviceState_(robotDeviceId_, robotFsm_, nowMs, unusedStart, robotStopped);
-    syncDeviceState_(swgDeviceId_, swgFsm_, nowMs, unusedStart, unusedStop);
-    syncDeviceState_(fillingDeviceId_, fillingFsm_, nowMs, unusedStart, unusedStop);
+    syncDeviceState_(filtrationDeviceSlot_, filtrationFsm_, nowMs, filtrationStarted, filtrationStopped);
+    syncDeviceState_(robotDeviceSlot_, robotFsm_, nowMs, unusedStart, robotStopped);
+    syncDeviceState_(swgDeviceSlot_, swgFsm_, nowMs, unusedStart, unusedStop);
+    syncDeviceState_(fillingDeviceSlot_, fillingFsm_, nowMs, unusedStart, unusedStop);
 
     if (filtrationStarted) {
         phPidEnabled_ = false;
@@ -421,11 +404,11 @@ void PoolLogicModule::runControlLoop_(uint32_t nowMs)
     float orp = 0.0f;
     bool levelOk = true;
 
-    const bool havePsi = loadFloatSensor_(psiIoIndex_, psi);
-    const bool haveWaterTemp = loadFloatSensor_(waterTempIoIndex_, waterTemp);
-    const bool haveAirTemp = loadFloatSensor_(airTempIoIndex_, airTemp);
-    const bool haveOrp = loadFloatSensor_(orpIoIndex_, orp);
-    const bool haveLevel = loadBoolSensor_(levelIoIndex_, levelOk);
+    const bool havePsi = loadAnalogSensor_(psiIoId_, psi);
+    const bool haveWaterTemp = loadAnalogSensor_(waterTempIoId_, waterTemp);
+    const bool haveAirTemp = loadAnalogSensor_(airTempIoId_, airTemp);
+    const bool haveOrp = loadAnalogSensor_(orpIoId_, orp);
+    const bool haveLevel = loadDigitalSensor_(levelIoId_, levelOk);
 
     if (filtrationFsm_.on && havePsi) {
         const uint32_t runSec = stateUptimeSec_(filtrationFsm_, nowMs);
@@ -519,8 +502,8 @@ void PoolLogicModule::runControlLoop_(uint32_t nowMs)
         }
     }
 
-    applyDeviceControl_(filtrationDeviceId_, "Filtration Pump", filtrationFsm_, filtrationDesired, nowMs);
-    applyDeviceControl_(robotDeviceId_, "Robot Pump", robotFsm_, robotDesired, nowMs);
-    applyDeviceControl_(swgDeviceId_, "SWG Pump", swgFsm_, swgDesired, nowMs);
-    applyDeviceControl_(fillingDeviceId_, "Filling Pump", fillingFsm_, fillingDesired, nowMs);
+    applyDeviceControl_(filtrationDeviceSlot_, "Filtration Pump", filtrationFsm_, filtrationDesired, nowMs);
+    applyDeviceControl_(robotDeviceSlot_, "Robot Pump", robotFsm_, robotDesired, nowMs);
+    applyDeviceControl_(swgDeviceSlot_, "SWG Pump", swgFsm_, swgDesired, nowMs);
+    applyDeviceControl_(fillingDeviceSlot_, "Filling Pump", fillingFsm_, fillingDesired, nowMs);
 }

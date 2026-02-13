@@ -48,6 +48,18 @@ void HAModule::sanitizeId(const char* in, char* out, size_t outLen)
     out[w] = '\0';
 }
 
+uint16_t HAModule::hash3Digits(const char* in)
+{
+    // 32-bit FNV-1a reduced to 3 decimal digits for short per-device entity prefixes.
+    uint32_t h = 2166136261u;
+    const char* p = in ? in : "";
+    while (*p) {
+        h ^= (uint8_t)(*p++);
+        h *= 16777619u;
+    }
+    return (uint16_t)(h % 1000u);
+}
+
 bool HAModule::svcAddSensor(void* ctx, const HASensorEntry* entry)
 {
     HAModule* self = static_cast<HAModule*>(ctx);
@@ -174,7 +186,7 @@ bool HAModule::buildObjectId(const char* suffix, char* out, size_t outLen) const
 {
     if (!suffix || !out || outLen == 0) return false;
     char raw[256] = {0};
-    snprintf(raw, sizeof(raw), "flowio_%s_%s", deviceId, suffix);
+    snprintf(raw, sizeof(raw), "flowio%03u_%s", (unsigned)entityHash3_, suffix);
     sanitizeId(raw, out, outLen);
     return out[0] != '\0';
 }
@@ -192,44 +204,47 @@ bool HAModule::publishSensor(const char* objectId, const char* name,
                              const char* entityCategory, const char* icon, const char* unit)
 {
     if (!objectId || !name || !stateTopic || !valueTemplate) return false;
-    char unitField[48] = {0};
-    if (unit && unit[0] != '\0') {
+
+    char unitField[64] = {0};
+    if (unit) {
         snprintf(unitField, sizeof(unitField), ",\"unit_of_measurement\":\"%s\"", unit);
     }
-
-    if (entityCategory && entityCategory[0] != '\0' && icon && icon[0] != '\0') {
-        snprintf(payloadBuf, sizeof(payloadBuf),
-                 "{\"name\":\"%s\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
-                 "\"value_template\":\"%s\",\"entity_category\":\"%s\",\"icon\":\"%s\"%s,"
-                 "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"FlowIO\","
-                 "\"manufacturer\":\"%s\",\"model\":\"%s\"}}",
-                 name, objectId, stateTopic, valueTemplate, entityCategory, icon, unitField,
-                 deviceIdent, cfgData.vendor, cfgData.model);
-    } else if (entityCategory && entityCategory[0] != '\0') {
-        snprintf(payloadBuf, sizeof(payloadBuf),
-                 "{\"name\":\"%s\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
-                 "\"value_template\":\"%s\",\"entity_category\":\"%s\"%s,"
-                 "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"FlowIO\","
-                 "\"manufacturer\":\"%s\",\"model\":\"%s\"}}",
-                 name, objectId, stateTopic, valueTemplate, entityCategory, unitField,
-                 deviceIdent, cfgData.vendor, cfgData.model);
-    } else if (icon && icon[0] != '\0') {
-        snprintf(payloadBuf, sizeof(payloadBuf),
-                 "{\"name\":\"%s\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
-                 "\"value_template\":\"%s\",\"icon\":\"%s\"%s,"
-                 "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"FlowIO\","
-                 "\"manufacturer\":\"%s\",\"model\":\"%s\"}}",
-                 name, objectId, stateTopic, valueTemplate, icon, unitField,
-                 deviceIdent, cfgData.vendor, cfgData.model);
-    } else {
-        snprintf(payloadBuf, sizeof(payloadBuf),
-                 "{\"name\":\"%s\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
-                 "\"value_template\":\"%s\"%s,"
-                 "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"FlowIO\","
-                 "\"manufacturer\":\"%s\",\"model\":\"%s\"}}",
-                 name, objectId, stateTopic, valueTemplate, unitField,
-                 deviceIdent, cfgData.vendor, cfgData.model);
+    char entityCategoryField[64] = {0};
+    if (entityCategory && entityCategory[0] != '\0') {
+        snprintf(entityCategoryField, sizeof(entityCategoryField), ",\"entity_category\":\"%s\"", entityCategory);
     }
+    char iconField[64] = {0};
+    if (icon && icon[0] != '\0') {
+        snprintf(iconField, sizeof(iconField), ",\"icon\":\"%s\"", icon);
+    }
+    char defaultEntityId[224] = {0};
+    snprintf(defaultEntityId, sizeof(defaultEntityId), "sensor.%s", objectId);
+
+    char availabilityField[320] = {0};
+    if (mqttSvc && mqttSvc->formatTopic) {
+        char availabilityTopic[192] = {0};
+        mqttSvc->formatTopic(mqttSvc->ctx, "status", availabilityTopic, sizeof(availabilityTopic));
+        if (availabilityTopic[0] != '\0') {
+            snprintf(
+                availabilityField,
+                sizeof(availabilityField),
+                ",\"availability\":[{\"topic\":\"%s\",\"value_template\":\"{{ value_json.online }}\"}],"
+                "\"availability_mode\":\"all\",\"payload_available\":\"true\",\"payload_not_available\":\"false\"",
+                availabilityTopic
+            );
+        }
+    }
+
+    snprintf(payloadBuf, sizeof(payloadBuf),
+             "{\"name\":\"%s\",\"object_id\":\"%s\",\"default_entity_id\":\"%s\",\"unique_id\":\"%s\","
+             "\"state_topic\":\"%s\",\"value_template\":\"%s\",\"state_class\":\"measurement\"%s%s%s%s,"
+             "\"origin\":{\"name\":\"FlowIO\"},"
+             "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"FlowIO\","
+             "\"manufacturer\":\"%s\",\"model\":\"%s\"}}",
+             name, objectId, defaultEntityId, objectId,
+             stateTopic, valueTemplate,
+             entityCategoryField, iconField, unitField, availabilityField,
+             deviceIdent, cfgData.vendor, cfgData.model);
 
     return publishDiscovery("sensor", objectId, payloadBuf);
 }
@@ -472,6 +487,7 @@ void HAModule::refreshIdentityFromConfig()
         snprintf(nodeTopicId, sizeof(nodeTopicId), "flowio");
     }
     snprintf(deviceIdent, sizeof(deviceIdent), "%s-%s", cfgData.vendor, deviceId);
+    entityHash3_ = hash3Digits(deviceId);
 }
 
 void HAModule::tryPublishAutoconfig()

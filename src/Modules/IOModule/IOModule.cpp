@@ -11,30 +11,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-static const char* findJsonStringValueLocal(const char* json, const char* key)
-{
-    static char pat[48];
-    snprintf(pat, sizeof(pat), "\"%s\":\"", key);
-    const char* p = strstr(json ? json : "", pat);
-    if (!p) return nullptr;
-    return p + strlen(pat);
-}
-
-static const char* findJsonValueLocal(const char* json, const char* key)
-{
-    static char pat[48];
-    snprintf(pat, sizeof(pat), "\"%s\":", key);
-    const char* p = strstr(json ? json : "", pat);
-    if (!p) return nullptr;
-    return p + strlen(pat);
-}
-
-static const char* skipWsLocal(const char* p)
-{
-    while (p && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')) ++p;
-    return p;
-}
-
 static bool hasDecimalSuffixLocal(const char* p)
 {
     if (!p || *p == '\0') return false;
@@ -68,28 +44,31 @@ void IOModule::setOneWireBuses(OneWireBus* water, OneWireBus* air)
 bool IOModule::defineAnalogInput(const IOAnalogDefinition& def)
 {
     if (def.id[0] == '\0') return false;
+    if (def.ioId == IO_ID_INVALID) return false;
+    if (def.ioId < IO_ID_AI_BASE || def.ioId >= IO_ID_AI_MAX) return false;
 
-    for (uint8_t i = 0; i < MAX_ANALOG_ENDPOINTS; ++i) {
-        if (analogSlots_[i].used) continue;
-        analogSlots_[i].used = true;
-        analogSlots_[i].def = def;
+    const uint8_t analogIdx = (uint8_t)(def.ioId - IO_ID_AI_BASE);
+    if (analogSlots_[analogIdx].used) return false;
 
-        if (i < ANALOG_CFG_SLOTS) {
-            strncpy(analogCfg_[i].name, def.id, sizeof(analogCfg_[i].name) - 1);
-            analogCfg_[i].name[sizeof(analogCfg_[i].name) - 1] = '\0';
-            analogCfg_[i].source = def.source;
-            analogCfg_[i].channel = def.channel;
-            analogCfg_[i].c0 = def.c0;
-            analogCfg_[i].c1 = def.c1;
-            analogCfg_[i].precision = def.precision;
-            analogCfg_[i].minValid = def.minValid;
-            analogCfg_[i].maxValid = def.maxValid;
-        }
+    AnalogSlot& slot = analogSlots_[analogIdx];
+    slot.used = true;
+    slot.ioId = def.ioId;
+    slot.def = def;
+    slot.def.ioId = slot.ioId;
 
-        return true;
+    if (analogIdx < ANALOG_CFG_SLOTS) {
+        strncpy(analogCfg_[analogIdx].name, def.id, sizeof(analogCfg_[analogIdx].name) - 1);
+        analogCfg_[analogIdx].name[sizeof(analogCfg_[analogIdx].name) - 1] = '\0';
+        analogCfg_[analogIdx].source = def.source;
+        analogCfg_[analogIdx].channel = def.channel;
+        analogCfg_[analogIdx].c0 = def.c0;
+        analogCfg_[analogIdx].c1 = def.c1;
+        analogCfg_[analogIdx].precision = def.precision;
+        analogCfg_[analogIdx].minValid = def.minValid;
+        analogCfg_[analogIdx].maxValid = def.maxValid;
     }
 
-    return false;
+    return true;
 }
 
 bool IOModule::digitalLogicalUsed_(uint8_t kind, uint8_t logicalIdx) const
@@ -117,39 +96,57 @@ bool IOModule::findDigitalSlotByLogical_(uint8_t kind, uint8_t logicalIdx, uint8
     return false;
 }
 
-bool IOModule::findDigitalSlotById_(const char* id, uint8_t& slotIdxOut) const
+bool IOModule::findDigitalSlotByIoId_(IoId id, uint8_t& slotIdxOut) const
 {
-    if (!id || id[0] == '\0') return false;
     for (uint8_t i = 0; i < MAX_DIGITAL_SLOTS; ++i) {
         const DigitalSlot& s = digitalSlots_[i];
         if (!s.used) continue;
-        if (strcmp(s.endpointId, id) != 0) continue;
+        if (s.ioId != id) continue;
         slotIdxOut = i;
         return true;
     }
     return false;
 }
 
+void IOModule::beginIoCycle_(uint32_t nowMs)
+{
+    ++lastCycle_.seq;
+    lastCycle_.tsMs = nowMs;
+    lastCycle_.changedCount = 0;
+}
+
+void IOModule::markIoCycleChanged_(IoId id)
+{
+    if (id == IO_ID_INVALID) return;
+
+    for (uint8_t i = 0; i < lastCycle_.changedCount; ++i) {
+        if (lastCycle_.changedIds[i] == id) return;
+    }
+
+    if (lastCycle_.changedCount >= IO_MAX_CHANGED_IDS) return;
+    lastCycle_.changedIds[lastCycle_.changedCount++] = id;
+}
+
 bool IOModule::defineDigitalInput(const IODigitalInputDefinition& def)
 {
     if (def.id[0] == '\0') return false;
     if (def.pin == 0) return false;
+    if (def.ioId == IO_ID_INVALID) return false;
+    if (def.ioId < IO_ID_DI_BASE || def.ioId >= IO_ID_DI_MAX) return false;
 
-    uint8_t logicalIdx = 0xFF;
-    for (uint8_t i = 0; i < MAX_DIGITAL_INPUTS; ++i) {
-        if (digitalLogicalUsed_(DIGITAL_SLOT_INPUT, i)) continue;
-        logicalIdx = i;
-        break;
-    }
-    if (logicalIdx == 0xFF) return false;
+    const uint8_t logicalIdx = (uint8_t)(def.ioId - IO_ID_DI_BASE);
+    if (digitalLogicalUsed_(DIGITAL_SLOT_INPUT, logicalIdx)) return false;
 
     for (uint8_t i = 0; i < MAX_DIGITAL_SLOTS; ++i) {
         DigitalSlot& s = digitalSlots_[i];
         if (s.used) continue;
         s.used = true;
+        s.ioId = def.ioId;
         s.kind = DIGITAL_SLOT_INPUT;
         s.logicalIdx = logicalIdx;
         s.inDef = def;
+        s.inDef.ioId = s.ioId;
+        s.owner = this;
         return true;
     }
 
@@ -160,22 +157,22 @@ bool IOModule::defineDigitalOutput(const IODigitalOutputDefinition& def)
 {
     if (def.id[0] == '\0') return false;
     if (def.pin == 0) return false;
+    if (def.ioId == IO_ID_INVALID) return false;
+    if (def.ioId < IO_ID_DO_BASE || def.ioId >= IO_ID_DO_MAX) return false;
 
-    uint8_t logicalIdx = 0xFF;
-    for (uint8_t i = 0; i < MAX_DIGITAL_OUTPUTS; ++i) {
-        if (digitalLogicalUsed_(DIGITAL_SLOT_OUTPUT, i)) continue;
-        logicalIdx = i;
-        break;
-    }
-    if (logicalIdx == 0xFF) return false;
+    const uint8_t logicalIdx = (uint8_t)(def.ioId - IO_ID_DO_BASE);
+    if (digitalLogicalUsed_(DIGITAL_SLOT_OUTPUT, logicalIdx)) return false;
 
     for (uint8_t i = 0; i < MAX_DIGITAL_SLOTS; ++i) {
         DigitalSlot& s = digitalSlots_[i];
         if (s.used) continue;
         s.used = true;
+        s.ioId = def.ioId;
         s.kind = DIGITAL_SLOT_OUTPUT;
         s.logicalIdx = logicalIdx;
         s.outDef = def;
+        s.outDef.ioId = s.ioId;
+        s.owner = this;
 
         if (logicalIdx < DIGITAL_CFG_SLOTS) {
             const uint8_t cfgIdx = logicalIdx;
@@ -542,7 +539,7 @@ bool IOModule::processAnalogDefinition_(uint8_t idx, uint32_t nowMs)
         uint32_t periodMs = (cfgData_.tracePeriodMs > 0) ? (uint32_t)cfgData_.tracePeriodMs : 5000U;
         uint32_t& lastMs = analogCalcLogLastMs_[idx];
         if (lastMs == 0U || (uint32_t)(nowMs - lastMs) >= periodMs) {
-            const char* sensor = (idx == 0) ? "pH" : ((idx == 1) ? "ORP" : "PSI");
+            const char* sensor = (idx == 0) ? "ORP" : ((idx == 1) ? "pH" : "PSI");
             const char sourceMark = (slot.def.source == IO_SRC_ADS_INTERNAL_SINGLE) ? 'I' : 'E';
             LOGI("Calc %c %-3s raw_bin=%7d raw_V=%10.6f median_V=%10.6f coeff=%9.3f rounded=%9.3f",
                  sourceMark,
@@ -561,6 +558,7 @@ bool IOModule::processAnalogDefinition_(uint8_t idx, uint32_t nowMs)
     if (!slot.lastRoundedValid || rounded != slot.lastRounded) {
         slot.lastRounded = rounded;
         slot.lastRoundedValid = true;
+        markIoCycleChanged_(slot.ioId);
         if (slot.def.onValueChanged) {
             slot.def.onValueChanged(slot.def.onValueCtx, rounded);
         }
@@ -590,6 +588,7 @@ bool IOModule::processDigitalInputDefinition_(uint8_t slotIdx, uint32_t nowMs)
         inputEp->update(on, true, nowMs);
         slot.lastValue = on;
         slot.lastValid = true;
+        markIoCycleChanged_(slot.ioId);
         if (slot.inDef.onValueChanged) {
             slot.inDef.onValueChanged(slot.inDef.onValueCtx, on);
         }
@@ -622,16 +621,18 @@ void IOModule::registerHaAnalogSensors_()
     buildHaValueTemplate_(3, haValueTpl_[3], sizeof(haValueTpl_[3]));
     buildHaValueTemplate_(4, haValueTpl_[4], sizeof(haValueTpl_[4]));
 
-    const HASensorEntry s0{"io", "ph", "pH", "rt/io/input/a0", haValueTpl_[0], nullptr, "mdi:ph", nullptr};
-    const HASensorEntry s1{"io", "orp", "ORP", "rt/io/input/a1", haValueTpl_[1], nullptr, "mdi:flash", "mV"};
+    const HASensorEntry s0{"io", "orp", "ORP", "rt/io/input/a0", haValueTpl_[0], nullptr, "mdi:flash", "mV"};
+    const HASensorEntry s1{"io", "ph", "pH", "rt/io/input/a1", haValueTpl_[1], nullptr, "mdi:ph", ""};
     const HASensorEntry s2{"io", "psi", "PSI", "rt/io/input/a2", haValueTpl_[2], nullptr, "mdi:gauge", "PSI"};
-    const HASensorEntry s3{"io", "water_temperature", "Water Temperature", "rt/io/input/a3", haValueTpl_[3], nullptr, "mdi:water-thermometer", "\xC2\xB0""C"};
-    const HASensorEntry s4{"io", "air_temperature", "Air Temperature", "rt/io/input/a4", haValueTpl_[4], nullptr, "mdi:thermometer", "\xC2\xB0""C"};
+    const HASensorEntry s3{"io", "spare", "Spare", "rt/io/input/a3", haValueTpl_[3], nullptr, "mdi:sine-wave", nullptr};
+    const HASensorEntry s4{"io", "water_temperature", "Water Temperature", "rt/io/input/a4", haValueTpl_[4], nullptr, "mdi:water-thermometer", "\xC2\xB0""C"};
+    const HASensorEntry s5{"io", "air_temperature", "Air Temperature", "rt/io/input/a5", "{{ value_json.value | float(none) | round(1) }}", nullptr, "mdi:thermometer", "\xC2\xB0""C"};
     (void)haSvc_->addSensor(haSvc_->ctx, &s0);
     (void)haSvc_->addSensor(haSvc_->ctx, &s1);
     (void)haSvc_->addSensor(haSvc_->ctx, &s2);
     (void)haSvc_->addSensor(haSvc_->ctx, &s3);
     (void)haSvc_->addSensor(haSvc_->ctx, &s4);
+    (void)haSvc_->addSensor(haSvc_->ctx, &s5);
 }
 
 void IOModule::forceAnalogSnapshotPublish_(uint8_t analogIdx, uint32_t nowMs)
@@ -689,6 +690,289 @@ void IOModule::maybeRefreshHaOnPrecisionChange_()
             }
         }
     }
+}
+
+uint8_t IOModule::svcCount_(void* ctx)
+{
+    IOModule* self = static_cast<IOModule*>(ctx);
+    return self ? self->ioCount_() : 0;
+}
+
+IoStatus IOModule::svcIdAt_(void* ctx, uint8_t index, IoId* outId)
+{
+    IOModule* self = static_cast<IOModule*>(ctx);
+    if (!self) return IO_ERR_INVALID_ARG;
+    return self->ioIdAt_(index, outId);
+}
+
+IoStatus IOModule::svcMeta_(void* ctx, IoId id, IoEndpointMeta* outMeta)
+{
+    IOModule* self = static_cast<IOModule*>(ctx);
+    if (!self) return IO_ERR_INVALID_ARG;
+    return self->ioMeta_(id, outMeta);
+}
+
+IoStatus IOModule::svcReadDigital_(void* ctx, IoId id, uint8_t* outOn, uint32_t* outTsMs, IoSeq* outSeq)
+{
+    IOModule* self = static_cast<IOModule*>(ctx);
+    if (!self) return IO_ERR_INVALID_ARG;
+    return self->ioReadDigital_(id, outOn, outTsMs, outSeq);
+}
+
+IoStatus IOModule::svcWriteDigital_(void* ctx, IoId id, uint8_t on, uint32_t tsMs)
+{
+    IOModule* self = static_cast<IOModule*>(ctx);
+    if (!self) return IO_ERR_INVALID_ARG;
+    return self->ioWriteDigital_(id, on, tsMs);
+}
+
+IoStatus IOModule::svcReadAnalog_(void* ctx, IoId id, float* outValue, uint32_t* outTsMs, IoSeq* outSeq)
+{
+    IOModule* self = static_cast<IOModule*>(ctx);
+    if (!self) return IO_ERR_INVALID_ARG;
+    return self->ioReadAnalog_(id, outValue, outTsMs, outSeq);
+}
+
+IoStatus IOModule::svcTick_(void* ctx, uint32_t nowMs)
+{
+    IOModule* self = static_cast<IOModule*>(ctx);
+    if (!self) return IO_ERR_INVALID_ARG;
+    return self->ioTick_(nowMs);
+}
+
+IoStatus IOModule::svcLastCycle_(void* ctx, IoCycleInfo* outCycle)
+{
+    IOModule* self = static_cast<IOModule*>(ctx);
+    if (!self) return IO_ERR_INVALID_ARG;
+    return self->ioLastCycle_(outCycle);
+}
+
+uint8_t IOModule::ioCount_() const
+{
+    uint8_t count = 0;
+    for (uint8_t logical = 0; logical < MAX_DIGITAL_OUTPUTS; ++logical) {
+        uint8_t slotIdx = 0xFF;
+        if (findDigitalSlotByLogical_(DIGITAL_SLOT_OUTPUT, logical, slotIdx)) ++count;
+    }
+    for (uint8_t logical = 0; logical < MAX_DIGITAL_INPUTS; ++logical) {
+        uint8_t slotIdx = 0xFF;
+        if (findDigitalSlotByLogical_(DIGITAL_SLOT_INPUT, logical, slotIdx)) ++count;
+    }
+    for (uint8_t i = 0; i < MAX_ANALOG_ENDPOINTS; ++i) {
+        if (analogSlots_[i].used) ++count;
+    }
+    return count;
+}
+
+IoStatus IOModule::ioIdAt_(uint8_t index, IoId* outId) const
+{
+    if (!outId) return IO_ERR_INVALID_ARG;
+    uint8_t seen = 0;
+
+    for (uint8_t logical = 0; logical < MAX_DIGITAL_OUTPUTS; ++logical) {
+        uint8_t slotIdx = 0xFF;
+        if (!findDigitalSlotByLogical_(DIGITAL_SLOT_OUTPUT, logical, slotIdx)) continue;
+        if (seen == index) {
+            *outId = digitalSlots_[slotIdx].ioId;
+            return IO_OK;
+        }
+        ++seen;
+    }
+
+    for (uint8_t logical = 0; logical < MAX_DIGITAL_INPUTS; ++logical) {
+        uint8_t slotIdx = 0xFF;
+        if (!findDigitalSlotByLogical_(DIGITAL_SLOT_INPUT, logical, slotIdx)) continue;
+        if (seen == index) {
+            *outId = digitalSlots_[slotIdx].ioId;
+            return IO_OK;
+        }
+        ++seen;
+    }
+
+    for (uint8_t i = 0; i < MAX_ANALOG_ENDPOINTS; ++i) {
+        if (!analogSlots_[i].used) continue;
+        if (seen == index) {
+            *outId = analogSlots_[i].ioId;
+            return IO_OK;
+        }
+        ++seen;
+    }
+
+    return IO_ERR_UNKNOWN_ID;
+}
+
+IoStatus IOModule::ioMeta_(IoId id, IoEndpointMeta* outMeta) const
+{
+    if (!outMeta) return IO_ERR_INVALID_ARG;
+    *outMeta = IoEndpointMeta{};
+    outMeta->id = id;
+
+    uint8_t slotIdx = 0xFF;
+    if (findDigitalSlotByIoId_(id, slotIdx)) {
+        const DigitalSlot& s = digitalSlots_[slotIdx];
+        if (!s.used) return IO_ERR_UNKNOWN_ID;
+
+        outMeta->kind = (s.kind == DIGITAL_SLOT_OUTPUT) ? IO_KIND_DIGITAL_OUT : IO_KIND_DIGITAL_IN;
+        outMeta->backend = IO_BACKEND_GPIO;
+        outMeta->channel = (s.kind == DIGITAL_SLOT_OUTPUT) ? s.outDef.pin : s.inDef.pin;
+        outMeta->capabilities = (s.kind == DIGITAL_SLOT_OUTPUT) ? (IO_CAP_R | IO_CAP_W) : IO_CAP_R;
+
+        const char* name = nullptr;
+        if (s.kind == DIGITAL_SLOT_OUTPUT && s.logicalIdx < DIGITAL_CFG_SLOTS) {
+            name = digitalCfg_[s.logicalIdx].name;
+        } else if (s.kind == DIGITAL_SLOT_INPUT) {
+            name = s.inDef.id;
+        }
+        if (!name || name[0] == '\0') name = s.endpointId;
+        if (!name) name = "";
+        strncpy(outMeta->name, name, sizeof(outMeta->name) - 1);
+        outMeta->name[sizeof(outMeta->name) - 1] = '\0';
+        return IO_OK;
+    }
+
+    if (id >= IO_ID_AI_BASE && id < IO_ID_AI_MAX) {
+        const uint8_t analogIdx = (uint8_t)(id - IO_ID_AI_BASE);
+        const AnalogSlot& s = analogSlots_[analogIdx];
+        if (!s.used) return IO_ERR_UNKNOWN_ID;
+
+        outMeta->kind = IO_KIND_ANALOG_IN;
+        outMeta->capabilities = IO_CAP_R;
+        outMeta->channel = s.def.channel;
+        if (s.def.source == IO_SRC_ADS_INTERNAL_SINGLE) outMeta->backend = IO_BACKEND_ADS1115_INT;
+        else if (s.def.source == IO_SRC_ADS_EXTERNAL_DIFF) outMeta->backend = IO_BACKEND_ADS1115_EXT_DIFF;
+        else outMeta->backend = IO_BACKEND_DS18B20;
+        outMeta->precision = s.def.precision;
+        outMeta->minValid = s.def.minValid;
+        outMeta->maxValid = s.def.maxValid;
+
+        const char* name = (analogIdx < ANALOG_CFG_SLOTS) ? analogCfg_[analogIdx].name : nullptr;
+        if (!name || name[0] == '\0') name = s.def.id;
+        if (!name) name = "";
+        strncpy(outMeta->name, name, sizeof(outMeta->name) - 1);
+        outMeta->name[sizeof(outMeta->name) - 1] = '\0';
+        return IO_OK;
+    }
+
+    return IO_ERR_UNKNOWN_ID;
+}
+
+IoStatus IOModule::ioReadDigital_(IoId id, uint8_t* outOn, uint32_t* outTsMs, IoSeq* outSeq) const
+{
+    if (!outOn) return IO_ERR_INVALID_ARG;
+
+    uint8_t slotIdx = 0xFF;
+    if (!findDigitalSlotByIoId_(id, slotIdx)) return IO_ERR_UNKNOWN_ID;
+    const DigitalSlot& s = digitalSlots_[slotIdx];
+    if (!s.used || !s.endpoint) return IO_ERR_NOT_READY;
+
+    IOEndpointValue v{};
+    if (!s.endpoint->read(v) || !v.valid || v.valueType != IO_EP_VALUE_BOOL) return IO_ERR_NOT_READY;
+
+    *outOn = v.v.b ? 1U : 0U;
+    if (outTsMs) *outTsMs = v.timestampMs;
+    if (outSeq) *outSeq = lastCycle_.seq;
+    return IO_OK;
+}
+
+IoStatus IOModule::ioWriteDigital_(IoId id, uint8_t on, uint32_t tsMs)
+{
+    uint8_t slotIdx = 0xFF;
+    if (!findDigitalSlotByIoId_(id, slotIdx)) return IO_ERR_UNKNOWN_ID;
+    DigitalSlot& s = digitalSlots_[slotIdx];
+    if (!s.used) return IO_ERR_UNKNOWN_ID;
+    if (s.kind != DIGITAL_SLOT_OUTPUT) return IO_ERR_READ_ONLY;
+    if (!s.endpoint) return IO_ERR_NOT_READY;
+
+    IOEndpointValue in{};
+    in.timestampMs = (tsMs == 0) ? millis() : tsMs;
+    in.valueType = IO_EP_VALUE_BOOL;
+    in.v.b = (on != 0U);
+    in.valid = true;
+    if (!s.endpoint->write(in)) return IO_ERR_HW;
+
+    if (dataStore_) {
+        uint8_t rtIdx = 0;
+        if (endpointIndexFromId_(s.endpointId, rtIdx)) {
+            (void)setIoEndpointBool(*dataStore_, rtIdx, in.v.b, in.timestampMs, DIRTY_ACTUATORS);
+        }
+    }
+
+    markIoCycleChanged_(s.ioId);
+    return IO_OK;
+}
+
+IoStatus IOModule::ioReadAnalog_(IoId id, float* outValue, uint32_t* outTsMs, IoSeq* outSeq) const
+{
+    if (!outValue) return IO_ERR_INVALID_ARG;
+    if (id < IO_ID_AI_BASE || id >= IO_ID_AI_MAX) return IO_ERR_UNKNOWN_ID;
+
+    const uint8_t analogIdx = (uint8_t)(id - IO_ID_AI_BASE);
+    const AnalogSlot& s = analogSlots_[analogIdx];
+    if (!s.used || !s.endpoint) return IO_ERR_NOT_READY;
+
+    IOEndpointValue v{};
+    if (!s.endpoint->read(v) || !v.valid || v.valueType != IO_EP_VALUE_FLOAT) return IO_ERR_NOT_READY;
+
+    *outValue = v.v.f;
+    if (outTsMs) *outTsMs = v.timestampMs;
+    if (outSeq) *outSeq = lastCycle_.seq;
+    return IO_OK;
+}
+
+IoStatus IOModule::ioTick_(uint32_t nowMs)
+{
+    maybeRefreshHaOnPrecisionChange_();
+
+    if (!cfgData_.enabled) return IO_ERR_NOT_READY;
+
+    if (!runtimeReady_) {
+        if (!configureRuntime_()) return IO_ERR_NOT_READY;
+    }
+
+    if (pcfLastEnabled_ != cfgData_.pcfEnabled) {
+        if (!cfgData_.pcfEnabled && ledMaskEp_) {
+            uint8_t offLogical = 0;
+            uint8_t offPhysical = pcfPhysicalFromLogical_(offLogical);
+            ledMaskEp_->setMask(offPhysical, nowMs);
+            pcfLogicalMask_ = offLogical;
+            pcfLogicalValid_ = true;
+        } else if (cfgData_.pcfEnabled) {
+            if (!ledMaskEp_) {
+                if (!pcf_) {
+                    pcf_ = new Pcf8574Driver("pcf8574_led", &i2cBus_, cfgData_.pcfAddress);
+                }
+                if (pcf_->begin()) {
+                    ledMaskEp_ = new Pcf8574MaskEndpoint(
+                        "status_leds_mask",
+                        [](void* ctx, uint8_t mask) -> bool {
+                            return static_cast<Pcf8574Driver*>(ctx)->writeMask(mask);
+                        },
+                        [](void* ctx, uint8_t* mask) -> bool {
+                            if (!mask) return false;
+                            return static_cast<Pcf8574Driver*>(ctx)->readMask(*mask);
+                        },
+                        pcf_
+                    );
+                    registry_.add(ledMaskEp_);
+                }
+            }
+            if (ledMaskEp_) {
+                setLedMask_(cfgData_.pcfMaskDefault, nowMs);
+            }
+        }
+        pcfLastEnabled_ = cfgData_.pcfEnabled;
+    }
+
+    beginIoCycle_(nowMs);
+    scheduler_.tick(nowMs);
+    return IO_OK;
+}
+
+IoStatus IOModule::ioLastCycle_(IoCycleInfo* outCycle) const
+{
+    if (!outCycle) return IO_ERR_INVALID_ARG;
+    *outCycle = lastCycle_;
+    return IO_OK;
 }
 
 bool IOModule::svcSetMask_(void* ctx, uint8_t mask)
@@ -787,6 +1071,7 @@ bool IOModule::configureRuntime_()
 
     for (uint8_t i = 0; i < MAX_ANALOG_ENDPOINTS; ++i) {
         if (!analogSlots_[i].used) continue;
+        analogSlots_[i].ioId = (IoId)(IO_ID_AI_BASE + i);
 
         if (i < ANALOG_CFG_SLOTS) {
             snprintf(analogSlots_[i].def.id, sizeof(analogSlots_[i].def.id), "a%u", (unsigned)i);
@@ -817,6 +1102,10 @@ bool IOModule::configureRuntime_()
     for (uint8_t i = 0; i < MAX_DIGITAL_SLOTS; ++i) {
         if (!digitalSlots_[i].used) continue;
         DigitalSlot& s = digitalSlots_[i];
+        s.owner = this;
+        s.ioId = (s.kind == DIGITAL_SLOT_OUTPUT)
+                   ? (IoId)(IO_ID_DO_BASE + s.logicalIdx)
+                   : (IoId)(IO_ID_DI_BASE + s.logicalIdx);
 
         if (s.kind == DIGITAL_SLOT_INPUT) {
             snprintf(s.endpointId, sizeof(s.endpointId), "i%u", (unsigned)s.logicalIdx);
@@ -944,7 +1233,6 @@ bool IOModule::configureRuntime_()
             );
             registry_.add(ledMaskEp_);
             setLedMask_(cfgData_.pcfMaskDefault, millis());
-            if (services_) services_->add("io_leds", &ledSvc_);
         } else {
             LOGW("PCF8574 not detected at 0x%02X", cfgData_.pcfAddress);
             delete pcf_;
@@ -993,7 +1281,9 @@ bool IOModule::writeDigitalOut_(void* ctx, bool on)
     if (!s->used || s->kind != DIGITAL_SLOT_OUTPUT) return false;
 
     if (!s->outDef.momentary) {
-        return s->driver->write(on);
+        bool ok = s->driver->write(on);
+        if (ok && s->owner) s->owner->markIoCycleChanged_(s->ioId);
+        return ok;
     }
 
     // Momentary outputs always generate a physical pulse on each command.
@@ -1004,6 +1294,7 @@ bool IOModule::writeDigitalOut_(void* ctx, bool on)
         (void)xTimerChangePeriod(s->pulseTimer, pdMS_TO_TICKS(pulse), 0);
         (void)xTimerStart(s->pulseTimer, 0);
     }
+    if (s->owner) s->owner->markIoCycleChanged_(s->ioId);
     return true;
 }
 
@@ -1029,146 +1320,13 @@ void IOModule::digitalPulseTimerCb_(TimerHandle_t timer)
     (void)s->driver->write(false);
 }
 
-bool IOModule::cmdIoWrite_(void* userCtx, const CommandRequest& req, char* reply, size_t replyLen)
-{
-    IOModule* self = static_cast<IOModule*>(userCtx);
-    if (!self) return false;
-    return self->handleIoWrite_(req, reply, replyLen);
-}
-
-bool IOModule::handleIoWrite_(const CommandRequest& req, char* reply, size_t replyLen)
-{
-    const char* json = req.args ? req.args : req.json;
-    if (!json) {
-        snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"missing_args\"}");
-        return false;
-    }
-
-    const char* idStart = findJsonStringValueLocal(json, "id");
-    idStart = skipWsLocal(idStart);
-    if (!idStart) {
-        snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"missing_id\"}");
-        return false;
-    }
-    const char* idEnd = strchr(idStart, '"');
-    if (!idEnd) {
-        snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"bad_id\"}");
-        return false;
-    }
-
-    char id[32] = {0};
-    size_t idLen = (size_t)(idEnd - idStart);
-    if (idLen >= sizeof(id)) idLen = sizeof(id) - 1;
-    memcpy(id, idStart, idLen);
-    id[idLen] = '\0';
-    IOEndpoint* ep = registry_.find(id);
-    if (!ep) {
-        LOGW("io.write unknown endpoint id=%s", id);
-        snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"unknown_endpoint\"}");
-        return false;
-    }
-    if ((ep->capabilities() & IO_CAP_WRITE) == 0) {
-        snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"readonly_endpoint\"}");
-        return false;
-    }
-
-    const char* valuePos = findJsonValueLocal(json, "value");
-    valuePos = skipWsLocal(valuePos);
-    if (!valuePos) {
-        snprintf(reply, replyLen, "{\"ok\":false,\"err\":\"missing_value\"}");
-        return false;
-    }
-
-    if (strcmp(id, "status_leds_mask") == 0) {
-        int32_t logicalMask = (int32_t)strtol(valuePos, nullptr, 10);
-        bool ok = setLedMask_((uint8_t)(logicalMask & 0xFF), millis());
-        snprintf(reply, replyLen, "{\"ok\":%s,\"id\":\"%s\"}", ok ? "true" : "false", id);
-        return ok;
-    }
-
-    IOEndpointValue cur{};
-    ep->read(cur);
-
-    IOEndpointValue in{};
-    in.timestampMs = millis();
-    if (cur.valueType == IO_EP_VALUE_BOOL) {
-        bool requested = false;
-        bool hasRequested = true;
-        if (strncmp(valuePos, "true", 4) == 0) {
-            requested = true;
-        } else if (strncmp(valuePos, "false", 5) == 0) {
-            requested = false;
-        } else {
-            int v = atoi(valuePos);
-            requested = (v != 0);
-        }
-
-        // For momentary outputs, io.write is a "set virtual state" command:
-        // pulse only when requested state differs from current virtual state.
-        bool isMomentary = false;
-        uint8_t digitalSlotIdx = 0xFF;
-        if (findDigitalSlotById_(id, digitalSlotIdx)) {
-            DigitalSlot& s = digitalSlots_[digitalSlotIdx];
-            if (s.used && s.kind == DIGITAL_SLOT_OUTPUT && s.outDef.momentary) {
-                isMomentary = true;
-            }
-        }
-
-        if (!isMomentary && id[0] == 'd' && hasDecimalSuffixLocal(id + 1)) {
-            uint8_t logical = (uint8_t)atoi(id + 1);
-            uint8_t slotIdx = 0xFF;
-            if (findDigitalSlotByLogical_(DIGITAL_SLOT_OUTPUT, logical, slotIdx)) {
-                DigitalSlot& s = digitalSlots_[slotIdx];
-                if (s.used && s.outDef.momentary) isMomentary = true;
-            }
-        }
-
-        if (isMomentary) {
-            if (hasRequested && cur.valid && cur.valueType == IO_EP_VALUE_BOOL && cur.v.b == requested) {
-                // No-op: requested virtual state already applied.
-                snprintf(reply, replyLen, "{\"ok\":true,\"id\":\"%s\",\"noop\":true}", id);
-                return true;
-            }
-            in.valueType = IO_EP_VALUE_BOOL;
-            in.v.b = requested;
-        } else {
-            in.valueType = IO_EP_VALUE_BOOL;
-            in.v.b = requested;
-        }
-    } else if (cur.valueType == IO_EP_VALUE_INT32) {
-        in.valueType = IO_EP_VALUE_INT32;
-        in.v.i = (int32_t)strtol(valuePos, nullptr, 10);
-    } else {
-        in.valueType = IO_EP_VALUE_FLOAT;
-        in.v.f = (float)atof(valuePos);
-    }
-    in.valid = true;
-
-    bool ok = ep->write(in);
-    if (ok && dataStore_) {
-        uint8_t rtIdx = 0;
-        if (endpointIndexFromId_(id, rtIdx)) {
-            if (in.valueType == IO_EP_VALUE_BOOL) {
-                (void)setIoEndpointBool(*dataStore_, rtIdx, in.v.b, in.timestampMs, DIRTY_ACTUATORS);
-            } else if (in.valueType == IO_EP_VALUE_INT32) {
-                (void)setIoEndpointInt(*dataStore_, rtIdx, in.v.i, in.timestampMs, DIRTY_ACTUATORS);
-            } else if (in.valueType == IO_EP_VALUE_FLOAT) {
-                (void)setIoEndpointFloat(*dataStore_, rtIdx, in.v.f, in.timestampMs, DIRTY_ACTUATORS);
-            }
-        }
-    }
-    snprintf(reply, replyLen, "{\"ok\":%s,\"id\":\"%s\"}", ok ? "true" : "false", id);
-    return ok;
-}
-
 void IOModule::init(ConfigStore& cfg, ServiceRegistry& services)
 {
-    services_ = &services;
     logHub_ = services.get<LogHubService>("loghub");
-    cmdSvc_ = services.get<CommandService>("cmd");
     haSvc_ = services.get<HAService>("ha");
     const DataStoreService* dsSvc = services.get<DataStoreService>("datastore");
     dataStore_ = dsSvc ? dsSvc->store : nullptr;
+    (void)services.add("io", &ioSvc_);
 
     // Default labels for digital output slots (can be overridden by persisted config).
     snprintf(digitalCfg_[0].name, sizeof(digitalCfg_[0].name), "Filtration Pump");
@@ -1222,66 +1380,62 @@ void IOModule::init(ConfigStore& cfg, ServiceRegistry& services)
     cfg.registerVar(d7NameVar_); cfg.registerVar(d7PinVar_); cfg.registerVar(d7ActiveHighVar_); cfg.registerVar(d7InitialOnVar_); cfg.registerVar(d7MomentaryVar_); cfg.registerVar(d7PulseVar_);
 
     LOGI("I/O config registered");
-    if (cmdSvc_ && cmdSvc_->registerHandler) {
-        cmdSvc_->registerHandler(cmdSvc_->ctx, "io.write", cmdIoWrite_, this);
-        LOGI("Command registered: io.write");
-    }
     if (haSvc_ && haSvc_->addSwitch) {
         registerHaAnalogSensors_();
         const HASwitchEntry sw0{
             "io", "filtration_pump", "Filtration Pump", "rt/io/output/d0",
             "{% if value_json.value %}ON{% else %}OFF{% endif %}", "cmd",
-            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"id\\\":\\\"pd0\\\",\\\"value\\\":true}}",
-            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"id\\\":\\\"pd0\\\",\\\"value\\\":false}}",
+            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":0,\\\"value\\\":true}}",
+            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":0,\\\"value\\\":false}}",
             "mdi:pool"
         };
         const HASwitchEntry sw1{
             "io", "ph_pump", "pH Pump", "rt/io/output/d1",
             "{% if value_json.value %}ON{% else %}OFF{% endif %}", "cmd",
-            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"id\\\":\\\"pd1\\\",\\\"value\\\":true}}",
-            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"id\\\":\\\"pd1\\\",\\\"value\\\":false}}",
+            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":1,\\\"value\\\":true}}",
+            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":1,\\\"value\\\":false}}",
             "mdi:beaker-outline"
         };
         const HASwitchEntry sw2{
             "io", "chlorine_pump", "Chlorine Pump", "rt/io/output/d2",
             "{% if value_json.value %}ON{% else %}OFF{% endif %}", "cmd",
-            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"id\\\":\\\"pd2\\\",\\\"value\\\":true}}",
-            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"id\\\":\\\"pd2\\\",\\\"value\\\":false}}",
+            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":2,\\\"value\\\":true}}",
+            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":2,\\\"value\\\":false}}",
             "mdi:water-outline"
         };
         const HASwitchEntry sw3{
             "io", "chlorine_generator", "Chlorine Generator", "rt/io/output/d3",
             "{% if value_json.value %}ON{% else %}OFF{% endif %}", "cmd",
-            "{\\\"cmd\\\":\\\"io.write\\\",\\\"args\\\":{\\\"id\\\":\\\"d3\\\",\\\"value\\\":true}}",
-            "{\\\"cmd\\\":\\\"io.write\\\",\\\"args\\\":{\\\"id\\\":\\\"d3\\\",\\\"value\\\":false}}",
+            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":5,\\\"value\\\":true}}",
+            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":5,\\\"value\\\":false}}",
             "mdi:flash"
         };
         const HASwitchEntry sw4{
             "io", "robot", "Robot", "rt/io/output/d4",
             "{% if value_json.value %}ON{% else %}OFF{% endif %}", "cmd",
-            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"id\\\":\\\"pd3\\\",\\\"value\\\":true}}",
-            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"id\\\":\\\"pd3\\\",\\\"value\\\":false}}",
+            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":3,\\\"value\\\":true}}",
+            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":3,\\\"value\\\":false}}",
             "mdi:robot-vacuum"
         };
         const HASwitchEntry sw5{
             "io", "lights", "Lights", "rt/io/output/d5",
             "{% if value_json.value %}ON{% else %}OFF{% endif %}", "cmd",
-            "{\\\"cmd\\\":\\\"io.write\\\",\\\"args\\\":{\\\"id\\\":\\\"d5\\\",\\\"value\\\":true}}",
-            "{\\\"cmd\\\":\\\"io.write\\\",\\\"args\\\":{\\\"id\\\":\\\"d5\\\",\\\"value\\\":false}}",
+            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":6,\\\"value\\\":true}}",
+            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":6,\\\"value\\\":false}}",
             "mdi:lightbulb"
         };
         const HASwitchEntry sw6{
             "io", "fill_pump", "Fill Pump", "rt/io/output/d6",
             "{% if value_json.value %}ON{% else %}OFF{% endif %}", "cmd",
-            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"id\\\":\\\"pd4\\\",\\\"value\\\":true}}",
-            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"id\\\":\\\"pd4\\\",\\\"value\\\":false}}",
+            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":4,\\\"value\\\":true}}",
+            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":4,\\\"value\\\":false}}",
             "mdi:water-plus"
         };
         const HASwitchEntry sw7{
             "io", "water_heater", "Water Heater", "rt/io/output/d7",
             "{% if value_json.value %}ON{% else %}OFF{% endif %}", "cmd",
-            "{\\\"cmd\\\":\\\"io.write\\\",\\\"args\\\":{\\\"id\\\":\\\"d7\\\",\\\"value\\\":true}}",
-            "{\\\"cmd\\\":\\\"io.write\\\",\\\"args\\\":{\\\"id\\\":\\\"d7\\\",\\\"value\\\":false}}",
+            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":7,\\\"value\\\":true}}",
+            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":7,\\\"value\\\":false}}",
             "mdi:water-boiler"
         };
         (void)haSvc_->addSwitch(haSvc_->ctx, &sw0);
@@ -1302,57 +1456,13 @@ void IOModule::init(ConfigStore& cfg, ServiceRegistry& services)
 
 void IOModule::loop()
 {
-    maybeRefreshHaOnPrecisionChange_();
-
-    if (!cfgData_.enabled) {
-        vTaskDelay(pdMS_TO_TICKS(500));
-        return;
-    }
-
-    if (!runtimeReady_) {
-        if (!configureRuntime_()) {
+    const IoStatus st = ioTick_(millis());
+    if (st != IO_OK) {
+        if (!cfgData_.enabled || !runtimeReady_) {
             vTaskDelay(pdMS_TO_TICKS(500));
             return;
         }
     }
-
-    if (pcfLastEnabled_ != cfgData_.pcfEnabled) {
-        if (!cfgData_.pcfEnabled && ledMaskEp_) {
-            uint8_t offLogical = 0;
-            uint8_t offPhysical = pcfPhysicalFromLogical_(offLogical);
-            ledMaskEp_->setMask(offPhysical, millis());
-            pcfLogicalMask_ = offLogical;
-            pcfLogicalValid_ = true;
-        } else if (cfgData_.pcfEnabled) {
-            if (!ledMaskEp_) {
-                if (!pcf_) {
-                    pcf_ = new Pcf8574Driver("pcf8574_led", &i2cBus_, cfgData_.pcfAddress);
-                }
-                if (pcf_->begin()) {
-                    ledMaskEp_ = new Pcf8574MaskEndpoint(
-                        "status_leds_mask",
-                        [](void* ctx, uint8_t mask) -> bool {
-                            return static_cast<Pcf8574Driver*>(ctx)->writeMask(mask);
-                        },
-                        [](void* ctx, uint8_t* mask) -> bool {
-                            if (!mask) return false;
-                            return static_cast<Pcf8574Driver*>(ctx)->readMask(*mask);
-                        },
-                        pcf_
-                    );
-                    registry_.add(ledMaskEp_);
-                    if (services_) services_->add("io_leds", &ledSvc_);
-                }
-            }
-            if (ledMaskEp_) {
-                // Re-apply configured default on re-enable.
-                setLedMask_(cfgData_.pcfMaskDefault, millis());
-            }
-        }
-        pcfLastEnabled_ = cfgData_.pcfEnabled;
-    }
-
-    scheduler_.tick(millis());
 
     vTaskDelay(pdMS_TO_TICKS(10));
 }
