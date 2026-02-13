@@ -5,6 +5,7 @@
  */
 
 #include "Core/Module.h"
+#include "Core/Layout/PoolIoMap.h"
 #include "Core/RuntimeSnapshotProvider.h"
 #include "Core/Services/Services.h"
 #include "Modules/IOModule/IOBus/I2CBus.h"
@@ -206,7 +207,7 @@ private:
     static constexpr uint8_t MAX_DIGITAL_INPUTS = 8;
     static constexpr uint8_t MAX_DIGITAL_OUTPUTS = 12;
     static constexpr uint8_t MAX_DIGITAL_SLOTS = MAX_DIGITAL_INPUTS + MAX_DIGITAL_OUTPUTS;
-    static constexpr uint8_t ANALOG_CFG_SLOTS = 5;
+    static constexpr uint8_t ANALOG_CFG_SLOTS = 6;
     static constexpr uint8_t DIGITAL_CFG_SLOTS = 8;
     /** End-exclusive upper bounds for each static id range. */
     static constexpr IoId IO_ID_DO_MAX = IO_ID_DO_BASE + MAX_DIGITAL_OUTPUTS;
@@ -287,10 +288,15 @@ private:
     AnalogSlot analogSlots_[MAX_ANALOG_ENDPOINTS]{};
     DigitalSlot digitalSlots_[MAX_DIGITAL_SLOTS]{};
     bool runtimeReady_ = false;
+    bool runtimeInitAttempted_ = false;
+    bool pcfEnableNeedsReinitWarned_ = false;
     uint32_t analogCalcLogLastMs_[3]{0, 0, 0};
-    int32_t haPrecisionLast_[ANALOG_CFG_SLOTS]{0, 0, 0, 0, 0};
+    int32_t haPrecisionLast_[ANALOG_CFG_SLOTS]{0, 0, 0, 0, 0, 0};
     bool haPrecisionLastInit_ = false;
     char haValueTpl_[ANALOG_CFG_SLOTS][64]{};
+    char haSwitchStateSuffix_[FLOW_POOL_IO_BINDING_COUNT][24]{};
+    char haSwitchPayloadOn_[FLOW_POOL_IO_BINDING_COUNT][64]{};
+    char haSwitchPayloadOff_[FLOW_POOL_IO_BINDING_COUNT][64]{};
 
     ConfigVariable<bool,0> enabledVar_ { NVS_KEY("io_en"),"enabled","io",ConfigType::Bool,&cfgData_.enabled,ConfigPersistence::Persistent,0 };
     ConfigVariable<int32_t,0> i2cSdaVar_ { NVS_KEY("io_sda"),"i2c_sda","io",ConfigType::Int32,&cfgData_.i2cSda,ConfigPersistence::Persistent,0 };
@@ -353,6 +359,15 @@ private:
     ConfigVariable<int32_t,0> a4PrecVar_{NVS_KEY("io_a4p"),"a4_prec","io/input/a4",ConfigType::Int32,&analogCfg_[4].precision,ConfigPersistence::Persistent,0};
     ConfigVariable<float,0> a4MinVar_{NVS_KEY("io_a4n"),"a4_min","io/input/a4",ConfigType::Float,&analogCfg_[4].minValid,ConfigPersistence::Persistent,0};
     ConfigVariable<float,0> a4MaxVar_{NVS_KEY("io_a4x"),"a4_max","io/input/a4",ConfigType::Float,&analogCfg_[4].maxValid,ConfigPersistence::Persistent,0};
+
+    ConfigVariable<char,0> a5NameVar_{NVS_KEY("io_a5nm"),"a5_name","io/input/a5",ConfigType::CharArray,(char*)analogCfg_[5].name,ConfigPersistence::Persistent,sizeof(analogCfg_[5].name)};
+    ConfigVariable<uint8_t,0> a5SourceVar_{NVS_KEY("io_a5s"),"a5_source","io/input/a5",ConfigType::UInt8,&analogCfg_[5].source,ConfigPersistence::Persistent,0};
+    ConfigVariable<uint8_t,0> a5ChannelVar_{NVS_KEY("io_a5c"),"a5_channel","io/input/a5",ConfigType::UInt8,&analogCfg_[5].channel,ConfigPersistence::Persistent,0};
+    ConfigVariable<float,0> a5C0Var_{NVS_KEY("io_a50"),"a5_c0","io/input/a5",ConfigType::Float,&analogCfg_[5].c0,ConfigPersistence::Persistent,0};
+    ConfigVariable<float,0> a5C1Var_{NVS_KEY("io_a51"),"a5_c1","io/input/a5",ConfigType::Float,&analogCfg_[5].c1,ConfigPersistence::Persistent,0};
+    ConfigVariable<int32_t,0> a5PrecVar_{NVS_KEY("io_a5p"),"a5_prec","io/input/a5",ConfigType::Int32,&analogCfg_[5].precision,ConfigPersistence::Persistent,0};
+    ConfigVariable<float,0> a5MinVar_{NVS_KEY("io_a5n"),"a5_min","io/input/a5",ConfigType::Float,&analogCfg_[5].minValid,ConfigPersistence::Persistent,0};
+    ConfigVariable<float,0> a5MaxVar_{NVS_KEY("io_a5x"),"a5_max","io/input/a5",ConfigType::Float,&analogCfg_[5].maxValid,ConfigPersistence::Persistent,0};
 
     ConfigVariable<char,0> d0NameVar_{NVS_KEY("io_d0nm"),"d0_name","io/output/d0",ConfigType::CharArray,(char*)digitalCfg_[0].name,ConfigPersistence::Persistent,sizeof(digitalCfg_[0].name)};
     ConfigVariable<uint8_t,0> d0PinVar_{NVS_KEY("io_d0pn"),"d0_pin","io/output/d0",ConfigType::UInt8,&digitalCfg_[0].pin,ConfigPersistence::Persistent,0};

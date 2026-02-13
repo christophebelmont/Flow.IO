@@ -620,13 +620,14 @@ void IOModule::registerHaAnalogSensors_()
     buildHaValueTemplate_(2, haValueTpl_[2], sizeof(haValueTpl_[2]));
     buildHaValueTemplate_(3, haValueTpl_[3], sizeof(haValueTpl_[3]));
     buildHaValueTemplate_(4, haValueTpl_[4], sizeof(haValueTpl_[4]));
+    buildHaValueTemplate_(5, haValueTpl_[5], sizeof(haValueTpl_[5]));
 
     const HASensorEntry s0{"io", "orp", "ORP", "rt/io/input/a0", haValueTpl_[0], nullptr, "mdi:flash", "mV"};
     const HASensorEntry s1{"io", "ph", "pH", "rt/io/input/a1", haValueTpl_[1], nullptr, "mdi:ph", ""};
     const HASensorEntry s2{"io", "psi", "PSI", "rt/io/input/a2", haValueTpl_[2], nullptr, "mdi:gauge", "PSI"};
     const HASensorEntry s3{"io", "spare", "Spare", "rt/io/input/a3", haValueTpl_[3], nullptr, "mdi:sine-wave", nullptr};
     const HASensorEntry s4{"io", "water_temperature", "Water Temperature", "rt/io/input/a4", haValueTpl_[4], nullptr, "mdi:water-thermometer", "\xC2\xB0""C"};
-    const HASensorEntry s5{"io", "air_temperature", "Air Temperature", "rt/io/input/a5", "{{ value_json.value | float(none) | round(1) }}", nullptr, "mdi:thermometer", "\xC2\xB0""C"};
+    const HASensorEntry s5{"io", "air_temperature", "Air Temperature", "rt/io/input/a5", haValueTpl_[5], nullptr, "mdi:thermometer", "\xC2\xB0""C"};
     (void)haSvc_->addSensor(haSvc_->ctx, &s0);
     (void)haSvc_->addSensor(haSvc_->ctx, &s1);
     (void)haSvc_->addSensor(haSvc_->ctx, &s2);
@@ -924,10 +925,7 @@ IoStatus IOModule::ioTick_(uint32_t nowMs)
     maybeRefreshHaOnPrecisionChange_();
 
     if (!cfgData_.enabled) return IO_ERR_NOT_READY;
-
-    if (!runtimeReady_) {
-        if (!configureRuntime_()) return IO_ERR_NOT_READY;
-    }
+    if (!runtimeReady_) return IO_ERR_NOT_READY;
 
     if (pcfLastEnabled_ != cfgData_.pcfEnabled) {
         if (!cfgData_.pcfEnabled && ledMaskEp_) {
@@ -936,28 +934,14 @@ IoStatus IOModule::ioTick_(uint32_t nowMs)
             ledMaskEp_->setMask(offPhysical, nowMs);
             pcfLogicalMask_ = offLogical;
             pcfLogicalValid_ = true;
+            pcfEnableNeedsReinitWarned_ = false;
         } else if (cfgData_.pcfEnabled) {
-            if (!ledMaskEp_) {
-                if (!pcf_) {
-                    pcf_ = new Pcf8574Driver("pcf8574_led", &i2cBus_, cfgData_.pcfAddress);
-                }
-                if (pcf_->begin()) {
-                    ledMaskEp_ = new Pcf8574MaskEndpoint(
-                        "status_leds_mask",
-                        [](void* ctx, uint8_t mask) -> bool {
-                            return static_cast<Pcf8574Driver*>(ctx)->writeMask(mask);
-                        },
-                        [](void* ctx, uint8_t* mask) -> bool {
-                            if (!mask) return false;
-                            return static_cast<Pcf8574Driver*>(ctx)->readMask(*mask);
-                        },
-                        pcf_
-                    );
-                    registry_.add(ledMaskEp_);
-                }
-            }
             if (ledMaskEp_) {
                 setLedMask_(cfgData_.pcfMaskDefault, nowMs);
+                pcfEnableNeedsReinitWarned_ = false;
+            } else if (!pcfEnableNeedsReinitWarned_) {
+                LOGW("pcf_enabled changed at runtime but PCF endpoint was not provisioned at init; reboot required");
+                pcfEnableNeedsReinitWarned_ = true;
             }
         }
         pcfLastEnabled_ = cfgData_.pcfEnabled;
@@ -1329,14 +1313,13 @@ void IOModule::init(ConfigStore& cfg, ServiceRegistry& services)
     (void)services.add("io", &ioSvc_);
 
     // Default labels for digital output slots (can be overridden by persisted config).
-    snprintf(digitalCfg_[0].name, sizeof(digitalCfg_[0].name), "Filtration Pump");
-    snprintf(digitalCfg_[1].name, sizeof(digitalCfg_[1].name), "pH Pump");
-    snprintf(digitalCfg_[2].name, sizeof(digitalCfg_[2].name), "Chlorine Pump");
-    snprintf(digitalCfg_[3].name, sizeof(digitalCfg_[3].name), "Chlorine Generator");
-    snprintf(digitalCfg_[4].name, sizeof(digitalCfg_[4].name), "Robot");
-    snprintf(digitalCfg_[5].name, sizeof(digitalCfg_[5].name), "Lights");
-    snprintf(digitalCfg_[6].name, sizeof(digitalCfg_[6].name), "Fill Pump");
-    snprintf(digitalCfg_[7].name, sizeof(digitalCfg_[7].name), "Water Heater");
+    for (uint8_t i = 0; i < FLOW_POOL_IO_BINDING_COUNT; ++i) {
+        const PoolIoBinding& b = FLOW_POOL_IO_BINDINGS[i];
+        if (b.ioId < IO_ID_DO_BASE) continue;
+        const uint8_t logical = (uint8_t)(b.ioId - IO_ID_DO_BASE);
+        if (logical >= DIGITAL_CFG_SLOTS) continue;
+        snprintf(digitalCfg_[logical].name, sizeof(digitalCfg_[logical].name), "%s", b.name ? b.name : "");
+    }
 
     cfg.registerVar(enabledVar_);
     cfg.registerVar(i2cSdaVar_);
@@ -1369,6 +1352,8 @@ void IOModule::init(ConfigStore& cfg, ServiceRegistry& services)
 
     cfg.registerVar(a4NameVar_); cfg.registerVar(a4SourceVar_); cfg.registerVar(a4ChannelVar_); cfg.registerVar(a4C0Var_);
     cfg.registerVar(a4C1Var_); cfg.registerVar(a4PrecVar_); cfg.registerVar(a4MinVar_); cfg.registerVar(a4MaxVar_);
+    cfg.registerVar(a5NameVar_); cfg.registerVar(a5SourceVar_); cfg.registerVar(a5ChannelVar_); cfg.registerVar(a5C0Var_);
+    cfg.registerVar(a5C1Var_); cfg.registerVar(a5PrecVar_); cfg.registerVar(a5MinVar_); cfg.registerVar(a5MaxVar_);
 
     cfg.registerVar(d0NameVar_); cfg.registerVar(d0PinVar_); cfg.registerVar(d0ActiveHighVar_); cfg.registerVar(d0InitialOnVar_); cfg.registerVar(d0MomentaryVar_); cfg.registerVar(d0PulseVar_);
     cfg.registerVar(d1NameVar_); cfg.registerVar(d1PinVar_); cfg.registerVar(d1ActiveHighVar_); cfg.registerVar(d1InitialOnVar_); cfg.registerVar(d1MomentaryVar_); cfg.registerVar(d1PulseVar_);
@@ -1382,75 +1367,56 @@ void IOModule::init(ConfigStore& cfg, ServiceRegistry& services)
     LOGI("I/O config registered");
     if (haSvc_ && haSvc_->addSwitch) {
         registerHaAnalogSensors_();
-        const HASwitchEntry sw0{
-            "io", "filtration_pump", "Filtration Pump", "rt/io/output/d0",
-            "{% if value_json.value %}ON{% else %}OFF{% endif %}", "cmd",
-            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":0,\\\"value\\\":true}}",
-            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":0,\\\"value\\\":false}}",
-            "mdi:pool"
-        };
-        const HASwitchEntry sw1{
-            "io", "ph_pump", "pH Pump", "rt/io/output/d1",
-            "{% if value_json.value %}ON{% else %}OFF{% endif %}", "cmd",
-            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":1,\\\"value\\\":true}}",
-            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":1,\\\"value\\\":false}}",
-            "mdi:beaker-outline"
-        };
-        const HASwitchEntry sw2{
-            "io", "chlorine_pump", "Chlorine Pump", "rt/io/output/d2",
-            "{% if value_json.value %}ON{% else %}OFF{% endif %}", "cmd",
-            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":2,\\\"value\\\":true}}",
-            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":2,\\\"value\\\":false}}",
-            "mdi:water-outline"
-        };
-        const HASwitchEntry sw3{
-            "io", "chlorine_generator", "Chlorine Generator", "rt/io/output/d3",
-            "{% if value_json.value %}ON{% else %}OFF{% endif %}", "cmd",
-            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":5,\\\"value\\\":true}}",
-            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":5,\\\"value\\\":false}}",
-            "mdi:flash"
-        };
-        const HASwitchEntry sw4{
-            "io", "robot", "Robot", "rt/io/output/d4",
-            "{% if value_json.value %}ON{% else %}OFF{% endif %}", "cmd",
-            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":3,\\\"value\\\":true}}",
-            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":3,\\\"value\\\":false}}",
-            "mdi:robot-vacuum"
-        };
-        const HASwitchEntry sw5{
-            "io", "lights", "Lights", "rt/io/output/d5",
-            "{% if value_json.value %}ON{% else %}OFF{% endif %}", "cmd",
-            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":6,\\\"value\\\":true}}",
-            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":6,\\\"value\\\":false}}",
-            "mdi:lightbulb"
-        };
-        const HASwitchEntry sw6{
-            "io", "fill_pump", "Fill Pump", "rt/io/output/d6",
-            "{% if value_json.value %}ON{% else %}OFF{% endif %}", "cmd",
-            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":4,\\\"value\\\":true}}",
-            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":4,\\\"value\\\":false}}",
-            "mdi:water-plus"
-        };
-        const HASwitchEntry sw7{
-            "io", "water_heater", "Water Heater", "rt/io/output/d7",
-            "{% if value_json.value %}ON{% else %}OFF{% endif %}", "cmd",
-            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":7,\\\"value\\\":true}}",
-            "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":7,\\\"value\\\":false}}",
-            "mdi:water-boiler"
-        };
-        (void)haSvc_->addSwitch(haSvc_->ctx, &sw0);
-        (void)haSvc_->addSwitch(haSvc_->ctx, &sw1);
-        (void)haSvc_->addSwitch(haSvc_->ctx, &sw2);
-        (void)haSvc_->addSwitch(haSvc_->ctx, &sw3);
-        (void)haSvc_->addSwitch(haSvc_->ctx, &sw4);
-        (void)haSvc_->addSwitch(haSvc_->ctx, &sw5);
-        (void)haSvc_->addSwitch(haSvc_->ctx, &sw6);
-        (void)haSvc_->addSwitch(haSvc_->ctx, &sw7);
+        for (uint8_t i = 0; i < FLOW_POOL_IO_BINDING_COUNT; ++i) {
+            const PoolIoBinding& b = FLOW_POOL_IO_BINDINGS[i];
+            if (b.ioId < IO_ID_DO_BASE) continue;
+            const uint8_t logical = (uint8_t)(b.ioId - IO_ID_DO_BASE);
+            if (logical >= MAX_DIGITAL_OUTPUTS) continue;
+
+            snprintf(haSwitchStateSuffix_[i], sizeof(haSwitchStateSuffix_[i]), "rt/io/output/d%u", (unsigned)logical);
+            snprintf(
+                haSwitchPayloadOn_[i],
+                sizeof(haSwitchPayloadOn_[i]),
+                "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":%u,\\\"value\\\":true}}",
+                (unsigned)b.slot
+            );
+            snprintf(
+                haSwitchPayloadOff_[i],
+                sizeof(haSwitchPayloadOff_[i]),
+                "{\\\"cmd\\\":\\\"pool.write\\\",\\\"args\\\":{\\\"slot\\\":%u,\\\"value\\\":false}}",
+                (unsigned)b.slot
+            );
+
+            const HASwitchEntry sw{
+                "io",
+                b.haObjectSuffix,
+                b.name,
+                haSwitchStateSuffix_[i],
+                "{% if value_json.value %}ON{% else %}OFF{% endif %}",
+                "cmd",
+                haSwitchPayloadOn_[i],
+                haSwitchPayloadOff_[i],
+                b.haIcon
+            };
+            (void)haSvc_->addSwitch(haSvc_->ctx, &sw);
+        }
     }
     for (uint8_t i = 0; i < ANALOG_CFG_SLOTS; ++i) {
         haPrecisionLast_[i] = clampPrecisionForHa_(analogCfg_[i].precision);
     }
     haPrecisionLastInit_ = true;
+
+    // Allocate and wire all IO runtime objects once during module init.
+    runtimeInitAttempted_ = true;
+    if (cfgData_.enabled) {
+        runtimeReady_ = configureRuntime_();
+        if (!runtimeReady_) {
+            LOGW("Runtime init failed during io.init; no runtime allocations will be attempted later");
+        }
+    } else {
+        runtimeReady_ = false;
+    }
+
     (void)logHub_;
 }
 
