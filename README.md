@@ -76,3 +76,4 @@ docs/
 
 - [CoreServicesGuidelines](docs/en/CoreServicesGuidelines.md)
 - [ModuleDevGuide](docs/en/ModuleDevGuide.md)
+- [Module Quality Gates](docs/en/QualityGates.md)

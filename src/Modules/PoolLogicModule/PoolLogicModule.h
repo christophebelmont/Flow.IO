@@ -6,6 +6,7 @@
 
 #include "Core/Module.h"
 #include "Core/ConfigTypes.h"
+#include "Core/Layout/PoolSensorMap.h"
 #include "Core/Services/Services.h"
 
 /** @brief Event ids owned by PoolLogicModule. */
@@ -42,11 +43,16 @@ private:
     static constexpr uint8_t SLOT_DAILY_RECALC = 3;
     static constexpr uint8_t SLOT_FILTR_WINDOW = 4;
 
-    static constexpr uint8_t IO_ID_ORP_DEFAULT = (uint8_t)(IO_ID_AI_BASE + 0);
-    static constexpr uint8_t IO_ID_PSI_DEFAULT = (uint8_t)(IO_ID_AI_BASE + 2);
-    static constexpr uint8_t IO_ID_WATER_TEMP_DEFAULT = (uint8_t)(IO_ID_AI_BASE + 4);
-    static constexpr uint8_t IO_ID_AIR_TEMP_DEFAULT = (uint8_t)(IO_ID_AI_BASE + 5);
-    static constexpr uint8_t IO_ID_LEVEL_DEFAULT = (uint8_t)(IO_ID_DI_BASE + 0);
+    static constexpr uint8_t IO_ID_ORP_DEFAULT =
+        (uint8_t)FLOW_POOL_SENSOR_BINDINGS[POOL_SENSOR_SLOT_ORP].ioId;
+    static constexpr uint8_t IO_ID_PSI_DEFAULT =
+        (uint8_t)FLOW_POOL_SENSOR_BINDINGS[POOL_SENSOR_SLOT_PSI].ioId;
+    static constexpr uint8_t IO_ID_WATER_TEMP_DEFAULT =
+        (uint8_t)FLOW_POOL_SENSOR_BINDINGS[POOL_SENSOR_SLOT_WATER_TEMP].ioId;
+    static constexpr uint8_t IO_ID_AIR_TEMP_DEFAULT =
+        (uint8_t)FLOW_POOL_SENSOR_BINDINGS[POOL_SENSOR_SLOT_AIR_TEMP].ioId;
+    static constexpr uint8_t IO_ID_LEVEL_DEFAULT =
+        (uint8_t)FLOW_POOL_SENSOR_BINDINGS[POOL_SENSOR_SLOT_POOL_LEVEL].ioId;
 
     bool enabled_ = true;
 

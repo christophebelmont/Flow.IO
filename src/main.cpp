@@ -41,6 +41,7 @@
 #include "Modules/CommandModule/CommandModule.h"
 
 #include "Core/Layout/PoolIoMap.h"
+#include "Core/Layout/PoolSensorMap.h"
 #include "Modules/IOModule/IORuntime.h"
 #include "Core/SystemStats.h"
 #include <WiFi.h>
@@ -108,26 +109,7 @@ struct RuntimeMuxStats {
 };
 static RuntimeMuxStats gRuntimeMuxStats{};
 
-static constexpr uint8_t IO_IDX_ORP = 0;
-static constexpr uint8_t IO_IDX_PH = 1;
-static constexpr uint8_t IO_IDX_PSI = 2;
-static constexpr uint8_t IO_IDX_SPARE = 3;
-static constexpr uint8_t IO_IDX_WATER_TEMP = 4;
-static constexpr uint8_t IO_IDX_AIR_TEMP = 5;
-static constexpr uint8_t IO_IDX_POOL_LEVEL = 20;
-
 static constexpr uint8_t IO_DO_COUNT = FLOW_POOL_IO_BINDING_COUNT;
-
-// Static input id map.
-static constexpr IoId IO_ID_DI_POOL_LEVEL = (IoId)(IO_ID_DI_BASE + 0);
-
-// Static analog id map.
-static constexpr IoId IO_ID_AI_ORP = (IoId)(IO_ID_AI_BASE + 0);
-static constexpr IoId IO_ID_AI_PH = (IoId)(IO_ID_AI_BASE + 1);
-static constexpr IoId IO_ID_AI_PSI = (IoId)(IO_ID_AI_BASE + 2);
-static constexpr IoId IO_ID_AI_SPARE = (IoId)(IO_ID_AI_BASE + 3);
-static constexpr IoId IO_ID_AI_WATER_TEMP = (IoId)(IO_ID_AI_BASE + 4);
-static constexpr IoId IO_ID_AI_AIR_TEMP = (IoId)(IO_ID_AI_BASE + 5);
 
 static constexpr float PH_INTERNAL_C0 = 0.9583f;
 static constexpr float PH_INTERNAL_C1 = 4.834f;
@@ -345,42 +327,50 @@ void setup() {
     ioModule.setOneWireBuses(&oneWireWater, &oneWireAir);
 
     IOAnalogDefinition orpDef{};
-    snprintf(orpDef.id, sizeof(orpDef.id), "ORP");
-    orpDef.ioId = IO_ID_AI_ORP;
+    const PoolSensorBinding* orp = flowPoolSensorBySlot(POOL_SENSOR_SLOT_ORP);
+    requireSetup(orp != nullptr, "missing sensor mapping ORP");
+    snprintf(orpDef.id, sizeof(orpDef.id), "%s", orp->endpointId);
+    orpDef.ioId = orp->ioId;
     orpDef.source = IO_SRC_ADS_INTERNAL_SINGLE;
     orpDef.channel = 0;
     setAdcDefaultCalib(orpDef, ORP_INTERNAL_C0, ORP_INTERNAL_C1, ORP_EXTERNAL_C0, ORP_EXTERNAL_C1);
     orpDef.precision = 0;
     orpDef.onValueChanged = onIoFloatValue;
-    orpDef.onValueCtx = (void*)(uintptr_t)IO_IDX_ORP;
+    orpDef.onValueCtx = (void*)(uintptr_t)orp->runtimeIndex;
     requireSetup(ioModule.defineAnalogInput(orpDef), "define analog ORP");
 
     IOAnalogDefinition phDef{};
-    snprintf(phDef.id, sizeof(phDef.id), "pH");
-    phDef.ioId = IO_ID_AI_PH;
+    const PoolSensorBinding* ph = flowPoolSensorBySlot(POOL_SENSOR_SLOT_PH);
+    requireSetup(ph != nullptr, "missing sensor mapping pH");
+    snprintf(phDef.id, sizeof(phDef.id), "%s", ph->endpointId);
+    phDef.ioId = ph->ioId;
     phDef.source = IO_SRC_ADS_INTERNAL_SINGLE;
     phDef.channel = 1;
     setAdcDefaultCalib(phDef, PH_INTERNAL_C0, PH_INTERNAL_C1, PH_EXTERNAL_C0, PH_EXTERNAL_C1);
     phDef.precision = 1;
     phDef.onValueChanged = onIoFloatValue;
-    phDef.onValueCtx = (void*)(uintptr_t)IO_IDX_PH;
+    phDef.onValueCtx = (void*)(uintptr_t)ph->runtimeIndex;
     requireSetup(ioModule.defineAnalogInput(phDef), "define analog pH");
 
     IOAnalogDefinition psiDef{};
-    snprintf(psiDef.id, sizeof(psiDef.id), "PSI");
-    psiDef.ioId = IO_ID_AI_PSI;
+    const PoolSensorBinding* psi = flowPoolSensorBySlot(POOL_SENSOR_SLOT_PSI);
+    requireSetup(psi != nullptr, "missing sensor mapping PSI");
+    snprintf(psiDef.id, sizeof(psiDef.id), "%s", psi->endpointId);
+    psiDef.ioId = psi->ioId;
     psiDef.source = IO_SRC_ADS_INTERNAL_SINGLE;
     psiDef.channel = 2;
     psiDef.c0 = PSI_DEFAULT_C0;
     psiDef.c1 = PSI_DEFAULT_C1;
     psiDef.precision = 1;
     psiDef.onValueChanged = onIoFloatValue;
-    psiDef.onValueCtx = (void*)(uintptr_t)IO_IDX_PSI;
+    psiDef.onValueCtx = (void*)(uintptr_t)psi->runtimeIndex;
     requireSetup(ioModule.defineAnalogInput(psiDef), "define analog PSI");
 
     IOAnalogDefinition spareDef{};
-    snprintf(spareDef.id, sizeof(spareDef.id), "Spare");
-    spareDef.ioId = IO_ID_AI_SPARE;
+    const PoolSensorBinding* spare = flowPoolSensorBySlot(POOL_SENSOR_SLOT_SPARE);
+    requireSetup(spare != nullptr, "missing sensor mapping Spare");
+    snprintf(spareDef.id, sizeof(spareDef.id), "%s", spare->endpointId);
+    spareDef.ioId = spare->ioId;
     spareDef.source = IO_SRC_ADS_INTERNAL_SINGLE;
     // ADS1115 has channels 0..3. This spare uses the 4th input channel.
     spareDef.channel = 3;
@@ -388,41 +378,47 @@ void setup() {
     spareDef.c1 = 0.0f;
     spareDef.precision = 3;
     spareDef.onValueChanged = onIoFloatValue;
-    spareDef.onValueCtx = (void*)(uintptr_t)IO_IDX_SPARE;
+    spareDef.onValueCtx = (void*)(uintptr_t)spare->runtimeIndex;
     requireSetup(ioModule.defineAnalogInput(spareDef), "define analog Spare");
 
     IOAnalogDefinition waterDef{};
-    snprintf(waterDef.id, sizeof(waterDef.id), "Water Temperature");
-    waterDef.ioId = IO_ID_AI_WATER_TEMP;
+    const PoolSensorBinding* water = flowPoolSensorBySlot(POOL_SENSOR_SLOT_WATER_TEMP);
+    requireSetup(water != nullptr, "missing sensor mapping Water Temperature");
+    snprintf(waterDef.id, sizeof(waterDef.id), "%s", water->endpointId);
+    waterDef.ioId = water->ioId;
     waterDef.source = IO_SRC_DS18_WATER;
     waterDef.channel = 0;
     waterDef.precision = 1;
     waterDef.minValid = -55.0f;
     waterDef.maxValid = 125.0f;
     waterDef.onValueChanged = onIoFloatValue;
-    waterDef.onValueCtx = (void*)(uintptr_t)IO_IDX_WATER_TEMP;
+    waterDef.onValueCtx = (void*)(uintptr_t)water->runtimeIndex;
     requireSetup(ioModule.defineAnalogInput(waterDef), "define analog water temperature");
 
     IOAnalogDefinition airDef{};
-    snprintf(airDef.id, sizeof(airDef.id), "Air Temperature");
-    airDef.ioId = IO_ID_AI_AIR_TEMP;
+    const PoolSensorBinding* air = flowPoolSensorBySlot(POOL_SENSOR_SLOT_AIR_TEMP);
+    requireSetup(air != nullptr, "missing sensor mapping Air Temperature");
+    snprintf(airDef.id, sizeof(airDef.id), "%s", air->endpointId);
+    airDef.ioId = air->ioId;
     airDef.source = IO_SRC_DS18_AIR;
     airDef.channel = 0;
     airDef.precision = 1;
     airDef.minValid = -55.0f;
     airDef.maxValid = 125.0f;
     airDef.onValueChanged = onIoFloatValue;
-    airDef.onValueCtx = (void*)(uintptr_t)IO_IDX_AIR_TEMP;
+    airDef.onValueCtx = (void*)(uintptr_t)air->runtimeIndex;
     requireSetup(ioModule.defineAnalogInput(airDef), "define analog air temperature");
 
     IODigitalInputDefinition poolLevelDef{};
-    snprintf(poolLevelDef.id, sizeof(poolLevelDef.id), "Pool Level");
-    poolLevelDef.ioId = IO_ID_DI_POOL_LEVEL;
+    const PoolSensorBinding* level = flowPoolSensorBySlot(POOL_SENSOR_SLOT_POOL_LEVEL);
+    requireSetup(level != nullptr, "missing sensor mapping Pool Level");
+    snprintf(poolLevelDef.id, sizeof(poolLevelDef.id), "%s", level->endpointId);
+    poolLevelDef.ioId = level->ioId;
     poolLevelDef.pin = 34;
     poolLevelDef.activeHigh = true;
     poolLevelDef.pullMode = IO_PULL_NONE;
     poolLevelDef.onValueChanged = onIoBoolValue;
-    poolLevelDef.onValueCtx = (void*)(uintptr_t)IO_IDX_POOL_LEVEL;
+    poolLevelDef.onValueCtx = (void*)(uintptr_t)level->runtimeIndex;
     requireSetup(ioModule.defineDigitalInput(poolLevelDef), "define digital input pool level");
 
     static_assert(FLOW_POOL_IO_BINDING_COUNT == 8, "Unexpected pool IO binding count");
