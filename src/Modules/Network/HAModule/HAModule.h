@@ -40,10 +40,10 @@ private:
 
     struct HAConfig {
         bool enabled = true;
-        char vendor[32] = "FlowIO";
+        char vendor[32] = "Flow.IO";
         char deviceId[32] = "";
         char discoveryPrefix[32] = "homeassistant";
-        char model[40] = "FlowIO Controller";
+        char model[40] = "Flow Controller";
     };
 
     const EventBusService* eventBusSvc = nullptr;
@@ -110,6 +110,8 @@ private:
     bool addSwitchEntry(const HASwitchEntry& entry);
     bool addNumberEntry(const HANumberEntry& entry);
     bool buildObjectId(const char* suffix, char* out, size_t outLen) const;
+    bool buildDefaultEntityId(const char* component, const char* objectId, char* out, size_t outLen) const;
+    bool buildUniqueId(const char* objectId, const char* name, char* out, size_t outLen) const;
 
     bool publishSensor(const char* objectId, const char* name,
                        const char* stateTopic, const char* valueTemplate,

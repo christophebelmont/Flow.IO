@@ -12,6 +12,29 @@
 #define LOG_TAG "HAModule"
 #include "Core/ModuleLog.h"
 
+#ifndef FIRMW
+#define FIRMW "unknown"
+#endif
+
+static void buildAvailabilityField(const MqttService* mqttSvc, char* out, size_t outLen)
+{
+    if (!out || outLen == 0) return;
+    out[0] = '\0';
+    if (!mqttSvc || !mqttSvc->formatTopic) return;
+
+    char availabilityTopic[192] = {0};
+    mqttSvc->formatTopic(mqttSvc->ctx, "status", availabilityTopic, sizeof(availabilityTopic));
+    if (availabilityTopic[0] == '\0') return;
+
+    snprintf(
+        out,
+        outLen,
+        ",\"availability\":[{\"topic\":\"%s\",\"value_template\":\"{{ 'online' if value_json.online else 'offline' }}\"}],"
+        "\"availability_mode\":\"all\",\"payload_available\":\"online\",\"payload_not_available\":\"offline\"",
+        availabilityTopic
+    );
+}
+
 void HAModule::makeDeviceId(char* out, size_t len)
 {
     if (!out || len == 0) return;
@@ -191,6 +214,26 @@ bool HAModule::buildObjectId(const char* suffix, char* out, size_t outLen) const
     return out[0] != '\0';
 }
 
+bool HAModule::buildDefaultEntityId(const char* component, const char* objectId, char* out, size_t outLen) const
+{
+    if (!component || !objectId || !out || outLen == 0) return false;
+    snprintf(out, outLen, "%s.%s", component, objectId);
+    return out[0] != '\0';
+}
+
+bool HAModule::buildUniqueId(const char* objectId, const char* name, char* out, size_t outLen) const
+{
+    if (!objectId || !out || outLen == 0) return false;
+    char cleanName[96] = {0};
+    sanitizeId(name ? name : "", cleanName, sizeof(cleanName));
+    if (cleanName[0] != '\0') {
+        snprintf(out, outLen, "%s_%s_%s", deviceId, objectId, cleanName);
+    } else {
+        snprintf(out, outLen, "%s_%s", deviceId, objectId);
+    }
+    return out[0] != '\0';
+}
+
 bool HAModule::publishDiscovery(const char* component, const char* objectId, const char* payload)
 {
     if (!component || !objectId || !payload || !mqttSvc || !mqttSvc->publish) return false;
@@ -218,33 +261,22 @@ bool HAModule::publishSensor(const char* objectId, const char* name,
         snprintf(iconField, sizeof(iconField), ",\"icon\":\"%s\"", icon);
     }
     char defaultEntityId[224] = {0};
-    snprintf(defaultEntityId, sizeof(defaultEntityId), "sensor.%s", objectId);
-
-    char availabilityField[320] = {0};
-    if (mqttSvc && mqttSvc->formatTopic) {
-        char availabilityTopic[192] = {0};
-        mqttSvc->formatTopic(mqttSvc->ctx, "status", availabilityTopic, sizeof(availabilityTopic));
-        if (availabilityTopic[0] != '\0') {
-            snprintf(
-                availabilityField,
-                sizeof(availabilityField),
-                ",\"availability\":[{\"topic\":\"%s\",\"value_template\":\"{{ value_json.online }}\"}],"
-                "\"availability_mode\":\"all\",\"payload_available\":\"true\",\"payload_not_available\":\"false\"",
-                availabilityTopic
-            );
-        }
-    }
+    if (!buildDefaultEntityId("sensor", objectId, defaultEntityId, sizeof(defaultEntityId))) return false;
+    char uniqueId[256] = {0};
+    if (!buildUniqueId(objectId, name, uniqueId, sizeof(uniqueId))) return false;
+    char availabilityField[384] = {0};
+    buildAvailabilityField(mqttSvc, availabilityField, sizeof(availabilityField));
 
     snprintf(payloadBuf, sizeof(payloadBuf),
              "{\"name\":\"%s\",\"object_id\":\"%s\",\"default_entity_id\":\"%s\",\"unique_id\":\"%s\","
              "\"state_topic\":\"%s\",\"value_template\":\"%s\",\"state_class\":\"measurement\"%s%s%s%s,"
-             "\"origin\":{\"name\":\"FlowIO\"},"
-             "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"FlowIO\","
-             "\"manufacturer\":\"%s\",\"model\":\"%s\"}}",
-             name, objectId, defaultEntityId, objectId,
+             "\"origin\":{\"name\":\"Flow.IO\"},"
+             "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"%s\","
+             "\"manufacturer\":\"%s\",\"model\":\"%s\",\"sw_version\":\"%s\"}}",
+             name, objectId, defaultEntityId, uniqueId,
              stateTopic, valueTemplate,
              entityCategoryField, iconField, unitField, availabilityField,
-             deviceIdent, cfgData.vendor, cfgData.model);
+             deviceIdent, cfgData.vendor, cfgData.vendor, cfgData.model, FIRMW);
 
     return publishDiscovery("sensor", objectId, payloadBuf);
 }
@@ -256,78 +288,34 @@ bool HAModule::publishBinarySensor(const char* objectId, const char* name,
 {
     if (!objectId || !name || !stateTopic || !valueTemplate) return false;
 
-    if (deviceClass && deviceClass[0] != '\0' && entityCategory && entityCategory[0] != '\0' && icon && icon[0] != '\0') {
-        snprintf(payloadBuf, sizeof(payloadBuf),
-                 "{\"name\":\"%s\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
-                 "\"value_template\":\"%s\",\"payload_on\":\"True\",\"payload_off\":\"False\","
-                 "\"device_class\":\"%s\",\"entity_category\":\"%s\",\"icon\":\"%s\","
-                 "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"FlowIO\","
-                 "\"manufacturer\":\"%s\",\"model\":\"%s\"}}",
-                 name, objectId, stateTopic, valueTemplate, deviceClass, entityCategory, icon,
-                 deviceIdent, cfgData.vendor, cfgData.model);
-    } else if (deviceClass && deviceClass[0] != '\0' && entityCategory && entityCategory[0] != '\0') {
-        snprintf(payloadBuf, sizeof(payloadBuf),
-                 "{\"name\":\"%s\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
-                 "\"value_template\":\"%s\",\"payload_on\":\"True\",\"payload_off\":\"False\","
-                 "\"device_class\":\"%s\",\"entity_category\":\"%s\","
-                 "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"FlowIO\","
-                 "\"manufacturer\":\"%s\",\"model\":\"%s\"}}",
-                 name, objectId, stateTopic, valueTemplate, deviceClass, entityCategory,
-                 deviceIdent, cfgData.vendor, cfgData.model);
-    } else if (deviceClass && deviceClass[0] != '\0' && icon && icon[0] != '\0') {
-        snprintf(payloadBuf, sizeof(payloadBuf),
-                 "{\"name\":\"%s\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
-                 "\"value_template\":\"%s\",\"payload_on\":\"True\",\"payload_off\":\"False\","
-                 "\"device_class\":\"%s\",\"icon\":\"%s\","
-                 "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"FlowIO\","
-                 "\"manufacturer\":\"%s\",\"model\":\"%s\"}}",
-                 name, objectId, stateTopic, valueTemplate, deviceClass, icon,
-                 deviceIdent, cfgData.vendor, cfgData.model);
-    } else if (deviceClass && deviceClass[0] != '\0') {
-        snprintf(payloadBuf, sizeof(payloadBuf),
-                 "{\"name\":\"%s\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
-                 "\"value_template\":\"%s\",\"payload_on\":\"True\",\"payload_off\":\"False\","
-                 "\"device_class\":\"%s\","
-                 "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"FlowIO\","
-                 "\"manufacturer\":\"%s\",\"model\":\"%s\"}}",
-                 name, objectId, stateTopic, valueTemplate, deviceClass,
-                 deviceIdent, cfgData.vendor, cfgData.model);
-    } else if (entityCategory && entityCategory[0] != '\0' && icon && icon[0] != '\0') {
-        snprintf(payloadBuf, sizeof(payloadBuf),
-                 "{\"name\":\"%s\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
-                 "\"value_template\":\"%s\",\"payload_on\":\"True\",\"payload_off\":\"False\","
-                 "\"entity_category\":\"%s\",\"icon\":\"%s\","
-                 "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"FlowIO\","
-                 "\"manufacturer\":\"%s\",\"model\":\"%s\"}}",
-                 name, objectId, stateTopic, valueTemplate, entityCategory, icon,
-                 deviceIdent, cfgData.vendor, cfgData.model);
-    } else if (entityCategory && entityCategory[0] != '\0') {
-        snprintf(payloadBuf, sizeof(payloadBuf),
-                 "{\"name\":\"%s\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
-                 "\"value_template\":\"%s\",\"payload_on\":\"True\",\"payload_off\":\"False\","
-                 "\"entity_category\":\"%s\","
-                 "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"FlowIO\","
-                 "\"manufacturer\":\"%s\",\"model\":\"%s\"}}",
-                 name, objectId, stateTopic, valueTemplate, entityCategory,
-                 deviceIdent, cfgData.vendor, cfgData.model);
-    } else if (icon && icon[0] != '\0') {
-        snprintf(payloadBuf, sizeof(payloadBuf),
-                 "{\"name\":\"%s\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
-                 "\"value_template\":\"%s\",\"payload_on\":\"True\",\"payload_off\":\"False\","
-                 "\"icon\":\"%s\","
-                 "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"FlowIO\","
-                 "\"manufacturer\":\"%s\",\"model\":\"%s\"}}",
-                 name, objectId, stateTopic, valueTemplate, icon,
-                 deviceIdent, cfgData.vendor, cfgData.model);
-    } else {
-        snprintf(payloadBuf, sizeof(payloadBuf),
-                 "{\"name\":\"%s\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
-                 "\"value_template\":\"%s\",\"payload_on\":\"True\",\"payload_off\":\"False\","
-                 "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"FlowIO\","
-                 "\"manufacturer\":\"%s\",\"model\":\"%s\"}}",
-                 name, objectId, stateTopic, valueTemplate,
-                 deviceIdent, cfgData.vendor, cfgData.model);
+    char defaultEntityId[224] = {0};
+    if (!buildDefaultEntityId("binary_sensor", objectId, defaultEntityId, sizeof(defaultEntityId))) return false;
+    char uniqueId[256] = {0};
+    if (!buildUniqueId(objectId, name, uniqueId, sizeof(uniqueId))) return false;
+    char availabilityField[384] = {0};
+    buildAvailabilityField(mqttSvc, availabilityField, sizeof(availabilityField));
+    char deviceClassField[64] = {0};
+    if (deviceClass && deviceClass[0] != '\0') {
+        snprintf(deviceClassField, sizeof(deviceClassField), ",\"device_class\":\"%s\"", deviceClass);
     }
+    char entityCategoryField[64] = {0};
+    if (entityCategory && entityCategory[0] != '\0') {
+        snprintf(entityCategoryField, sizeof(entityCategoryField), ",\"entity_category\":\"%s\"", entityCategory);
+    }
+    char iconField[64] = {0};
+    if (icon && icon[0] != '\0') {
+        snprintf(iconField, sizeof(iconField), ",\"icon\":\"%s\"", icon);
+    }
+
+    snprintf(payloadBuf, sizeof(payloadBuf),
+             "{\"name\":\"%s\",\"object_id\":\"%s\",\"default_entity_id\":\"%s\",\"unique_id\":\"%s\","
+             "\"state_topic\":\"%s\",\"value_template\":\"%s\",\"payload_on\":\"True\",\"payload_off\":\"False\"%s%s%s%s,"
+             "\"origin\":{\"name\":\"Flow.IO\"},"
+             "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"%s\","
+             "\"manufacturer\":\"%s\",\"model\":\"%s\",\"sw_version\":\"%s\"}}",
+             name, objectId, defaultEntityId, uniqueId, stateTopic, valueTemplate,
+             deviceClassField, entityCategoryField, iconField, availabilityField,
+             deviceIdent, cfgData.vendor, cfgData.vendor, cfgData.model, FIRMW);
 
     return publishDiscovery("binary_sensor", objectId, payloadBuf);
 }
@@ -339,28 +327,37 @@ bool HAModule::publishSwitch(const char* objectId, const char* name,
                              const char* icon)
 {
     if (!objectId || !name || !stateTopic || !valueTemplate || !commandTopic || !payloadOn || !payloadOff) return false;
+    char defaultEntityId[224] = {0};
+    if (!buildDefaultEntityId("switch", objectId, defaultEntityId, sizeof(defaultEntityId))) return false;
+    char uniqueId[256] = {0};
+    if (!buildUniqueId(objectId, name, uniqueId, sizeof(uniqueId))) return false;
+    char availabilityField[384] = {0};
+    buildAvailabilityField(mqttSvc, availabilityField, sizeof(availabilityField));
 
     if (icon && icon[0] != '\0') {
         snprintf(payloadBuf, sizeof(payloadBuf),
-                 "{\"name\":\"%s\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
+                 "{\"name\":\"%s\",\"object_id\":\"%s\",\"default_entity_id\":\"%s\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
                  "\"value_template\":\"%s\",\"state_on\":\"ON\",\"state_off\":\"OFF\","
                  "\"command_topic\":\"%s\",\"payload_on\":\"%s\",\"payload_off\":\"%s\","
-                 "\"icon\":\"%s\","
-                 "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"FlowIO\","
-                 "\"manufacturer\":\"%s\",\"model\":\"%s\"}}",
-                 name, objectId, stateTopic, valueTemplate,
+                 "\"icon\":\"%s\"%s,"
+                 "\"origin\":{\"name\":\"Flow.IO\"},"
+                 "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"%s\","
+                 "\"manufacturer\":\"%s\",\"model\":\"%s\",\"sw_version\":\"%s\"}}",
+                 name, objectId, defaultEntityId, uniqueId, stateTopic, valueTemplate,
                  commandTopic, payloadOn, payloadOff, icon,
-                 deviceIdent, cfgData.vendor, cfgData.model);
+                 availabilityField,
+                 deviceIdent, cfgData.vendor, cfgData.vendor, cfgData.model, FIRMW);
     } else {
         snprintf(payloadBuf, sizeof(payloadBuf),
-                 "{\"name\":\"%s\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
+                 "{\"name\":\"%s\",\"object_id\":\"%s\",\"default_entity_id\":\"%s\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
                  "\"value_template\":\"%s\",\"state_on\":\"ON\",\"state_off\":\"OFF\","
-                 "\"command_topic\":\"%s\",\"payload_on\":\"%s\",\"payload_off\":\"%s\","
-                 "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"FlowIO\","
-                 "\"manufacturer\":\"%s\",\"model\":\"%s\"}}",
-                 name, objectId, stateTopic, valueTemplate,
-                 commandTopic, payloadOn, payloadOff,
-                 deviceIdent, cfgData.vendor, cfgData.model);
+                 "\"command_topic\":\"%s\",\"payload_on\":\"%s\",\"payload_off\":\"%s\"%s,"
+                 "\"origin\":{\"name\":\"Flow.IO\"},"
+                 "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"%s\","
+                 "\"manufacturer\":\"%s\",\"model\":\"%s\",\"sw_version\":\"%s\"}}",
+                 name, objectId, defaultEntityId, uniqueId, stateTopic, valueTemplate,
+                 commandTopic, payloadOn, payloadOff, availabilityField,
+                 deviceIdent, cfgData.vendor, cfgData.vendor, cfgData.model, FIRMW);
     }
     return publishDiscovery("switch", objectId, payloadBuf);
 }
@@ -372,6 +369,12 @@ bool HAModule::publishNumber(const char* objectId, const char* name,
                              const char* mode, const char* entityCategory, const char* icon, const char* unit)
 {
     if (!objectId || !name || !stateTopic || !valueTemplate || !commandTopic || !commandTemplate) return false;
+    char defaultEntityId[224] = {0};
+    if (!buildDefaultEntityId("number", objectId, defaultEntityId, sizeof(defaultEntityId))) return false;
+    char uniqueId[256] = {0};
+    if (!buildUniqueId(objectId, name, uniqueId, sizeof(uniqueId))) return false;
+    char availabilityField[384] = {0};
+    buildAvailabilityField(mqttSvc, availabilityField, sizeof(availabilityField));
 
     char unitField[48] = {0};
     if (unit && unit[0] != '\0') {
@@ -384,24 +387,26 @@ bool HAModule::publishNumber(const char* objectId, const char* name,
 
     if (icon && icon[0] != '\0') {
         snprintf(payloadBuf, sizeof(payloadBuf),
-                 "{\"name\":\"%s\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
+                 "{\"name\":\"%s\",\"object_id\":\"%s\",\"default_entity_id\":\"%s\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
                  "\"value_template\":\"%s\",\"command_topic\":\"%s\",\"command_template\":\"%s\","
-                 "\"min\":%.3f,\"max\":%.3f,\"step\":%.3f,\"mode\":\"%s\",\"icon\":\"%s\"%s%s,"
-                 "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"FlowIO\","
-                 "\"manufacturer\":\"%s\",\"model\":\"%s\"}}",
-                 name, objectId, stateTopic, valueTemplate, commandTopic, commandTemplate,
-                 (double)minValue, (double)maxValue, (double)step, mode ? mode : "slider", icon, entityCategoryField, unitField,
-                 deviceIdent, cfgData.vendor, cfgData.model);
+                 "\"min\":%.3f,\"max\":%.3f,\"step\":%.3f,\"mode\":\"%s\",\"icon\":\"%s\"%s%s%s,"
+                 "\"origin\":{\"name\":\"Flow.IO\"},"
+                 "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"%s\","
+                 "\"manufacturer\":\"%s\",\"model\":\"%s\",\"sw_version\":\"%s\"}}",
+                 name, objectId, defaultEntityId, uniqueId, stateTopic, valueTemplate, commandTopic, commandTemplate,
+                 (double)minValue, (double)maxValue, (double)step, mode ? mode : "slider", icon, entityCategoryField, unitField, availabilityField,
+                 deviceIdent, cfgData.vendor, cfgData.vendor, cfgData.model, FIRMW);
     } else {
         snprintf(payloadBuf, sizeof(payloadBuf),
-                 "{\"name\":\"%s\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
+                 "{\"name\":\"%s\",\"object_id\":\"%s\",\"default_entity_id\":\"%s\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
                  "\"value_template\":\"%s\",\"command_topic\":\"%s\",\"command_template\":\"%s\","
-                 "\"min\":%.3f,\"max\":%.3f,\"step\":%.3f,\"mode\":\"%s\"%s%s,"
-                 "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"FlowIO\","
-                 "\"manufacturer\":\"%s\",\"model\":\"%s\"}}",
-                 name, objectId, stateTopic, valueTemplate, commandTopic, commandTemplate,
-                 (double)minValue, (double)maxValue, (double)step, mode ? mode : "slider", entityCategoryField, unitField,
-                 deviceIdent, cfgData.vendor, cfgData.model);
+                 "\"min\":%.3f,\"max\":%.3f,\"step\":%.3f,\"mode\":\"%s\"%s%s%s,"
+                 "\"origin\":{\"name\":\"Flow.IO\"},"
+                 "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"%s\","
+                 "\"manufacturer\":\"%s\",\"model\":\"%s\",\"sw_version\":\"%s\"}}",
+                 name, objectId, defaultEntityId, uniqueId, stateTopic, valueTemplate, commandTopic, commandTemplate,
+                 (double)minValue, (double)maxValue, (double)step, mode ? mode : "slider", entityCategoryField, unitField, availabilityField,
+                 deviceIdent, cfgData.vendor, cfgData.vendor, cfgData.model, FIRMW);
     }
     return publishDiscovery("number", objectId, payloadBuf);
 }
