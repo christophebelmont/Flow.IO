@@ -8,12 +8,13 @@
 
 #include "Core/DataStore/DataStore.h"
 #include "Core/EventBus/EventPayloads.h"
+#include "Core/DataKeys.h"
 
 // RUNTIME_PUBLIC
 
-constexpr DataKey DATAKEY_HA_PUBLISHED = 10;
-constexpr DataKey DATAKEY_HA_VENDOR = 11;
-constexpr DataKey DATAKEY_HA_DEVICE_ID = 12;
+constexpr DataKey DATAKEY_HA_PUBLISHED = DataKeys::HaPublished;
+constexpr DataKey DATAKEY_HA_VENDOR = DataKeys::HaVendor;
+constexpr DataKey DATAKEY_HA_DEVICE_ID = DataKeys::HaDeviceId;
 
 static inline bool haAutoconfigPublished(const DataStore& ds)
 {

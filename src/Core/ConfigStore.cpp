@@ -3,6 +3,7 @@
  * @brief Implementation file.
  */
 #include "Core/ConfigStore.h"
+#include "Core/NvsKeys.h"
 #include "Core/Log.h"
 #include <ArduinoJson.h>
 #include <stdio.h>
@@ -526,7 +527,7 @@ bool ConfigStore::runMigrations(uint32_t currentVersion,
                                 bool clearOnFail)
 {
     if (!_prefs || !steps || count == 0) return false;
-    if (!versionKey) versionKey = "cfg_ver";
+    if (!versionKey) versionKey = NvsKeys::ConfigVersion;
 
     uint32_t storedVersion = _prefs->getUInt(versionKey, 0);
     Log::debug(LOG_TAG_CORE, "migrations: stored=%lu current=%lu",

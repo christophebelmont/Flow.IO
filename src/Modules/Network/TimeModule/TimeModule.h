@@ -4,6 +4,7 @@
  * @brief Time synchronization and scheduling module.
  */
 #include "Core/Module.h"
+#include "Core/NvsKeys.h"
 #include "Core/Services/Services.h"
 #include <time.h>
 #include <WiFi.h>
@@ -90,27 +91,27 @@ private:
 
     // Keep existing NVS keys for backward compatibility with deployed devices.
     ConfigVariable<char,0> server1Var {
-        NVS_KEY("ntp_s1"),"server1","time",ConfigType::CharArray,
+        NVS_KEY(NvsKeys::Time::Server1),"server1","time",ConfigType::CharArray,
         (char*)cfgData.server1,ConfigPersistence::Persistent,sizeof(cfgData.server1)
     };
     ConfigVariable<char,0> server2Var {
-        NVS_KEY("ntp_s2"),"server2","time",ConfigType::CharArray,
+        NVS_KEY(NvsKeys::Time::Server2),"server2","time",ConfigType::CharArray,
         (char*)cfgData.server2,ConfigPersistence::Persistent,sizeof(cfgData.server2)
     };
     ConfigVariable<char,0> tzVar {
-        NVS_KEY("ntp_tz"),"tz","time",ConfigType::CharArray,
+        NVS_KEY(NvsKeys::Time::Tz),"tz","time",ConfigType::CharArray,
         (char*)cfgData.tz,ConfigPersistence::Persistent,sizeof(cfgData.tz)
     };
     ConfigVariable<bool,0> enabledVar {
-        NVS_KEY("ntp_en"),"enabled","time",ConfigType::Bool,
+        NVS_KEY(NvsKeys::Time::Enabled),"enabled","time",ConfigType::Bool,
         &cfgData.enabled,ConfigPersistence::Persistent,0
     };
     ConfigVariable<bool,0> weekStartMondayVar {
-        NVS_KEY("tm_wkmon"),"week_start_monday","time",ConfigType::Bool,
+        NVS_KEY(NvsKeys::Time::WeekStartMonday),"week_start_monday","time",ConfigType::Bool,
         &cfgData.weekStartMonday,ConfigPersistence::Persistent,0
     };
     ConfigVariable<char,0> scheduleBlobVar {
-        NVS_KEY("tm_sched"),"slots_blob","time/scheduler",ConfigType::CharArray,
+        NVS_KEY(NvsKeys::Time::ScheduleBlob),"slots_blob","time/scheduler",ConfigType::CharArray,
         (char*)scheduleBlob_,ConfigPersistence::Persistent,sizeof(scheduleBlob_)
     };
 

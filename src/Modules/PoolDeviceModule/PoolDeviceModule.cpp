@@ -5,6 +5,7 @@
 
 #include "PoolDeviceModule.h"
 #include "Core/ErrorCodes.h"
+#include "Core/NvsKeys.h"
 #include "Core/SystemLimits.h"
 #define LOG_TAG "PoolDevc"
 #include "Core/ModuleLog.h"
@@ -758,12 +759,12 @@ void PoolDeviceModule::init(ConfigStore& cfg, ServiceRegistry& services)
         if (!s.used) continue;
 
         snprintf(cfgModuleName_[i], sizeof(cfgModuleName_[i]), "pdm/pd%u", (unsigned)i);
-        snprintf(nvsEnabledKey_[i], sizeof(nvsEnabledKey_[i]), "pd%uen", (unsigned)i);
-        snprintf(nvsTypeKey_[i], sizeof(nvsTypeKey_[i]), "pd%uty", (unsigned)i);
-        snprintf(nvsDependsKey_[i], sizeof(nvsDependsKey_[i]), "pd%udp", (unsigned)i);
-        snprintf(nvsFlowKey_[i], sizeof(nvsFlowKey_[i]), "pd%uflh", (unsigned)i);
-        snprintf(nvsTankCapKey_[i], sizeof(nvsTankCapKey_[i]), "pd%utc", (unsigned)i);
-        snprintf(nvsTankInitKey_[i], sizeof(nvsTankInitKey_[i]), "pd%uti", (unsigned)i);
+        snprintf(nvsEnabledKey_[i], sizeof(nvsEnabledKey_[i]), NvsKeys::PoolDevice::EnabledFmt, (unsigned)i);
+        snprintf(nvsTypeKey_[i], sizeof(nvsTypeKey_[i]), NvsKeys::PoolDevice::TypeFmt, (unsigned)i);
+        snprintf(nvsDependsKey_[i], sizeof(nvsDependsKey_[i]), NvsKeys::PoolDevice::DependsFmt, (unsigned)i);
+        snprintf(nvsFlowKey_[i], sizeof(nvsFlowKey_[i]), NvsKeys::PoolDevice::FlowFmt, (unsigned)i);
+        snprintf(nvsTankCapKey_[i], sizeof(nvsTankCapKey_[i]), NvsKeys::PoolDevice::TankCapFmt, (unsigned)i);
+        snprintf(nvsTankInitKey_[i], sizeof(nvsTankInitKey_[i]), NvsKeys::PoolDevice::TankInitFmt, (unsigned)i);
 
         cfgEnabledVar_[i].nvsKey = nvsEnabledKey_[i];
         cfgEnabledVar_[i].jsonName = "enabled";

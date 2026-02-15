@@ -4,6 +4,7 @@
  * @brief Periodic system health/metrics reporting module.
  */
 #include "Core/Module.h"
+#include "Core/NvsKeys.h"
 #include "Core/Services/Services.h"
 #include "Core/SystemStats.h"
 
@@ -63,11 +64,11 @@ private:
 
     SystemMonitorConfig cfgData_{};
     ConfigVariable<bool,0> traceEnabledVar_{
-        NVS_KEY("sm_tren"), "trace_enabled", "sysmon", ConfigType::Bool,
+        NVS_KEY(NvsKeys::SystemMonitor::TraceEnabled), "trace_enabled", "sysmon", ConfigType::Bool,
         &cfgData_.traceEnabled, ConfigPersistence::Persistent, 0
     };
     ConfigVariable<int32_t,0> tracePeriodVar_{
-        NVS_KEY("sm_trms"), "trace_period_ms", "sysmon", ConfigType::Int32,
+        NVS_KEY(NvsKeys::SystemMonitor::TracePeriodMs), "trace_period_ms", "sysmon", ConfigType::Int32,
         &cfgData_.tracePeriodMs, ConfigPersistence::Persistent, 0
     };
 };

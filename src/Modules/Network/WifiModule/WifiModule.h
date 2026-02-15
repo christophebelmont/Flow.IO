@@ -4,6 +4,7 @@
  * @brief WiFi connectivity module.
  */
 #include "Core/Module.h"
+#include "Core/NvsKeys.h"
 #include "Core/Services/Services.h"
 #include <WiFi.h>
 
@@ -47,7 +48,7 @@ private:
     
     // Config variables
     ConfigVariable<bool,0> enabledVar {
-        NVS_KEY("wifi_en"),"enabled","wifi",
+        NVS_KEY(NvsKeys::Wifi::Enabled),"enabled","wifi",
         ConfigType::Bool,
         &cfgData.enabled,
         ConfigPersistence::Persistent,
@@ -55,7 +56,7 @@ private:
     };
 
     ConfigVariable<char,0> ssidVar {
-        NVS_KEY("wifi_ssid"),"ssid","wifi",
+        NVS_KEY(NvsKeys::Wifi::Ssid),"ssid","wifi",
         ConfigType::CharArray,
         cfgData.ssid,
         ConfigPersistence::Persistent,
@@ -63,7 +64,7 @@ private:
     };
 
     ConfigVariable<char,0> passVar {
-        NVS_KEY("wifi_pass"),"pass","wifi",
+        NVS_KEY(NvsKeys::Wifi::Pass),"pass","wifi",
         ConfigType::CharArray,
         cfgData.pass,
         ConfigPersistence::Persistent,

@@ -8,11 +8,13 @@
 #include <string.h>
 #include "Core/DataStore/DataStore.h"
 #include "Core/EventBus/EventPayloads.h"
+#include "Core/DataKeys.h"
 #include "Modules/PoolDeviceModule/PoolDeviceModuleDataModel.h"
 
 // RUNTIME_PUBLIC
 
-constexpr DataKey DATAKEY_POOL_DEVICE_BASE = 80;
+constexpr DataKey DATAKEY_POOL_DEVICE_BASE = DataKeys::PoolDeviceBase;
+static_assert(POOL_DEVICE_MAX <= DataKeys::PoolDeviceReservedCount, "DataKeys::PoolDeviceReservedCount too small for pool device slots");
 
 static inline bool poolDeviceRuntime(const DataStore& ds, uint8_t idx, PoolDeviceRuntimeEntry& out)
 {

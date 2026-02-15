@@ -7,12 +7,13 @@
 
 #include "Core/DataStore/DataStore.h"
 #include "Core/EventBus/EventPayloads.h"
+#include "Core/DataKeys.h"
 #include "Core/Types/IpV4.h"
 
 // RUNTIME_PUBLIC
 // Data keys for wifi runtime values.
-constexpr DataKey DATAKEY_WIFI_READY = 1;
-constexpr DataKey DATAKEY_WIFI_IP = 2;
+constexpr DataKey DATAKEY_WIFI_READY = DataKeys::WifiReady;
+constexpr DataKey DATAKEY_WIFI_IP = DataKeys::WifiIp;
 
 static inline bool ipEqual(const IpV4& a, const IpV4& b)
 {

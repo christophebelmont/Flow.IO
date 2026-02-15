@@ -22,6 +22,7 @@
 #include <type_traits>
 
 #include "ConfigTypes.h"
+#include "Core/NvsKeys.h"
 #include "Core/Log.h"
 #include "Core/SystemLimits.h"
 #include "Core/Services/IEventBus.h"
@@ -84,7 +85,7 @@ public:
 
     /** @brief Run config migrations using a version key in NVS. */
     bool runMigrations(uint32_t currentVersion, const MigrationStep* steps, size_t count,
-                       const char* versionKey = "cfg_ver", bool clearOnFail = true);
+                       const char* versionKey = NvsKeys::ConfigVersion, bool clearOnFail = true);
     /** @brief Log NVS write summary when the configured period elapsed. */
     void logNvsWriteSummaryIfDue(uint32_t nowMs, uint32_t periodMs = 60000U);
 
@@ -120,10 +121,10 @@ template<typename T, size_t H>
 void ConfigStore::registerVar(ConfigVariable<T, H>& var)
 {
     if (_metaCount >= MAX_CONFIG_VARS) return;
-    if (var.nvsKey && strlen(var.nvsKey) > MAX_NVS_KEY_LEN) {
+    /*if (var.nvsKey && strlen(var.nvsKey) > MAX_NVS_KEY_LEN) {
         Log::warn(LOG_TAG_CORE, "NVS key too long (%s)", var.nvsKey);
         return;
-    }
+    }*/
 
     // ✅ champ par champ (évite initializer list incompatible)
     ConfigMeta& m = _meta[_metaCount++];

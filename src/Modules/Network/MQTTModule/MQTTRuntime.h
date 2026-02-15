@@ -6,14 +6,15 @@
 
 #include "Core/DataStore/DataStore.h"
 #include "Core/EventBus/EventPayloads.h"
+#include "Core/DataKeys.h"
 
 // RUNTIME_PUBLIC
 
 // Data keys for MQTT runtime values.
-constexpr DataKey DATAKEY_MQTT_READY = 4;
-constexpr DataKey DATAKEY_MQTT_RX_DROP = 5;
-constexpr DataKey DATAKEY_MQTT_PARSE_FAIL = 6;
-constexpr DataKey DATAKEY_MQTT_HANDLER_FAIL = 7;
+constexpr DataKey DATAKEY_MQTT_READY = DataKeys::MqttReady;
+constexpr DataKey DATAKEY_MQTT_RX_DROP = DataKeys::MqttRxDrop;
+constexpr DataKey DATAKEY_MQTT_PARSE_FAIL = DataKeys::MqttParseFail;
+constexpr DataKey DATAKEY_MQTT_HANDLER_FAIL = DataKeys::MqttHandlerFail;
 
 static inline bool mqttReady(const DataStore& ds)
 {

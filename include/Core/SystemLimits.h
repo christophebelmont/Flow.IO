@@ -26,6 +26,8 @@ constexpr size_t JsonCmdPoolDeviceBuf = 256;
 constexpr size_t JsonConfigApplyBuf = JsonCfgBuf * 4;
 /** @brief Maximum number of registered config variables in `ConfigStore` metadata table. */
 constexpr size_t MaxConfigVars = 500;
+/** @brief Maximum NVS key length (without null terminator) enforced by `ConfigTypes::NVS_KEY`. */
+constexpr size_t MaxNvsKeyLen = 15;
 /** @brief FreeRTOS log queue length used by `LogHub` (`LogHubModule::init`). */
 constexpr uint8_t LogQueueLen = 32;
 /** @brief FreeRTOS event queue length used by `EventBus` (`EventBus::QUEUE_LENGTH`). */

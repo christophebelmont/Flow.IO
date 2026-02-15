@@ -5,15 +5,14 @@
  */
 #include <stdint.h>
 #include <stddef.h>
+#include "Core/SystemLimits.h"
 
 // Max NVS key length for Preferences (excluding null terminator).
 // Always wrap literal NVS keys with NVS_KEY("...") to enforce length at compile time.
-static constexpr size_t MAX_NVS_KEY_LEN = 15;
-
 template <size_t N>
 constexpr const char* NVS_KEY(const char (&s)[N]) {
     static_assert(N > 0, "NVS key cannot be empty");
-    static_assert((N - 1) <= MAX_NVS_KEY_LEN, "NVS key too long");
+    static_assert((N - 1) <= Limits::MaxNvsKeyLen, "NVS key too long");
     return s;
 }
 

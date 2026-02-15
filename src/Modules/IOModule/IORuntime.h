@@ -8,10 +8,12 @@
 #include <stdint.h>
 #include "Core/DataStore/DataStore.h"
 #include "Core/EventBus/EventPayloads.h"
+#include "Core/DataKeys.h"
 
 // RUNTIME_PUBLIC
 
-constexpr DataKey DATAKEY_IO_BASE = 40;
+constexpr DataKey DATAKEY_IO_BASE = DataKeys::IoBase;
+static_assert(IO_MAX_ENDPOINTS <= DataKeys::IoReservedCount, "DataKeys::IoReservedCount too small for IO endpoints");
 
 static inline float ioRoundToPrecision(float value, int32_t decimals)
 {

@@ -4,6 +4,7 @@
  * @brief MQTT client module.
  */
 #include "Core/Module.h"
+#include "Core/NvsKeys.h"
 #include "Core/ErrorCodes.h"
 #include "Core/SystemLimits.h"
 #include "Core/Services/Services.h"
@@ -125,31 +126,31 @@ private:
     MqttService mqttSvc{ nullptr, nullptr, nullptr, nullptr };
 
     ConfigVariable<char,0> hostVar {
-        NVS_KEY("mq_host"),"host","mqtt",ConfigType::CharArray,
+        NVS_KEY(NvsKeys::Mqtt::Host),"host","mqtt",ConfigType::CharArray,
         (char*)cfgData.host,ConfigPersistence::Persistent,sizeof(cfgData.host)
     };
     ConfigVariable<int32_t,0> portVar {
-        NVS_KEY("mq_port"),"port","mqtt",ConfigType::Int32,
+        NVS_KEY(NvsKeys::Mqtt::Port),"port","mqtt",ConfigType::Int32,
         &cfgData.port,ConfigPersistence::Persistent,0
     };
     ConfigVariable<char,0> userVar {
-        NVS_KEY("mq_user"),"user","mqtt",ConfigType::CharArray,
+        NVS_KEY(NvsKeys::Mqtt::User),"user","mqtt",ConfigType::CharArray,
         (char*)cfgData.user,ConfigPersistence::Persistent,sizeof(cfgData.user)
     };
     ConfigVariable<char,0> passVar {
-        NVS_KEY("mq_pass"),"pass","mqtt",ConfigType::CharArray,
+        NVS_KEY(NvsKeys::Mqtt::Pass),"pass","mqtt",ConfigType::CharArray,
         (char*)cfgData.pass,ConfigPersistence::Persistent,sizeof(cfgData.pass)
     };
     ConfigVariable<char,0> baseTopicVar {
-        NVS_KEY("mq_base"),"baseTopic","mqtt",ConfigType::CharArray,
+        NVS_KEY(NvsKeys::Mqtt::BaseTopic),"baseTopic","mqtt",ConfigType::CharArray,
         (char*)cfgData.baseTopic,ConfigPersistence::Persistent,sizeof(cfgData.baseTopic)
     };
     ConfigVariable<bool,0> enabledVar {
-        NVS_KEY("mq_en"),"enabled","mqtt",ConfigType::Bool,
+        NVS_KEY(NvsKeys::Mqtt::Enabled),"enabled","mqtt",ConfigType::Bool,
         &cfgData.enabled,ConfigPersistence::Persistent,0
     };
     ConfigVariable<int32_t,0> sensorMinVar {
-        NVS_KEY("mq_smin"),"sensor_min_publish_ms","mqtt",ConfigType::Int32,
+        NVS_KEY(NvsKeys::Mqtt::SensorMinPublishMs),"sensor_min_publish_ms","mqtt",ConfigType::Int32,
         (int32_t*)&cfgData.sensorMinPublishMs,ConfigPersistence::Persistent,0
     };
 

@@ -5,6 +5,7 @@
  */
 
 #include "Core/Module.h"
+#include "Core/NvsKeys.h"
 #include "Core/EventBus/EventBus.h"
 #include "Core/Services/Services.h"
 #include "Core/Runtime.h"
@@ -79,23 +80,23 @@ private:
     HAService haSvc{};
 
     ConfigVariable<bool,0> enabledVar {
-        NVS_KEY("ha_en"),"enabled","ha",ConfigType::Bool,
+        NVS_KEY(NvsKeys::Ha::Enabled),"enabled","ha",ConfigType::Bool,
         &cfgData.enabled,ConfigPersistence::Persistent,0
     };
     ConfigVariable<char,0> vendorVar {
-        NVS_KEY("ha_vend"),"vendor","ha",ConfigType::CharArray,
+        NVS_KEY(NvsKeys::Ha::Vendor),"vendor","ha",ConfigType::CharArray,
         (char*)cfgData.vendor,ConfigPersistence::Persistent,sizeof(cfgData.vendor)
     };
     ConfigVariable<char,0> deviceIdVar {
-        NVS_KEY("ha_devid"),"device_id","ha",ConfigType::CharArray,
+        NVS_KEY(NvsKeys::Ha::DeviceId),"device_id","ha",ConfigType::CharArray,
         (char*)cfgData.deviceId,ConfigPersistence::Persistent,sizeof(cfgData.deviceId)
     };
     ConfigVariable<char,0> prefixVar {
-        NVS_KEY("ha_pref"),"discovery_prefix","ha",ConfigType::CharArray,
+        NVS_KEY(NvsKeys::Ha::DiscoveryPrefix),"discovery_prefix","ha",ConfigType::CharArray,
         (char*)cfgData.discoveryPrefix,ConfigPersistence::Persistent,sizeof(cfgData.discoveryPrefix)
     };
     ConfigVariable<char,0> modelVar {
-        NVS_KEY("ha_model"),"model","ha",ConfigType::CharArray,
+        NVS_KEY(NvsKeys::Ha::Model),"model","ha",ConfigType::CharArray,
         (char*)cfgData.model,ConfigPersistence::Persistent,sizeof(cfgData.model)
     };
 

@@ -3,7 +3,8 @@
  * @brief Firmware entry point and module wiring.
  */
 #include <Arduino.h>
-#include <Preferences.h>    ///< Preference needs to be singleton-like global to work
+#include <Preferences.h>
+#include "Core/NvsKeys.h"    ///< Preference needs to be singleton-like global to work
 
 /// Load Core Functions
 #include "Core/LogHub.h"
@@ -300,7 +301,7 @@ static void ledRandomTask(void*)
 void setup() {
     Serial.begin(115200);
     delay(50);
-    preferences.begin("flowio", false);
+    preferences.begin(NvsKeys::StorageNamespace, false);
     registry.setPreferences(preferences);
     registry.runMigrations(CURRENT_CFG_VERSION, steps, MIGRATION_COUNT);
 
