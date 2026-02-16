@@ -15,11 +15,6 @@ The program is fully modular:
 
 This model fits ESP32 constraints well: low coupling, controlled evolution, and incremental integration of new sensors and actuators.
 
-## Documentation Languages
-
-- English: [docs/en/README.md](docs/en/README.md)
-- Français: [docs/fr/README.md](docs/fr/README.md)
-
 ## Global Project Structure
 
 ```text
