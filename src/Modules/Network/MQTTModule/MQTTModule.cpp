@@ -119,12 +119,12 @@ void MQTTModule::onConnect(bool) {
     LOGI("Connected subscribe %s", topicCmd);
     client.subscribe(topicCmd, 0);
     client.subscribe(topicCfgSet, 1);
-    client.publish(topicStatus, 1, true, "{\"online\":true}");
-    publishConfigBlocks(true);
 
     _retryCount = 0;
-    _retryDelayMs = Limits::MqttBackoffMinMs;
+    _retryDelayMs = Limits::Mqtt::Backoff::MinMs;
     setState(MQTTState::Connected);
+
+    (void)publish(topicStatus, "{\"online\":true}", 1, true);
 
     if (sensorsTopic && sensorsBuild) {
         sensorsPending = true;
@@ -132,6 +132,10 @@ void MQTTModule::onConnect(bool) {
         sensorsActiveDirtyMask = 0;
         lastSensorsPublishMs = 0;
     }
+
+    // Defer cfg/* publication to loop() so actuator runtime snapshots can be
+    // flushed first and avoid stale HA state immediately after reconnect.
+    _pendingPublish = true;
 }
 
 void MQTTModule::onDisconnect(AsyncMqttClientDisconnectReason) {
@@ -175,9 +179,9 @@ void MQTTModule::onMessage(char* topic, char* payload, AsyncMqttClientMessagePro
 void MQTTModule::refreshConfigModules()
 {
     if (cfgSvc && cfgSvc->listModules) {
-        cfgModuleCount = cfgSvc->listModules(cfgSvc->ctx, cfgModules, CFG_TOPIC_MAX);
-        if (cfgModuleCount >= CFG_TOPIC_MAX) {
-            LOGW("Config module list reached limit (%u), some cfg/* blocks may be omitted", (unsigned)CFG_TOPIC_MAX);
+        cfgModuleCount = cfgSvc->listModules(cfgSvc->ctx, cfgModules, Limits::Mqtt::Capacity::CfgTopicMax);
+        if (cfgModuleCount >= Limits::Mqtt::Capacity::CfgTopicMax) {
+            LOGW("Config module list reached limit (%u), some cfg/* blocks may be omitted", (unsigned)Limits::Mqtt::Capacity::CfgTopicMax);
         }
     } else {
         cfgModuleCount = 0;
@@ -215,11 +219,17 @@ bool MQTTModule::publishConfigModuleAt(size_t idx, bool retained)
         if (!writeErrorJson(stateCfgBuf, sizeof(stateCfgBuf), ErrorCode::CfgTruncated, "cfg")) {
             snprintf(stateCfgBuf, sizeof(stateCfgBuf), "{\"ok\":false}");
         }
-        client.publish(topicCfgBlocks[idx], 1, retained, stateCfgBuf);
+        if (!publish(topicCfgBlocks[idx], stateCfgBuf, 1, retained)) {
+            LOGW("cfg/%s publish failed (truncated payload)", cfgModules[idx]);
+            return false;
+        }
         return true;
     }
     if (!any) return false;
-    client.publish(topicCfgBlocks[idx], 1, retained, stateCfgBuf);
+    if (!publish(topicCfgBlocks[idx], stateCfgBuf, 1, retained)) {
+        LOGW("cfg/%s publish failed", cfgModules[idx]);
+        return false;
+    }
     return true;
 }
 
@@ -245,19 +255,60 @@ bool MQTTModule::publishConfigBlocksFromPatch(const char* patchJson, bool retain
     return publishedAny;
 }
 
+bool MQTTModule::publishConfigModuleByName_(const char* module, bool retained)
+{
+    if (!module || module[0] == '\0') return false;
+    if (!cfgSvc || !cfgSvc->toJsonModule) return false;
+
+    char moduleTopic[Limits::Mqtt::Buffers::DynamicTopic] = {0};
+    const int tw = snprintf(moduleTopic, sizeof(moduleTopic), "%s/%s/cfg/%s", cfgData.baseTopic, deviceId, module);
+    if (!(tw > 0 && (size_t)tw < sizeof(moduleTopic))) {
+        LOGW("cfg publish: topic truncated for module=%s", module);
+        return false;
+    }
+
+    if (strcmp(module, "time/scheduler") == 0) {
+        publishTimeSchedulerSlots(retained, moduleTopic);
+        return true;
+    }
+
+    bool truncated = false;
+    const bool any = cfgSvc->toJsonModule(cfgSvc->ctx, module, stateCfgBuf, sizeof(stateCfgBuf), &truncated);
+    if (truncated) {
+        LOGW("cfg/%s truncated (buffer=%u)", module, (unsigned)sizeof(stateCfgBuf));
+        if (!writeErrorJson(stateCfgBuf, sizeof(stateCfgBuf), ErrorCode::CfgTruncated, "cfg")) {
+            snprintf(stateCfgBuf, sizeof(stateCfgBuf), "{\"ok\":false}");
+        }
+        if (!publish(moduleTopic, stateCfgBuf, 1, retained)) {
+            LOGW("cfg/%s publish failed (truncated payload)", module);
+            return false;
+        }
+        return true;
+    }
+    if (!any) return false;
+
+    if (!publish(moduleTopic, stateCfgBuf, 1, retained)) {
+        LOGW("cfg/%s publish failed", module);
+        return false;
+    }
+    return true;
+}
+
 void MQTTModule::publishTimeSchedulerSlots(bool retained, const char* rootTopic)
 {
     if (!rootTopic || rootTopic[0] == '\0') return;
 
     // Root topic stays small and indicates that details are split by slot.
-    client.publish(rootTopic, 1, retained, "{\"mode\":\"per_slot\",\"slots\":16}");
+    if (!publish(rootTopic, "{\"mode\":\"per_slot\",\"slots\":16}", 1, retained)) {
+        LOGW("cfg/time/scheduler root publish failed");
+    }
 
     if (!timeSchedSvc || !timeSchedSvc->getSlot) {
         LOGW("time.scheduler service unavailable for cfg publication");
         return;
     }
 
-    char slotTopic[160] = {0};
+    char slotTopic[Limits::Mqtt::Buffers::DynamicTopic] = {0};
     for (uint8_t slot = 0; slot < TIME_SCHED_MAX_SLOTS; ++slot) {
         snprintf(slotTopic, sizeof(slotTopic), "%s/slot%u", rootTopic, (unsigned)slot);
 
@@ -266,7 +317,9 @@ void MQTTModule::publishTimeSchedulerSlots(bool retained, const char* rootTopic)
             snprintf(stateCfgBuf, sizeof(stateCfgBuf),
                      "{\"slot\":%u,\"used\":false}",
                      (unsigned)slot);
-            client.publish(slotTopic, 1, retained, stateCfgBuf);
+            if (!publish(slotTopic, stateCfgBuf, 1, retained)) {
+                LOGW("cfg/time/scheduler slot%u publish failed (unused)", (unsigned)slot);
+            }
             continue;
         }
 
@@ -291,7 +344,9 @@ void MQTTModule::publishTimeSchedulerSlots(bool retained, const char* rootTopic)
                  (unsigned)def.endHour,
                  (unsigned)def.endMinute,
                  (unsigned long long)def.endEpochSec);
-        client.publish(slotTopic, 1, retained, stateCfgBuf);
+        if (!publish(slotTopic, stateCfgBuf, 1, retained)) {
+            LOGW("cfg/time/scheduler slot%u publish failed", (unsigned)slot);
+        }
     }
 }
 
@@ -299,7 +354,12 @@ bool MQTTModule::publish(const char* topic, const char* payload, int qos, bool r
 {
     if (!topic || !payload) return false;
     if (state != MQTTState::Connected) return false;
-    client.publish(topic, qos, retain, payload);
+    const uint16_t packetId = client.publish(topic, qos, retain, payload);
+    if (packetId == 0U) {
+        LOGW("mqtt publish rejected topic=%s qos=%d retain=%d", topic, qos, retain ? 1 : 0);
+        return false;
+    }
+    LOGI("MQTT TX t=%s r=%d %d %s", topic, retain ? 1 : 0, (unsigned)packetId, payload);
     return true;
 }
 
@@ -313,7 +373,7 @@ bool MQTTModule::addRuntimePublisher(const char* topic, uint32_t periodMs, int q
                                      bool (*build)(MQTTModule* self, char* out, size_t outLen))
 {
     if (!topic || !build) return false;
-    if (publisherCount >= MAX_PUBLISHERS) return false;
+    if (publisherCount >= Limits::Mqtt::Capacity::MaxPublishers) return false;
     RuntimePublisher& p = publishers[publisherCount++];
     p.topic = topic;
     p.periodMs = periodMs;
@@ -360,14 +420,14 @@ void MQTTModule::processRxCmd_(const RxMsg& msg)
         return;
     }
 
-    char cmd[64];
+    char cmd[Limits::Mqtt::Buffers::CmdName];
     size_t clen = strlen(cmdVal);
     if (clen >= sizeof(cmd)) clen = sizeof(cmd) - 1;
     memcpy(cmd, cmdVal, clen);
     cmd[clen] = '\0';
 
     const char* argsJson = nullptr;
-    char argsBuf[320] = {0};
+    char argsBuf[Limits::Mqtt::Buffers::CmdArgs] = {0};
     JsonVariantConst argsVar = root["args"];
     if (!argsVar.isNull()) {
         const size_t written = serializeJson(argsVar, argsBuf, sizeof(argsBuf));
@@ -379,6 +439,7 @@ void MQTTModule::processRxCmd_(const RxMsg& msg)
         argsJson = argsBuf;
     }
 
+    _suppressConfigChangedUntilMs = millis() + Limits::Mqtt::Timing::CfgEchoSuppressMs;
     bool ok = cmdSvc->execute(cmdSvc->ctx, cmd, msg.payload, argsJson, replyBuf, sizeof(replyBuf));
     if (!ok) {
         LOGW("processRxCmd: command handler failed (cmd=%s)", cmd);
@@ -392,7 +453,34 @@ void MQTTModule::processRxCmd_(const RxMsg& msg)
         publishRxError_(topicAck, ErrorCode::InternalAckOverflow, "cmd", false);
         return;
     }
-    client.publish(topicAck, 0, false, ackBuf);
+    if (!publish(topicAck, ackBuf, 0, false)) {
+        LOGW("cmd ack publish failed cmd=%s", cmd);
+    }
+
+    // Publish config echo only for the command family module, to avoid flooding cfg/*
+    // and delaying subsequent rx handling on congested links.
+    char module[Limits::Mqtt::Buffers::CmdModule] = {0};
+    static constexpr const char* kTimeSchedulerCmdPrefix = "time.scheduler.";
+    if (strncmp(cmd, kTimeSchedulerCmdPrefix, sizeof("time.scheduler.") - 1U) == 0) {
+        strncpy(module, "time/scheduler", sizeof(module) - 1);
+    } else {
+        const char* dot = strchr(cmd, '.');
+        if (dot) {
+            const size_t moduleLen = (size_t)(dot - cmd);
+            if (moduleLen > 0 && moduleLen < sizeof(module)) {
+                memcpy(module, cmd, moduleLen);
+                module[moduleLen] = '\0';
+            }
+        }
+    }
+    if (module[0] != '\0') {
+        if (strcmp(module, "pool") == 0) {
+            strncpy(module, "pooldevice", sizeof(module) - 1);
+            module[sizeof(module) - 1] = '\0';
+        }
+        (void)publishConfigModuleByName_(module, true);
+    }
+    _pendingPublish = false;
 }
 
 void MQTTModule::processRxCfgSet_(const RxMsg& msg)
@@ -411,18 +499,36 @@ void MQTTModule::processRxCfgSet_(const RxMsg& msg)
         return;
     }
 
+    _suppressConfigChangedUntilMs = millis() + Limits::Mqtt::Timing::CfgEchoSuppressMs;
     bool ok = cfgSvc->applyJson(cfgSvc->ctx, msg.payload);
     if (!ok) {
         publishRxError_(topicCfgAck, ErrorCode::CfgApplyFailed, "cfg/set", false);
         return;
     }
 
-    client.publish(topicCfgAck, 1, false, "{\"ok\":true}");
+    // Publish touched cfg modules immediately from the received patch.
+    // This avoids any deferred path and keeps cfg/* state in sync right after cfg/set.
+    bool publishedAny = false;
+    JsonObjectConst patch = cfgDoc.as<JsonObjectConst>();
+    for (JsonPairConst kv : patch) {
+        const char* module = kv.key().c_str();
+        if (!module || module[0] == '\0') continue;
+        publishedAny = publishConfigModuleByName_(module, true) || publishedAny;
+    }
 
-    // Publish only touched cfg modules for immediate state echo.
-    // Fallback to full publish if patch shape cannot be resolved.
-    if (!publishConfigBlocksFromPatch(msg.payload, true)) {
+    if (!publishedAny) {
+        // Conservative fallback: publish full cfg tree when no touched module was emitted.
         publishConfigBlocks(true);
+    } else {
+        // cfg/set already emitted touched modules immediately; avoid redundant full-tree burst.
+        _pendingPublish = false;
+    }
+
+    if (!writeOkJson(ackBuf, sizeof(ackBuf), "cfg/set")) {
+        snprintf(ackBuf, sizeof(ackBuf), "{\"ok\":true}");
+    }
+    if (!publish(topicCfgAck, ackBuf, 1, false)) {
+        LOGW("cfg/set ack publish failed");
     }
 }
 
@@ -438,7 +544,9 @@ void MQTTModule::publishRxError_(const char* ackTopic, ErrorCode code, const cha
             snprintf(ackBuf, sizeof(ackBuf), "{\"ok\":false}");
         }
     }
-    client.publish(ackTopic, 0, false, ackBuf);
+    if (!publish(ackTopic, ackBuf, 0, false)) {
+        LOGW("rx error ack publish failed topic=%s", ackTopic);
+    }
 }
 
 void MQTTModule::syncRxMetrics_()
@@ -504,7 +612,7 @@ void MQTTModule::init(ConfigStore& cfg, ServiceRegistry& services) {
     makeDeviceId(deviceId, sizeof(deviceId));
     buildTopics();
 
-    rxQ = xQueueCreate(Limits::MqttRxQueueLen, sizeof(RxMsg));
+    rxQ = xQueueCreate(Limits::Mqtt::Capacity::RxQueueLen, sizeof(RxMsg));
 
     client.onConnect([this](bool sp){ this->onConnect(sp); });
     client.onDisconnect([this](AsyncMqttClientDisconnectReason r){ this->onDisconnect(r); });
@@ -522,7 +630,7 @@ void MQTTModule::init(ConfigStore& cfg, ServiceRegistry& services) {
     _netReady = dataStore ? wifiReady(*dataStore) : false;
     _netReadyTs = millis();
     _retryCount = 0;
-    _retryDelayMs = Limits::MqttBackoffMinMs;
+    _retryDelayMs = Limits::Mqtt::Backoff::MinMs;
 
     setState(cfgData.enabled ? MQTTState::WaitingNetwork : MQTTState::Disabled);
 }
@@ -533,18 +641,19 @@ void MQTTModule::loop() {
             client.disconnect();
             setState(MQTTState::Disabled);
         }
-        vTaskDelay(pdMS_TO_TICKS(2000));
+        vTaskDelay(pdMS_TO_TICKS(Limits::Mqtt::Timing::DisabledDelayMs));
         return;
     }
 
     switch (state) {
     case MQTTState::Disabled: setState(MQTTState::WaitingNetwork); break;
     case MQTTState::WaitingNetwork:
+        if (!_startupReady) break;
         if (!_netReady) break;
-        if (millis() - _netReadyTs >= 2000) connectMqtt();
+        if (millis() - _netReadyTs >= Limits::Mqtt::Timing::NetWarmupMs) connectMqtt();
         break;
     case MQTTState::Connecting:
-        if (millis() - stateTs > 10000) {
+        if (millis() - stateTs > Limits::Mqtt::Timing::ConnectTimeoutMs) {
             LOGW("Connect timeout");
             client.disconnect();
             setState(MQTTState::ErrorWait);
@@ -553,10 +662,6 @@ void MQTTModule::loop() {
     case MQTTState::Connected: {
         RxMsg m;
         while (xQueueReceive(rxQ, &m, 0) == pdTRUE) processRx(m);
-        if (_pendingPublish) {
-            _pendingPublish = false;
-            publishConfigBlocks(true);
-        }
         uint32_t now = millis();
         if (sensorsPending && sensorsTopic && sensorsBuild) {
             const uint32_t relevantMask = (DIRTY_SENSORS | DIRTY_ACTUATORS);
@@ -575,8 +680,11 @@ void MQTTModule::loop() {
                     publish(sensorsTopic, publishBuf, 0, false);
                 }
                 sensorsActiveDirtyMask = 0;
-                sensorsPendingDirtyMask &= ~DIRTY_ACTUATORS;
-                if (!hasSensors) {
+                const bool keepActuatorRetries = ((uint32_t)(now - stateTs) < Limits::Mqtt::Timing::StartupActuatorRetryMs);
+                if (!keepActuatorRetries) {
+                    sensorsPendingDirtyMask &= ~DIRTY_ACTUATORS;
+                }
+                if (!hasSensors && !keepActuatorRetries) {
                     sensorsPending = false;
                     sensorsPendingDirtyMask = 0;
                 }
@@ -591,6 +699,10 @@ void MQTTModule::loop() {
                 sensorsPending = false;
                 sensorsPendingDirtyMask = 0;
             }
+        }
+        if (_pendingPublish) {
+            _pendingPublish = false;
+            publishConfigBlocks(true);
         }
         for (uint8_t i = 0; i < publisherCount; ++i) {
             RuntimePublisher& p = publishers[i];
@@ -615,20 +727,20 @@ void MQTTModule::loop() {
             _retryCount++;
             uint32_t next = _retryDelayMs;
 
-            if      (next < Limits::MqttBackoffStep1Ms)   next = Limits::MqttBackoffStep1Ms;
-            else if (next < Limits::MqttBackoffStep2Ms)   next = Limits::MqttBackoffStep2Ms;
-            else if (next < Limits::MqttBackoffStep3Ms)   next = Limits::MqttBackoffStep3Ms;
-            else if (next < Limits::MqttBackoffStep4Ms)   next = Limits::MqttBackoffStep4Ms;
-            else                                           next = Limits::MqttBackoffMaxMs;
+            if      (next < Limits::Mqtt::Backoff::Step1Ms)   next = Limits::Mqtt::Backoff::Step1Ms;
+            else if (next < Limits::Mqtt::Backoff::Step2Ms)   next = Limits::Mqtt::Backoff::Step2Ms;
+            else if (next < Limits::Mqtt::Backoff::Step3Ms)   next = Limits::Mqtt::Backoff::Step3Ms;
+            else if (next < Limits::Mqtt::Backoff::Step4Ms)   next = Limits::Mqtt::Backoff::Step4Ms;
+            else                                               next = Limits::Mqtt::Backoff::MaxMs;
 
-            next = clampU32(next, Limits::MqttBackoffMinMs, Limits::MqttBackoffMaxMs);
-            _retryDelayMs = jitterMs(next, Limits::MqttBackoffJitterPct);
+            next = clampU32(next, Limits::Mqtt::Backoff::MinMs, Limits::Mqtt::Backoff::MaxMs);
+            _retryDelayMs = jitterMs(next, Limits::Mqtt::Backoff::JitterPct);
             setState(MQTTState::WaitingNetwork);
         }
         break;
     }
 
-    vTaskDelay(pdMS_TO_TICKS(Limits::MqttLoopDelayMs));
+    vTaskDelay(pdMS_TO_TICKS(Limits::Mqtt::Timing::LoopDelayMs));
 }
 
 void MQTTModule::onEventStatic(const Event& e, void* user)
@@ -683,11 +795,19 @@ void MQTTModule::onEvent(const Event& e)
             client.disconnect();
             _netReadyTs = millis();
             setState(MQTTState::WaitingNetwork);
-        } else if (isTimeSchedKey(key)) {
-            _pendingPublish = true;
         } else {
-            // Keep cfg/* topics in sync when config changes from command handlers.
-            _pendingPublish = true;
+            const uint32_t now = millis();
+            if ((int32_t)(now - _suppressConfigChangedUntilMs) < 0) {
+                // cfg/set and command paths already publish targeted cfg modules immediately.
+                return;
+            }
+
+            if (isTimeSchedKey(key)) {
+                _pendingPublish = true;
+            } else {
+                // Keep cfg/* topics in sync when config changes outside MQTT cfg/cmd handlers.
+                _pendingPublish = true;
+            }
         }
         return;
     }

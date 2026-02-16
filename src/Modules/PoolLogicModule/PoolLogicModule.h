@@ -7,6 +7,7 @@
 #include "Core/Module.h"
 #include "Core/ConfigTypes.h"
 #include "Core/NvsKeys.h"
+#include "Core/Layout/PoolIoMap.h"
 #include "Core/Layout/PoolSensorMap.h"
 #include "Core/Services/Services.h"
 #include "Domain/PoolLogicDefaults.h"
@@ -97,10 +98,10 @@ private:
     uint8_t fillingMinOnSec_ = 30;
 
     // Controlled pool devices
-    uint8_t filtrationDeviceSlot_ = 0;
-    uint8_t swgDeviceSlot_ = 2;
-    uint8_t robotDeviceSlot_ = 3;
-    uint8_t fillingDeviceSlot_ = 4;
+    uint8_t filtrationDeviceSlot_ = POOL_IO_SLOT_FILTRATION_PUMP;
+    uint8_t swgDeviceSlot_ = POOL_IO_SLOT_CHLORINE_GENERATOR;
+    uint8_t robotDeviceSlot_ = POOL_IO_SLOT_ROBOT;
+    uint8_t fillingDeviceSlot_ = POOL_IO_SLOT_FILL_PUMP;
 
     // Runtime flags
     DeviceFsm filtrationFsm_{};

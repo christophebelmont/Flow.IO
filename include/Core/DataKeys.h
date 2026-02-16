@@ -41,12 +41,19 @@ constexpr uint8_t IoReservedCount = 24;
 /** @brief End-exclusive bound for IO runtime key range. */
 constexpr DataKey IoEndExclusive = IoBase + IoReservedCount;
 
-/** @brief Reserved base for pool device runtime keys (`PoolDeviceRuntime`). */
-constexpr DataKey PoolDeviceBase = 80;
-/** @brief Reserved pool-device runtime key count: supports slots `[0..7]`. */
-constexpr uint8_t PoolDeviceReservedCount = 8;
-/** @brief End-exclusive bound for pool-device runtime key range. */
-constexpr DataKey PoolDeviceEndExclusive = PoolDeviceBase + PoolDeviceReservedCount;
+/** @brief Reserved base for pool-device state runtime keys (`PoolDeviceRuntime`, state part). */
+constexpr DataKey PoolDeviceStateBase = 80;
+/** @brief Reserved pool-device state key count: supports slots `[0..7]`. */
+constexpr uint8_t PoolDeviceStateReservedCount = 8;
+/** @brief End-exclusive bound for pool-device state key range. */
+constexpr DataKey PoolDeviceStateEndExclusive = PoolDeviceStateBase + PoolDeviceStateReservedCount;
+
+/** @brief Reserved base for pool-device metrics runtime keys (`PoolDeviceRuntime`, metrics part). */
+constexpr DataKey PoolDeviceMetricsBase = PoolDeviceStateEndExclusive;
+/** @brief Reserved pool-device metrics key count: supports slots `[0..7]`. */
+constexpr uint8_t PoolDeviceMetricsReservedCount = 8;
+/** @brief End-exclusive bound for pool-device metrics key range. */
+constexpr DataKey PoolDeviceMetricsEndExclusive = PoolDeviceMetricsBase + PoolDeviceMetricsReservedCount;
 
 /** @brief Upper bound for currently reserved keys. */
 constexpr DataKey ReservedMax = 127;
@@ -55,7 +62,8 @@ static_assert(WifiReady < TimeReady, "DataKey ordering invariant broken");
 static_assert(TimeReady < MqttReady, "DataKey ordering invariant broken");
 static_assert(MqttOversizeDrop < HaPublished, "DataKey ranges overlap");
 static_assert(HaDeviceId < IoBase, "HA fixed keys overlap IO key range");
-static_assert(IoEndExclusive <= PoolDeviceBase, "IO and pool-device key ranges overlap");
-static_assert(PoolDeviceEndExclusive <= ReservedMax, "Pool-device key range exceeds reserved max");
+static_assert(IoEndExclusive <= PoolDeviceStateBase, "IO and pool-device key ranges overlap");
+static_assert(PoolDeviceStateEndExclusive <= PoolDeviceMetricsBase, "Pool-device state and metrics ranges overlap");
+static_assert(PoolDeviceMetricsEndExclusive <= ReservedMax, "Pool-device key range exceeds reserved max");
 
 }  // namespace DataKeys

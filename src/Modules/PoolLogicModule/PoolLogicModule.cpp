@@ -614,38 +614,44 @@ void PoolLogicModule::runControlLoop_(uint32_t nowMs)
         }
     }
 
-    bool robotDesired = false;
-    if (autoMode_ && filtrationFsm_.on && !cleaningDone_) {
-        const uint32_t filtrationRunMin = stateUptimeSec_(filtrationFsm_, nowMs) / 60U;
-        if (filtrationRunMin >= robotDelayMin_) robotDesired = true;
+    bool robotDesired = robotFsm_.on;
+    if (autoMode_) {
+        robotDesired = false;
+        if (filtrationFsm_.on && !cleaningDone_) {
+            const uint32_t filtrationRunMin = stateUptimeSec_(filtrationFsm_, nowMs) / 60U;
+            if (filtrationRunMin >= robotDelayMin_) robotDesired = true;
+        }
+        if (robotFsm_.on) {
+            const uint32_t robotRunMin = stateUptimeSec_(robotFsm_, nowMs) / 60U;
+            if (robotRunMin >= robotDurationMin_) robotDesired = false;
+        }
+        if (!filtrationFsm_.on) robotDesired = false;
     }
-    if (robotFsm_.on) {
-        const uint32_t robotRunMin = stateUptimeSec_(robotFsm_, nowMs) / 60U;
-        if (robotRunMin >= robotDurationMin_) robotDesired = false;
-    }
-    if (!filtrationFsm_.on) robotDesired = false;
 
-    bool swgDesired = false;
-    if (electrolyseMode_ && filtrationFsm_.on) {
-        if (electroRunMode_) {
-            if (swgFsm_.on) {
-                swgDesired = haveOrp && (orp <= orpSetpoint_);
+    bool swgDesired = swgFsm_.on;
+    if (autoMode_) {
+        swgDesired = false;
+        if (electrolyseMode_ && filtrationFsm_.on) {
+            if (electroRunMode_) {
+                if (swgFsm_.on) {
+                    swgDesired = haveOrp && (orp <= orpSetpoint_);
+                } else {
+                    const bool startReady =
+                        haveWaterTemp &&
+                        (waterTemp >= secureElectroTempC_) &&
+                        ((stateUptimeSec_(filtrationFsm_, nowMs) / 60U) >= delayElectroMin_);
+                    swgDesired = startReady && haveOrp && (orp <= (orpSetpoint_ * 0.9f));
+                }
             } else {
-                const bool startReady =
-                    haveWaterTemp &&
-                    (waterTemp >= secureElectroTempC_) &&
-                    ((stateUptimeSec_(filtrationFsm_, nowMs) / 60U) >= delayElectroMin_);
-                swgDesired = startReady && haveOrp && (orp <= (orpSetpoint_ * 0.9f));
-            }
-        } else {
-            if (swgFsm_.on) {
-                swgDesired = true;
-            } else {
-                const bool startReady =
-                    haveWaterTemp &&
-                    (waterTemp >= secureElectroTempC_) &&
-                    ((stateUptimeSec_(filtrationFsm_, nowMs) / 60U) >= delayElectroMin_);
-                swgDesired = startReady;
+                if (swgFsm_.on) {
+                    swgDesired = true;
+                } else {
+                    const bool startReady =
+                        haveWaterTemp &&
+                        (waterTemp >= secureElectroTempC_) &&
+                        ((stateUptimeSec_(filtrationFsm_, nowMs) / 60U) >= delayElectroMin_);
+                    swgDesired = startReady;
+                }
             }
         }
     }

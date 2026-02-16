@@ -123,20 +123,23 @@ const char* PoolDeviceModule::blockReasonStr_(uint8_t reason)
 
 uint8_t PoolDeviceModule::runtimeSnapshotCount() const
 {
-    uint8_t count = 0;
-    for (uint8_t i = 0; i < POOL_DEVICE_MAX; ++i) {
-        if (slots_[i].used) ++count;
-    }
-    return count;
+    return (uint8_t)(activeCount_() * 2U);
 }
 
-bool PoolDeviceModule::snapshotSlotFromIndex_(uint8_t snapshotIdx, uint8_t& slotIdxOut) const
+bool PoolDeviceModule::snapshotRouteFromIndex_(uint8_t snapshotIdx, uint8_t& slotIdxOut, bool& metricsOut) const
 {
     uint8_t seen = 0;
     for (uint8_t i = 0; i < POOL_DEVICE_MAX; ++i) {
         if (!slots_[i].used) continue;
         if (seen == snapshotIdx) {
             slotIdxOut = i;
+            metricsOut = false;
+            return true;
+        }
+        ++seen;
+        if (seen == snapshotIdx) {
+            slotIdxOut = i;
+            metricsOut = true;
             return true;
         }
         ++seen;
@@ -144,26 +147,23 @@ bool PoolDeviceModule::snapshotSlotFromIndex_(uint8_t snapshotIdx, uint8_t& slot
     return false;
 }
 
-bool PoolDeviceModule::buildDeviceSnapshot_(uint8_t slotIdx, char* out, size_t len, uint32_t& maxTsOut) const
+bool PoolDeviceModule::buildStateSnapshot_(uint8_t slotIdx, char* out, size_t len, uint32_t& maxTsOut) const
 {
     if (!out || len == 0) return false;
     if (!dataStore_) return false;
     if (slotIdx >= POOL_DEVICE_MAX) return false;
     if (!slots_[slotIdx].used) return false;
 
-    PoolDeviceRuntimeEntry entry{};
-    if (!poolDeviceRuntime(*dataStore_, slotIdx, entry)) return false;
+    PoolDeviceRuntimeStateEntry entry{};
+    if (!poolDeviceRuntimeState(*dataStore_, slotIdx, entry)) return false;
 
     const char* label = deviceLabel(slotIdx);
     const char* typeStr = typeStr_(entry.type);
     const char* blockReason = blockReasonStr_(entry.blockReason);
-    int wrote = snprintf(
+    const int wrote = snprintf(
         out, len,
         "{\"id\":\"pd%u\",\"name\":\"%s\",\"enabled\":%s,\"desired\":%s,\"on\":%s,"
-        "\"type\":\"%s\",\"block\":\"%s\","
-        "\"running\":{\"day_s\":%lu,\"week_s\":%lu,\"month_s\":%lu,\"total_s\":%lu},"
-        "\"injected\":{\"day_ml\":%.3f,\"week_ml\":%.3f,\"month_ml\":%.3f,\"total_ml\":%.3f},"
-        "\"tank\":{\"remaining_ml\":%.3f},\"ts\":%lu}",
+        "\"type\":\"%s\",\"block\":\"%s\",\"ts\":%lu}",
         (unsigned)slotIdx,
         (label && label[0] != '\0') ? label : "pd",
         entry.enabled ? "true" : "false",
@@ -171,6 +171,33 @@ bool PoolDeviceModule::buildDeviceSnapshot_(uint8_t slotIdx, char* out, size_t l
         entry.actualOn ? "true" : "false",
         typeStr,
         blockReason,
+        (unsigned long)entry.tsMs
+    );
+    if (wrote < 0 || (size_t)wrote >= len) return false;
+
+    maxTsOut = (entry.tsMs == 0U) ? 1U : entry.tsMs;
+    return true;
+}
+
+bool PoolDeviceModule::buildMetricsSnapshot_(uint8_t slotIdx, char* out, size_t len, uint32_t& maxTsOut) const
+{
+    if (!out || len == 0) return false;
+    if (!dataStore_) return false;
+    if (slotIdx >= POOL_DEVICE_MAX) return false;
+    if (!slots_[slotIdx].used) return false;
+
+    PoolDeviceRuntimeMetricsEntry entry{};
+    if (!poolDeviceRuntimeMetrics(*dataStore_, slotIdx, entry)) return false;
+
+    const char* label = deviceLabel(slotIdx);
+    const int wrote = snprintf(
+        out, len,
+        "{\"id\":\"pd%u\",\"name\":\"%s\","
+        "\"running\":{\"day_s\":%lu,\"week_s\":%lu,\"month_s\":%lu,\"total_s\":%lu},"
+        "\"injected\":{\"day_ml\":%.3f,\"week_ml\":%.3f,\"month_ml\":%.3f,\"total_ml\":%.3f},"
+        "\"tank\":{\"remaining_ml\":%.3f},\"ts\":%lu}",
+        (unsigned)slotIdx,
+        (label && label[0] != '\0') ? label : "pd",
         (unsigned long)entry.runningSecDay,
         (unsigned long)entry.runningSecWeek,
         (unsigned long)entry.runningSecMonth,
@@ -180,30 +207,37 @@ bool PoolDeviceModule::buildDeviceSnapshot_(uint8_t slotIdx, char* out, size_t l
         (double)entry.injectedMlMonth,
         (double)entry.injectedMlTotal,
         (double)entry.tankRemainingMl,
-        (unsigned long)millis()
+        (unsigned long)entry.tsMs
     );
     if (wrote < 0 || (size_t)wrote >= len) return false;
 
-    // Ensure one initial publish even if runtime timestamp has not been set yet.
-    maxTsOut = (entry.timestampMs == 0U) ? 1U : entry.timestampMs;
+    maxTsOut = (entry.tsMs == 0U) ? 1U : entry.tsMs;
     return true;
 }
 
 const char* PoolDeviceModule::runtimeSnapshotSuffix(uint8_t idx) const
 {
     uint8_t slotIdx = 0xFF;
-    if (!snapshotSlotFromIndex_(idx, slotIdx)) return nullptr;
+    bool metrics = false;
+    if (!snapshotRouteFromIndex_(idx, slotIdx, metrics)) return nullptr;
 
-    static char suffix[24];
-    snprintf(suffix, sizeof(suffix), "rt/pdm/pd%u", (unsigned)slotIdx);
+    static char suffix[32];
+    if (metrics) {
+        snprintf(suffix, sizeof(suffix), "rt/pdm/metrics/pd%u", (unsigned)slotIdx);
+    } else {
+        snprintf(suffix, sizeof(suffix), "rt/pdm/state/pd%u", (unsigned)slotIdx);
+    }
     return suffix;
 }
 
 bool PoolDeviceModule::buildRuntimeSnapshot(uint8_t idx, char* out, size_t len, uint32_t& maxTsOut) const
 {
     uint8_t slotIdx = 0xFF;
-    if (!snapshotSlotFromIndex_(idx, slotIdx)) return false;
-    return buildDeviceSnapshot_(slotIdx, out, len, maxTsOut);
+    bool metrics = false;
+    if (!snapshotRouteFromIndex_(idx, slotIdx, metrics)) return false;
+    return metrics
+        ? buildMetricsSnapshot_(slotIdx, out, len, maxTsOut)
+        : buildStateSnapshot_(slotIdx, out, len, maxTsOut);
 }
 
 uint8_t PoolDeviceModule::svcCount_(void* ctx)
@@ -279,7 +313,7 @@ PoolDeviceSvcStatus PoolDeviceModule::svcReadActualOnImpl_(uint8_t slot, uint8_t
     if (!runtimeReady_) return POOLDEV_SVC_ERR_NOT_READY;
 
     *outOn = s.actualOn ? 1U : 0U;
-    if (outTsMs) *outTsMs = s.runtimeTsMs;
+    if (outTsMs) *outTsMs = s.stateTsMs;
     return POOLDEV_SVC_OK;
 }
 
@@ -333,6 +367,7 @@ PoolDeviceSvcStatus PoolDeviceModule::svcRefillTankImpl_(uint8_t slot, float rem
     }
 
     s.tankRemainingMl = remaining;
+    s.forceMetricsCommit = true;
     if (runtimeReady_) tickDevices_(millis());
     return POOLDEV_SVC_OK;
 }
@@ -407,6 +442,11 @@ bool PoolDeviceModule::handlePoolWrite_(const CommandRequest& req, char* reply, 
         return false;
     }
 
+    const char* label = deviceLabel(slot);
+    LOGI("Manual %s %s (slot=%u)",
+         requested ? "Start" : "Stop",
+         (label && label[0] != '\0') ? label : "Pool Device",
+         (unsigned)slot);
     snprintf(reply, replyLen, "{\"ok\":true,\"slot\":%u}", (unsigned)slot);
     return true;
 }
@@ -486,20 +526,34 @@ bool PoolDeviceModule::configureRuntime_()
         }
 
         s.lastTickMs = now;
-        s.runtimeTsMs = now;
+        s.stateTsMs = now;
+        s.metricsTsMs = now;
         s.lastRuntimeCommitMs = now;
 
-        PoolDeviceRuntimeEntry rt{};
-        rt.valid = true;
-        rt.enabled = s.def.enabled;
-        rt.desiredOn = s.desiredOn;
-        rt.actualOn = s.actualOn;
-        rt.type = s.def.type;
-        rt.blockReason = s.blockReason;
-        rt.tankRemainingMl = s.tankRemainingMl;
-        rt.timestampMs = s.runtimeTsMs;
+        PoolDeviceRuntimeStateEntry rtState{};
+        rtState.valid = true;
+        rtState.enabled = s.def.enabled;
+        rtState.desiredOn = s.desiredOn;
+        rtState.actualOn = s.actualOn;
+        rtState.type = s.def.type;
+        rtState.blockReason = s.blockReason;
+        rtState.tsMs = s.stateTsMs;
+
+        PoolDeviceRuntimeMetricsEntry rtMetrics{};
+        rtMetrics.valid = true;
+        rtMetrics.runningSecDay = toSeconds_(s.runningMsDay);
+        rtMetrics.runningSecWeek = toSeconds_(s.runningMsWeek);
+        rtMetrics.runningSecMonth = toSeconds_(s.runningMsMonth);
+        rtMetrics.runningSecTotal = toSeconds_(s.runningMsTotal);
+        rtMetrics.injectedMlDay = s.injectedMlDay;
+        rtMetrics.injectedMlWeek = s.injectedMlWeek;
+        rtMetrics.injectedMlMonth = s.injectedMlMonth;
+        rtMetrics.injectedMlTotal = s.injectedMlTotal;
+        rtMetrics.tankRemainingMl = s.tankRemainingMl;
+        rtMetrics.tsMs = s.metricsTsMs;
         if (dataStore_) {
-            (void)setPoolDeviceRuntime(*dataStore_, i, rt, DIRTY_SENSORS);
+            (void)setPoolDeviceRuntimeState(*dataStore_, i, rtState);
+            (void)setPoolDeviceRuntimeMetrics(*dataStore_, i, rtMetrics);
         }
     }
 
@@ -582,7 +636,9 @@ void PoolDeviceModule::tickDevices_(uint32_t nowMs)
     for (uint8_t i = 0; i < POOL_DEVICE_MAX; ++i) {
         PoolDeviceSlot& s = slots_[i];
         if (!s.used) continue;
-        bool changed = false;
+        bool stateChanged = false;
+        bool metricsChanged = (pending != 0U) || s.forceMetricsCommit;
+        s.forceMetricsCommit = false;
 
         if (s.lastTickMs == 0) s.lastTickMs = nowMs;
         const uint32_t deltaMs = (uint32_t)(nowMs - s.lastTickMs);
@@ -590,24 +646,24 @@ void PoolDeviceModule::tickDevices_(uint32_t nowMs)
 
         bool ioOn = false;
         if (readIoState_(s, ioOn)) {
-            if (s.actualOn != ioOn) changed = true;
+            if (s.actualOn != ioOn) stateChanged = true;
             s.actualOn = ioOn;
         }
 
         if (s.def.tankCapacityMl <= 0.0f) {
             if (s.tankRemainingMl != 0.0f) {
                 s.tankRemainingMl = 0.0f;
-                changed = true;
+                metricsChanged = true;
             }
         } else if (s.tankRemainingMl > s.def.tankCapacityMl) {
             s.tankRemainingMl = s.def.tankCapacityMl;
-            changed = true;
+            metricsChanged = true;
         }
 
         if (!s.def.enabled && s.desiredOn) {
             s.desiredOn = false;
             s.blockReason = POOL_DEVICE_BLOCK_DISABLED;
-            changed = true;
+            stateChanged = true;
         }
 
         if (s.actualOn && !dependenciesSatisfied_(i)) {
@@ -618,7 +674,7 @@ void PoolDeviceModule::tickDevices_(uint32_t nowMs)
             } else {
                 s.blockReason = POOL_DEVICE_BLOCK_IO_ERROR;
             }
-            changed = true;
+            stateChanged = true;
         }
 
         if (s.desiredOn && !s.actualOn) {
@@ -629,11 +685,11 @@ void PoolDeviceModule::tickDevices_(uint32_t nowMs)
                 } else {
                     s.blockReason = POOL_DEVICE_BLOCK_IO_ERROR;
                 }
-                changed = true;
+                stateChanged = true;
             } else {
                 s.desiredOn = false;
                 s.blockReason = POOL_DEVICE_BLOCK_INTERLOCK;
-                changed = true;
+                stateChanged = true;
             }
         } else if (!s.desiredOn && s.actualOn) {
             if (writeIo_(s.ioId, false)) {
@@ -642,7 +698,7 @@ void PoolDeviceModule::tickDevices_(uint32_t nowMs)
             } else {
                 s.blockReason = POOL_DEVICE_BLOCK_IO_ERROR;
             }
-            changed = true;
+            stateChanged = true;
         }
 
         if (s.actualOn && deltaMs > 0) {
@@ -666,34 +722,59 @@ void PoolDeviceModule::tickDevices_(uint32_t nowMs)
                 }
             }
             if ((uint32_t)(nowMs - s.lastRuntimeCommitMs) >= 1000U) {
-                changed = true;
+                metricsChanged = true;
             }
         }
 
-        if (changed) {
-            s.runtimeTsMs = nowMs;
+        if (dataStore_) {
+            PoolDeviceRuntimeStateEntry prevState{};
+            if (poolDeviceRuntimeState(*dataStore_, i, prevState) && prevState.valid) {
+                if ((prevState.enabled != s.def.enabled) ||
+                    (prevState.desiredOn != s.desiredOn) ||
+                    (prevState.actualOn != s.actualOn) ||
+                    (prevState.type != s.def.type) ||
+                    (prevState.blockReason != s.blockReason)) {
+                    stateChanged = true;
+                }
+            } else {
+                stateChanged = true;
+            }
+        }
+
+        if (stateChanged) {
+            s.stateTsMs = nowMs;
+        }
+        if (metricsChanged) {
+            s.metricsTsMs = nowMs;
             s.lastRuntimeCommitMs = nowMs;
         }
 
         if (dataStore_) {
-            PoolDeviceRuntimeEntry rt{};
-            rt.valid = true;
-            rt.enabled = s.def.enabled;
-            rt.desiredOn = s.desiredOn;
-            rt.actualOn = s.actualOn;
-            rt.type = s.def.type;
-            rt.blockReason = s.blockReason;
-            rt.runningSecDay = toSeconds_(s.runningMsDay);
-            rt.runningSecWeek = toSeconds_(s.runningMsWeek);
-            rt.runningSecMonth = toSeconds_(s.runningMsMonth);
-            rt.runningSecTotal = toSeconds_(s.runningMsTotal);
-            rt.injectedMlDay = s.injectedMlDay;
-            rt.injectedMlWeek = s.injectedMlWeek;
-            rt.injectedMlMonth = s.injectedMlMonth;
-            rt.injectedMlTotal = s.injectedMlTotal;
-            rt.tankRemainingMl = s.tankRemainingMl;
-            rt.timestampMs = s.runtimeTsMs;
-            (void)setPoolDeviceRuntime(*dataStore_, i, rt, DIRTY_SENSORS);
+            PoolDeviceRuntimeStateEntry rtState{};
+            rtState.valid = true;
+            rtState.enabled = s.def.enabled;
+            rtState.desiredOn = s.desiredOn;
+            rtState.actualOn = s.actualOn;
+            rtState.type = s.def.type;
+            rtState.blockReason = s.blockReason;
+            rtState.tsMs = s.stateTsMs;
+            (void)setPoolDeviceRuntimeState(*dataStore_, i, rtState);
+
+            if (metricsChanged) {
+                PoolDeviceRuntimeMetricsEntry rtMetrics{};
+                rtMetrics.valid = true;
+                rtMetrics.runningSecDay = toSeconds_(s.runningMsDay);
+                rtMetrics.runningSecWeek = toSeconds_(s.runningMsWeek);
+                rtMetrics.runningSecMonth = toSeconds_(s.runningMsMonth);
+                rtMetrics.runningSecTotal = toSeconds_(s.runningMsTotal);
+                rtMetrics.injectedMlDay = s.injectedMlDay;
+                rtMetrics.injectedMlWeek = s.injectedMlWeek;
+                rtMetrics.injectedMlMonth = s.injectedMlMonth;
+                rtMetrics.injectedMlTotal = s.injectedMlTotal;
+                rtMetrics.tankRemainingMl = s.tankRemainingMl;
+                rtMetrics.tsMs = s.metricsTsMs;
+                (void)setPoolDeviceRuntimeMetrics(*dataStore_, i, rtMetrics);
+            }
         }
     }
 }

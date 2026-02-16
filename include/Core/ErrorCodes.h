@@ -134,6 +134,24 @@ static inline bool writeErrorJson(char* out, size_t outLen, ErrorCode code, cons
     return ok;
 }
 
+static inline bool writeOkJson(char* out, size_t outLen, const char* where)
+{
+    if (!out || outLen == 0) return false;
+    const char* w = (where && where[0] != '\0') ? where : "unknown";
+    const int wrote = snprintf(
+        out,
+        outLen,
+        "{\"ok\":true,\"where\":\"%s\"}",
+        w
+    );
+    const bool ok = (wrote > 0) && ((size_t)wrote < outLen);
+    if (!ok) {
+        Log::warn("ErrCodes", "writeOkJson truncated (len=%u wrote=%d where=%s)",
+                  (unsigned)outLen, wrote, w);
+    }
+    return ok;
+}
+
 static inline bool writeErrorJsonWithSlot(char* out, size_t outLen, ErrorCode code, const char* where, uint8_t slot)
 {
     if (!out || outLen == 0) return false;

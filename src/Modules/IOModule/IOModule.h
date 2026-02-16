@@ -41,7 +41,7 @@ struct IOModuleConfig {
     uint8_t pcfMaskDefault = 0;
     bool pcfActiveLow = true;
     bool traceEnabled = true;
-    int32_t tracePeriodMs = 5000;
+    int32_t tracePeriodMs = (int32_t)Limits::IoTracePeriodMs;
 };
 
 enum IOAnalogSource : uint8_t {

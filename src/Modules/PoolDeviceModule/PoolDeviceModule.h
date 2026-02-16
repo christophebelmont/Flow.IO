@@ -82,8 +82,10 @@ private:
         float injectedMlMonth = 0.0f;
         float injectedMlTotal = 0.0f;
         float tankRemainingMl = 0.0f;
-        uint32_t runtimeTsMs = 0;
+        uint32_t stateTsMs = 0;
+        uint32_t metricsTsMs = 0;
         uint32_t lastRuntimeCommitMs = 0;
+        bool forceMetricsCommit = false;
     };
 
     static bool cmdPoolWrite_(void* userCtx, const CommandRequest& req, char* reply, size_t replyLen);
@@ -110,8 +112,9 @@ private:
     void resetDailyCounters_();
     void resetWeeklyCounters_();
     void resetMonthlyCounters_();
-    bool snapshotSlotFromIndex_(uint8_t snapshotIdx, uint8_t& slotIdxOut) const;
-    bool buildDeviceSnapshot_(uint8_t slotIdx, char* out, size_t len, uint32_t& maxTsOut) const;
+    bool snapshotRouteFromIndex_(uint8_t snapshotIdx, uint8_t& slotIdxOut, bool& metricsOut) const;
+    bool buildStateSnapshot_(uint8_t slotIdx, char* out, size_t len, uint32_t& maxTsOut) const;
+    bool buildMetricsSnapshot_(uint8_t slotIdx, char* out, size_t len, uint32_t& maxTsOut) const;
     bool dependenciesSatisfied_(uint8_t slotIdx) const;
     bool readIoState_(const PoolDeviceSlot& slot, bool& onOut) const;
     bool writeIo_(IoId ioId, bool on);

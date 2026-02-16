@@ -13,12 +13,12 @@
 /** @brief MQTT configuration values. */
 struct MQTTConfig {
     bool enabled = true;
-    char host[64] = "192.168.86.250";
-    int32_t port = 1883;
-    char user[32] = "";
-    char pass[32] = "";
-    char baseTopic[64] = "flowio"; // Default value
-    uint32_t sensorMinPublishMs = 10000;
+    char host[Limits::Mqtt::Buffers::Host] = "192.168.86.250";
+    int32_t port = Limits::Mqtt::Defaults::Port;
+    char user[Limits::Mqtt::Buffers::User] = "";
+    char pass[Limits::Mqtt::Buffers::Pass] = "";
+    char baseTopic[Limits::Mqtt::Buffers::BaseTopic] = "flowio"; // Default value
+    uint32_t sensorMinPublishMs = Limits::Mqtt::Defaults::SensorMinPublishMs;
     // reserved for future runtime publisher config
 };
 
@@ -50,7 +50,7 @@ public:
     /** @brief MQTT task loop. */
     void loop() override;
     /** @brief Extra stack for MQTT processing (JSON + snprintf heavy path). */
-    uint16_t taskStackSize() const override { return 6144; }
+    uint16_t taskStackSize() const override { return Limits::Mqtt::TaskStackSize; }
 
     struct RuntimePublisher {
         const char* topic = nullptr;
@@ -66,6 +66,7 @@ public:
     bool publish(const char* topic, const char* payload, int qos = 0, bool retain = false);
     void formatTopic(char* out, size_t outLen, const char* suffix) const;
     bool isConnected() const { return state == MQTTState::Connected; }
+    void setStartupReady(bool ready) { _startupReady = ready; }
     uint32_t activeSensorsDirtyMask() const { return sensorsActiveDirtyMask; }
     void setSensorsPublisher(const char* topic, bool (*build)(MQTTModule* self, char* out, size_t outLen)) {
         sensorsTopic = topic;
@@ -91,21 +92,17 @@ private:
     EventBus* eventBus = nullptr;
     DataStore* dataStore = nullptr;
 
-    char deviceId[24] = {0};
-    char topicCmd[128] = {0};
-    char topicAck[128] = {0};
-    char topicStatus[128] = {0};
-    char topicCfgSet[128] = {0};
-    char topicCfgAck[128] = {0};
-    static constexpr size_t MAX_PUBLISHERS = 8;
-    RuntimePublisher publishers[MAX_PUBLISHERS] = {};
+    char deviceId[Limits::Mqtt::Buffers::DeviceId] = {0};
+    char topicCmd[Limits::Mqtt::Buffers::Topic] = {0};
+    char topicAck[Limits::Mqtt::Buffers::Topic] = {0};
+    char topicStatus[Limits::Mqtt::Buffers::Topic] = {0};
+    char topicCfgSet[Limits::Mqtt::Buffers::Topic] = {0};
+    char topicCfgAck[Limits::Mqtt::Buffers::Topic] = {0};
+    RuntimePublisher publishers[Limits::Mqtt::Capacity::MaxPublishers] = {};
     uint8_t publisherCount = 0;
-    // Max number of config module blocks published as cfg/<module>.
-    // Keep this above the total number of module paths declared in ConfigStore.
-    static constexpr size_t CFG_TOPIC_MAX = 48;
-    const char* cfgModules[CFG_TOPIC_MAX] = {nullptr};
+    const char* cfgModules[Limits::Mqtt::Capacity::CfgTopicMax] = {nullptr};
     uint8_t cfgModuleCount = 0;
-    char topicCfgBlocks[CFG_TOPIC_MAX][128] = {{0}};
+    char topicCfgBlocks[Limits::Mqtt::Capacity::CfgTopicMax][Limits::Mqtt::Buffers::Topic] = {{0}};
 
     const char* sensorsTopic = nullptr;
     bool (*sensorsBuild)(MQTTModule* self, char* out, size_t outLen) = nullptr;
@@ -115,14 +112,14 @@ private:
     uint32_t lastSensorsPublishMs = 0;
 
     struct RxMsg {
-        char topic[128];
-        char payload[384];
+        char topic[Limits::Mqtt::Buffers::RxTopic];
+        char payload[Limits::Mqtt::Buffers::RxPayload];
     };
     QueueHandle_t rxQ = nullptr;
-    char ackBuf[512] = {0};
-    char replyBuf[256] = {0};
-    char stateCfgBuf[768] = {0};
-    char publishBuf[1536] = {0};
+    char ackBuf[Limits::Mqtt::Buffers::Ack] = {0};
+    char replyBuf[Limits::Mqtt::Buffers::Reply] = {0};
+    char stateCfgBuf[Limits::Mqtt::Buffers::StateCfg] = {0};
+    char publishBuf[Limits::Mqtt::Buffers::Publish] = {0};
     MqttService mqttSvc{ nullptr, nullptr, nullptr, nullptr };
 
     ConfigVariable<char,0> hostVar {
@@ -182,8 +179,10 @@ private:
 
     // ---- retry backoff ----
     uint8_t _retryCount = 0;
-    uint32_t _retryDelayMs = Limits::MqttBackoffMinMs;
+    uint32_t _retryDelayMs = Limits::Mqtt::Backoff::MinMs;
+    bool _startupReady = false;
     volatile bool _pendingPublish = false;
+    volatile uint32_t _suppressConfigChangedUntilMs = 0;
 
     uint32_t rxDropCount_ = 0;
     uint32_t parseFailCount_ = 0;
@@ -192,6 +191,7 @@ private:
 
     void processRxCmd_(const RxMsg& msg);
     void processRxCfgSet_(const RxMsg& msg);
+    bool publishConfigModuleByName_(const char* module, bool retained);
     void publishRxError_(const char* ackTopic, ErrorCode code, const char* where, bool parseFailure);
     void syncRxMetrics_();
     void countRxDrop_();

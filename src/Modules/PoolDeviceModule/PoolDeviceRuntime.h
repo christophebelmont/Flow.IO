@@ -13,27 +13,51 @@
 
 // RUNTIME_PUBLIC
 
-constexpr DataKey DATAKEY_POOL_DEVICE_BASE = DataKeys::PoolDeviceBase;
-static_assert(POOL_DEVICE_MAX <= DataKeys::PoolDeviceReservedCount, "DataKeys::PoolDeviceReservedCount too small for pool device slots");
+constexpr DataKey DATAKEY_POOL_DEVICE_STATE_BASE = DataKeys::PoolDeviceStateBase;
+constexpr DataKey DATAKEY_POOL_DEVICE_METRICS_BASE = DataKeys::PoolDeviceMetricsBase;
+static_assert(POOL_DEVICE_MAX <= DataKeys::PoolDeviceStateReservedCount, "DataKeys::PoolDeviceStateReservedCount too small for pool device slots");
+static_assert(POOL_DEVICE_MAX <= DataKeys::PoolDeviceMetricsReservedCount, "DataKeys::PoolDeviceMetricsReservedCount too small for pool device slots");
 
-static inline bool poolDeviceRuntime(const DataStore& ds, uint8_t idx, PoolDeviceRuntimeEntry& out)
+static inline bool poolDeviceRuntimeState(const DataStore& ds, uint8_t idx, PoolDeviceRuntimeStateEntry& out)
 {
     if (idx >= POOL_DEVICE_MAX) return false;
-    out = ds.data().pool.devices[idx];
+    out = ds.data().pool.state[idx];
     return out.valid;
 }
 
-static inline bool setPoolDeviceRuntime(DataStore& ds, uint8_t idx,
-                                        const PoolDeviceRuntimeEntry& in,
-                                        uint32_t dirtyMask = DIRTY_SENSORS)
+static inline bool poolDeviceRuntimeMetrics(const DataStore& ds, uint8_t idx, PoolDeviceRuntimeMetricsEntry& out)
+{
+    if (idx >= POOL_DEVICE_MAX) return false;
+    out = ds.data().pool.metrics[idx];
+    return out.valid;
+}
+
+static inline bool setPoolDeviceRuntimeState(DataStore& ds, uint8_t idx,
+                                             const PoolDeviceRuntimeStateEntry& in,
+                                             uint32_t dirtyMask = DIRTY_ACTUATORS)
 {
     if (idx >= POOL_DEVICE_MAX) return false;
 
     RuntimeData& rt = ds.dataMutable();
-    PoolDeviceRuntimeEntry& cur = rt.pool.devices[idx];
-    if (memcmp(&cur, &in, sizeof(PoolDeviceRuntimeEntry)) == 0) return false;
+    PoolDeviceRuntimeStateEntry& cur = rt.pool.state[idx];
+    if (memcmp(&cur, &in, sizeof(PoolDeviceRuntimeStateEntry)) == 0) return false;
 
     cur = in;
-    ds.notifyChanged((DataKey)(DATAKEY_POOL_DEVICE_BASE + idx), dirtyMask);
+    ds.notifyChanged((DataKey)(DATAKEY_POOL_DEVICE_STATE_BASE + idx), dirtyMask);
+    return true;
+}
+
+static inline bool setPoolDeviceRuntimeMetrics(DataStore& ds, uint8_t idx,
+                                               const PoolDeviceRuntimeMetricsEntry& in,
+                                               uint32_t dirtyMask = DIRTY_SENSORS)
+{
+    if (idx >= POOL_DEVICE_MAX) return false;
+
+    RuntimeData& rt = ds.dataMutable();
+    PoolDeviceRuntimeMetricsEntry& cur = rt.pool.metrics[idx];
+    if (memcmp(&cur, &in, sizeof(PoolDeviceRuntimeMetricsEntry)) == 0) return false;
+
+    cur = in;
+    ds.notifyChanged((DataKey)(DATAKEY_POOL_DEVICE_METRICS_BASE + idx), dirtyMask);
     return true;
 }

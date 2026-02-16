@@ -21,13 +21,18 @@ enum PoolDeviceRuntimeBlockReason : uint8_t {
     POOL_DEVICE_BLOCK_IO_ERROR = 3
 };
 
-struct PoolDeviceRuntimeEntry {
+struct PoolDeviceRuntimeStateEntry {
     bool valid = false;
     bool enabled = false;
     bool desiredOn = false;
     bool actualOn = false;
     uint8_t type = POOL_DEVICE_RT_RELAY_STD;
     uint8_t blockReason = POOL_DEVICE_BLOCK_NONE;
+    uint32_t tsMs = 0;
+};
+
+struct PoolDeviceRuntimeMetricsEntry {
+    bool valid = false;
     uint32_t runningSecDay = 0;
     uint32_t runningSecWeek = 0;
     uint32_t runningSecMonth = 0;
@@ -37,11 +42,12 @@ struct PoolDeviceRuntimeEntry {
     float injectedMlMonth = 0.0f;
     float injectedMlTotal = 0.0f;
     float tankRemainingMl = 0.0f;
-    uint32_t timestampMs = 0;
+    uint32_t tsMs = 0;
 };
 
 struct PoolDeviceRuntimeData {
-    PoolDeviceRuntimeEntry devices[POOL_DEVICE_MAX];
+    PoolDeviceRuntimeStateEntry state[POOL_DEVICE_MAX];
+    PoolDeviceRuntimeMetricsEntry metrics[POOL_DEVICE_MAX];
 };
 
 // MODULE_DATA_MODEL: PoolDeviceRuntimeData pool

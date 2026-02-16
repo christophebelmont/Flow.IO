@@ -515,7 +515,8 @@ bool IOModule::processAnalogDefinition_(uint8_t idx, uint32_t nowMs)
     bool isAdsSource = (slot.def.source == IO_SRC_ADS_INTERNAL_SINGLE) ||
                        (slot.def.source == IO_SRC_ADS_EXTERNAL_DIFF);
     if (cfgData_.traceEnabled && isAdsSource && idx < 3) {
-        uint32_t periodMs = (cfgData_.tracePeriodMs > 0) ? (uint32_t)cfgData_.tracePeriodMs : 5000U;
+        uint32_t periodMs =
+            (cfgData_.tracePeriodMs > 0) ? (uint32_t)cfgData_.tracePeriodMs : Limits::IoTracePeriodMs;
         uint32_t& lastMs = analogCalcLogLastMs_[idx];
         if (lastMs == 0U || (uint32_t)(nowMs - lastMs) >= periodMs) {
             const char* sensor = (idx == 0) ? "ORP" : ((idx == 1) ? "pH" : "PSI");

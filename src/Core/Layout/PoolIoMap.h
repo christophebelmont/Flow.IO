@@ -20,15 +20,24 @@ struct PoolIoBinding {
     const char* haIcon = nullptr;
 };
 
+static constexpr uint8_t POOL_IO_SLOT_FILTRATION_PUMP = 0;
+static constexpr uint8_t POOL_IO_SLOT_PH_PUMP = 1;
+static constexpr uint8_t POOL_IO_SLOT_CHLORINE_PUMP = 2;
+static constexpr uint8_t POOL_IO_SLOT_ROBOT = 3;
+static constexpr uint8_t POOL_IO_SLOT_FILL_PUMP = 4;
+static constexpr uint8_t POOL_IO_SLOT_CHLORINE_GENERATOR = 5;
+static constexpr uint8_t POOL_IO_SLOT_LIGHTS = 6;
+static constexpr uint8_t POOL_IO_SLOT_WATER_HEATER = 7;
+
 static constexpr PoolIoBinding FLOW_POOL_IO_BINDINGS[] = {
-    {0, (IoId)(IO_ID_DO_BASE + 0), "filtration_pump",   "Filtration Pump",   "mdi:pool"},
-    {1, (IoId)(IO_ID_DO_BASE + 1), "ph_pump",           "pH Pump",           "mdi:beaker-outline"},
-    {2, (IoId)(IO_ID_DO_BASE + 2), "chlorine_pump",     "Chlorine Pump",     "mdi:water-outline"},
-    {5, (IoId)(IO_ID_DO_BASE + 3), "chlorine_generator","Chlorine Generator","mdi:flash"},
-    {3, (IoId)(IO_ID_DO_BASE + 4), "robot",             "Robot",             "mdi:robot-vacuum"},
-    {6, (IoId)(IO_ID_DO_BASE + 5), "lights",            "Lights",            "mdi:lightbulb"},
-    {4, (IoId)(IO_ID_DO_BASE + 6), "fill_pump",         "Fill Pump",         "mdi:water-plus"},
-    {7, (IoId)(IO_ID_DO_BASE + 7), "water_heater",      "Water Heater",      "mdi:water-boiler"},
+    {POOL_IO_SLOT_FILTRATION_PUMP,   (IoId)(IO_ID_DO_BASE + 0), "filtration_pump",    "Filtration Pump",    "mdi:pool"},
+    {POOL_IO_SLOT_PH_PUMP,           (IoId)(IO_ID_DO_BASE + 1), "ph_pump",            "pH Pump",            "mdi:beaker-outline"},
+    {POOL_IO_SLOT_CHLORINE_PUMP,     (IoId)(IO_ID_DO_BASE + 2), "chlorine_pump",      "Chlorine Pump",      "mdi:water-outline"},
+    {POOL_IO_SLOT_CHLORINE_GENERATOR,(IoId)(IO_ID_DO_BASE + 3), "chlorine_generator", "Chlorine Generator", "mdi:flash"},
+    {POOL_IO_SLOT_ROBOT,             (IoId)(IO_ID_DO_BASE + 4), "robot",              "Robot",              "mdi:robot-vacuum"},
+    {POOL_IO_SLOT_LIGHTS,            (IoId)(IO_ID_DO_BASE + 5), "lights",             "Lights",             "mdi:lightbulb"},
+    {POOL_IO_SLOT_FILL_PUMP,         (IoId)(IO_ID_DO_BASE + 6), "fill_pump",          "Fill Pump",          "mdi:water-plus"},
+    {POOL_IO_SLOT_WATER_HEATER,      (IoId)(IO_ID_DO_BASE + 7), "water_heater",       "Water Heater",       "mdi:water-boiler"},
 };
 
 static constexpr uint8_t FLOW_POOL_IO_BINDING_COUNT =

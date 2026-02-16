@@ -100,6 +100,8 @@ struct RuntimeSnapshotRoute {
     char topic[Limits::TopicBuf] = {0};
     uint32_t dirtyMask = DIRTY_SENSORS;
     uint32_t lastPublishedTs = 0;
+    bool startupForce = false;
+    bool startupPublished = false;
 };
 static RuntimeSnapshotRoute gRuntimeRoutes[Limits::MaxRuntimeRoutes]{};
 static uint8_t gRuntimeRouteCount = 0;
@@ -166,8 +168,20 @@ static bool registerRuntimeProvider(MQTTModule& mqtt, const IRuntimeSnapshotProv
         RuntimeSnapshotRoute& route = gRuntimeRoutes[gRuntimeRouteCount++];
         route.provider = provider;
         route.snapshotIdx = idx;
-        route.dirtyMask = (strncmp(suffix, "rt/io/output/", 13) == 0) ? DIRTY_ACTUATORS : DIRTY_SENSORS;
+        if (strncmp(suffix, "rt/io/output/", 13) == 0) {
+            route.dirtyMask = DIRTY_ACTUATORS;
+        } else if (strncmp(suffix, "rt/pdm/state/", 13) == 0) {
+            route.dirtyMask = DIRTY_ACTUATORS;
+        } else if (strncmp(suffix, "rt/pdm/metrics/", 15) == 0) {
+            route.dirtyMask = DIRTY_SENSORS;
+        } else {
+            route.dirtyMask = DIRTY_SENSORS;
+        }
+        route.startupForce =
+            (strncmp(suffix, "rt/io/output/", 13) == 0) ||
+            (strncmp(suffix, "rt/pdm/state/", 13) == 0);
         route.lastPublishedTs = 0;
+        route.startupPublished = false;
         mqtt.formatTopic(route.topic, sizeof(route.topic), suffix);
         any = true;
     }
@@ -191,7 +205,8 @@ static bool publishRuntimeStates(MQTTModule* mqtt, char* out, size_t len) {
     for (uint8_t i = 0; i < gRuntimeRouteCount; ++i) {
         RuntimeSnapshotRoute& route = gRuntimeRoutes[i];
         if (!route.provider) continue;
-        if ((route.dirtyMask & activeDirtyMask) == 0U) {
+        const bool forceStartupRoute = route.startupForce && !route.startupPublished;
+        if (!forceStartupRoute && (route.dirtyMask & activeDirtyMask) == 0U) {
             ++st.routesSkippedMask;
             continue;
         }
@@ -201,13 +216,14 @@ static bool publishRuntimeStates(MQTTModule* mqtt, char* out, size_t len) {
             ++st.buildErrors;
             continue;
         }
-        if (ts <= route.lastPublishedTs) {
+        if (!forceStartupRoute && ts <= route.lastPublishedTs) {
             ++st.routesSkippedNoChange;
             continue;
         }
 
         if (mqtt->publish(route.topic, out, 0, false)) {
             route.lastPublishedTs = ts;
+            if (route.startupForce) route.startupPublished = true;
             ++st.routesPublished;
         } else {
             ++st.publishErrors;
@@ -460,16 +476,16 @@ void setup() {
         pd.ioId = b->ioId;
         pd.type = POOL_DEVICE_RELAY_STD;
 
-        if (slot == 0) {
+        if (slot == POOL_IO_SLOT_FILTRATION_PUMP) {
             pd.type = POOL_DEVICE_FILTRATION;
-        } else if (slot == 1 || slot == 2) {
+        } else if (slot == POOL_IO_SLOT_PH_PUMP || slot == POOL_IO_SLOT_CHLORINE_PUMP) {
             pd.type = POOL_DEVICE_PERISTALTIC;
             pd.flowLPerHour = 1.2f;
             pd.tankCapacityMl = 20000.0f;
             pd.tankInitialMl = 20000.0f;
-            pd.dependsOnMask = (uint8_t)(1u << 0);
-        } else if (slot == 3) {
-            pd.dependsOnMask = (uint8_t)(1u << 0);
+            pd.dependsOnMask = (uint8_t)(1u << POOL_IO_SLOT_FILTRATION_PUMP);
+        } else if (slot == POOL_IO_SLOT_CHLORINE_GENERATOR || slot == POOL_IO_SLOT_ROBOT) {
+            pd.dependsOnMask = (uint8_t)(1u << POOL_IO_SLOT_FILTRATION_PUMP);
         }
 
         requireSetup(poolDeviceModule.defineDevice(pd), "define pool device");
@@ -495,6 +511,7 @@ void setup() {
     mqttModule.addRuntimePublisher(topicRuntimeState, 30000, 0, false, buildRuntimeMuxState);
     mqttModule.addRuntimePublisher(topicNetworkState, 60000, 0, false, buildNetworkSnapshot);
     mqttModule.addRuntimePublisher(topicSystemState, 60000, 0, false, buildSystemSnapshot);
+    mqttModule.setStartupReady(true);
 
     /*xTaskCreatePinnedToCore(
         ledRandomTask,
