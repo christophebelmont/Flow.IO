@@ -29,6 +29,8 @@ public:
 
     /** @brief Initialize module and register services/config. */
     virtual void init(ConfigStore& cfg, ServiceRegistry& services) = 0;
+    /** @brief Called once all persistent config values are loaded. */
+    virtual void onConfigLoaded(ConfigStore&, ServiceRegistry&) {}
     /** @brief Main module loop called from the module task. */
     virtual void loop() = 0;
 

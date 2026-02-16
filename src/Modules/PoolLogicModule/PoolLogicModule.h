@@ -21,7 +21,7 @@ public:
     const char* moduleId() const override { return "poollogic"; }
     const char* taskName() const override { return "poollogic"; }
 
-    uint8_t dependencyCount() const override { return 7; }
+    uint8_t dependencyCount() const override { return 8; }
     const char* dependency(uint8_t i) const override {
         if (i == 0) return "loghub";
         if (i == 1) return "eventbus";
@@ -30,6 +30,7 @@ public:
         if (i == 4) return "pooldev";
         if (i == 5) return "ha";
         if (i == 6) return "cmd";
+        if (i == 7) return "alarms";
         return nullptr;
     }
 
@@ -74,6 +75,8 @@ private:
     float waterTempSetpoint_ = PoolDefaults::TempHigh;
     uint8_t filtrationStartMin_ = PoolDefaults::FiltrationStartMinHour;
     uint8_t filtrationStopMax_ = PoolDefaults::FiltrationStopMaxHour;
+    uint8_t filtrationCalcStart_ = PoolDefaults::FiltrationStartMinHour;
+    uint8_t filtrationCalcStop_ = PoolDefaults::FiltrationStopMaxHour;
 
     // Sensor IO ids for IOServiceV2 reads.
     // Stored as uint8_t because current static id map stays <= 255.
@@ -127,6 +130,7 @@ private:
     const PoolDeviceService* poolSvc_ = nullptr;
     const HAService* haSvc_ = nullptr;
     const CommandService* cmdSvc_ = nullptr;
+    const AlarmService* alarmSvc_ = nullptr;
     const LogHubService* logHub_ = nullptr;
 
     ConfigVariable<bool,0> enabledVar_{NVS_KEY(NvsKeys::PoolLogic::Enabled), "enabled", "poollogic", ConfigType::Bool,
@@ -153,6 +157,10 @@ private:
                                            &filtrationStartMin_, ConfigPersistence::Persistent, 0};
     ConfigVariable<uint8_t,0> stopMaxVar_{NVS_KEY(NvsKeys::PoolLogic::FiltrationStopMax), "filtration_stop_max", "poollogic", ConfigType::UInt8,
                                           &filtrationStopMax_, ConfigPersistence::Persistent, 0};
+    ConfigVariable<uint8_t,0> calcStartVar_{NVS_KEY(NvsKeys::PoolLogic::FiltrationCalcStart), "filtration_start_calc", "poollogic", ConfigType::UInt8,
+                                            &filtrationCalcStart_, ConfigPersistence::Runtime, 0};
+    ConfigVariable<uint8_t,0> calcStopVar_{NVS_KEY(NvsKeys::PoolLogic::FiltrationCalcStop), "filtration_stop_calc", "poollogic", ConfigType::UInt8,
+                                           &filtrationCalcStop_, ConfigPersistence::Runtime, 0};
 
     ConfigVariable<uint8_t,0> orpIdVar_{NVS_KEY(NvsKeys::PoolLogic::OrpIoId), "orp_io_id", "poollogic", ConfigType::UInt8,
                                         &orpIoId_, ConfigPersistence::Persistent, 0};
@@ -203,13 +211,19 @@ private:
     static void onEventStatic_(const Event& e, void* user);
     void onEvent_(const Event& e);
     static bool cmdFiltrationWriteStatic_(void* userCtx, const CommandRequest& req, char* reply, size_t replyLen);
+    static bool cmdFiltrationRecalcStatic_(void* userCtx, const CommandRequest& req, char* reply, size_t replyLen);
     static bool cmdAutoModeSetStatic_(void* userCtx, const CommandRequest& req, char* reply, size_t replyLen);
+    static AlarmCondState condPsiLowStatic_(void* ctx, uint32_t nowMs);
+    static AlarmCondState condPsiHighStatic_(void* ctx, uint32_t nowMs);
     bool cmdFiltrationWrite_(const CommandRequest& req, char* reply, size_t replyLen);
+    bool cmdFiltrationRecalc_(const CommandRequest& req, char* reply, size_t replyLen);
     bool cmdAutoModeSet_(const CommandRequest& req, char* reply, size_t replyLen);
 
     void ensureDailySlot_();
     bool computeFiltrationWindow_(float waterTemp, uint8_t& startHourOut, uint8_t& stopHourOut, uint8_t& durationOut);
-    void recalcAndApplyFiltrationWindow_();
+    bool recalcAndApplyFiltrationWindow_(uint8_t* startHourOut = nullptr,
+                                         uint8_t* stopHourOut = nullptr,
+                                         uint8_t* durationOut = nullptr);
 
     bool readDeviceActualOn_(uint8_t deviceSlot, bool& onOut) const;
     bool writeDeviceDesired_(uint8_t deviceSlot, bool on);

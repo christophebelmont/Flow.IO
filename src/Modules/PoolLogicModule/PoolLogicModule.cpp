@@ -92,6 +92,8 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
     cfg.registerVar(tempSetpointVar_);
     cfg.registerVar(startMinVar_);
     cfg.registerVar(stopMaxVar_);
+    cfg.registerVar(calcStartVar_);
+    cfg.registerVar(calcStopVar_);
 
     cfg.registerVar(orpIdVar_);
     cfg.registerVar(psiIdVar_);
@@ -126,6 +128,7 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
     poolSvc_ = services.get<PoolDeviceService>("pooldev");
     haSvc_ = services.get<HAService>("ha");
     cmdSvc_ = services.get<CommandService>("cmd");
+    alarmSvc_ = services.get<AlarmService>("alarms");
     if (!ioSvc_) {
         LOGW("PoolLogic waiting for IOServiceV2");
     }
@@ -153,7 +156,7 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
             "calculated_filtration_start",
             "Calculated Filtration Start",
             "cfg/poollogic",
-            "{{ value_json.filtration_start_min | int(0) }}",
+            "{{ value_json.filtration_start_calc | int(0) }}",
             nullptr,
             "mdi:clock-start",
             "h"
@@ -163,7 +166,7 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
             "calculated_filtration_stop",
             "Calculated Filtration Stop",
             "cfg/poollogic",
-            "{{ value_json.filtration_stop_max | int(0) }}",
+            "{{ value_json.filtration_stop_calc | int(0) }}",
             nullptr,
             "mdi:clock-end",
             "h"
@@ -173,7 +176,41 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
     }
     if (cmdSvc_ && cmdSvc_->registerHandler) {
         cmdSvc_->registerHandler(cmdSvc_->ctx, "poollogic.filtration.write", &PoolLogicModule::cmdFiltrationWriteStatic_, this);
+        cmdSvc_->registerHandler(cmdSvc_->ctx, "poollogic.filtration.recalc", &PoolLogicModule::cmdFiltrationRecalcStatic_, this);
         cmdSvc_->registerHandler(cmdSvc_->ctx, "poollogic.auto_mode.set", &PoolLogicModule::cmdAutoModeSetStatic_, this);
+    }
+    if (alarmSvc_ && alarmSvc_->registerAlarm) {
+        const AlarmRegistration psiLowAlarm{
+            AlarmId::PoolPsiLow,
+            AlarmSeverity::Alarm,
+            true,
+            2000,
+            1000,
+            60000,
+            "psi_low",
+            "Low pressure",
+            "poollogic"
+        };
+        if (!alarmSvc_->registerAlarm(alarmSvc_->ctx, &psiLowAlarm, &PoolLogicModule::condPsiLowStatic_, this)) {
+            LOGW("PoolLogic failed to register AlarmId::PoolPsiLow");
+        }
+
+        const AlarmRegistration psiHighAlarm{
+            AlarmId::PoolPsiHigh,
+            AlarmSeverity::Critical,
+            true,
+            0,
+            1000,
+            60000,
+            "psi_high",
+            "High pressure",
+            "poollogic"
+        };
+        if (!alarmSvc_->registerAlarm(alarmSvc_->ctx, &psiHighAlarm, &PoolLogicModule::condPsiHighStatic_, this)) {
+            LOGW("PoolLogic failed to register AlarmId::PoolPsiHigh");
+        }
+    } else {
+        LOGW("PoolLogic running without alarm service");
     }
 
     if (eventBus_) {
@@ -197,6 +234,36 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
     (void)logHub_;
 }
 
+AlarmCondState PoolLogicModule::condPsiLowStatic_(void* ctx, uint32_t nowMs)
+{
+    PoolLogicModule* self = static_cast<PoolLogicModule*>(ctx);
+    if (!self || !self->enabled_) return AlarmCondState::False;
+    if (!self->filtrationFsm_.on) return AlarmCondState::False;
+    const uint32_t runSec = self->stateUptimeSec_(self->filtrationFsm_, nowMs);
+    if (runSec <= self->psiStartupDelaySec_) return AlarmCondState::False;
+
+    float psi = 0.0f;
+    if (!self->loadAnalogSensor_(self->psiIoId_, psi)) {
+        return AlarmCondState::Unknown;
+    }
+
+    return (psi < self->psiLowThreshold_) ? AlarmCondState::True : AlarmCondState::False;
+}
+
+AlarmCondState PoolLogicModule::condPsiHighStatic_(void* ctx, uint32_t)
+{
+    PoolLogicModule* self = static_cast<PoolLogicModule*>(ctx);
+    if (!self || !self->enabled_) return AlarmCondState::False;
+    if (!self->filtrationFsm_.on) return AlarmCondState::False;
+
+    float psi = 0.0f;
+    if (!self->loadAnalogSensor_(self->psiIoId_, psi)) {
+        return AlarmCondState::Unknown;
+    }
+
+    return (psi > self->psiHighThreshold_) ? AlarmCondState::True : AlarmCondState::False;
+}
+
 bool PoolLogicModule::cmdFiltrationWriteStatic_(void* userCtx,
                                                 const CommandRequest& req,
                                                 char* reply,
@@ -215,6 +282,16 @@ bool PoolLogicModule::cmdAutoModeSetStatic_(void* userCtx,
     PoolLogicModule* self = static_cast<PoolLogicModule*>(userCtx);
     if (!self) return false;
     return self->cmdAutoModeSet_(req, reply, replyLen);
+}
+
+bool PoolLogicModule::cmdFiltrationRecalcStatic_(void* userCtx,
+                                                 const CommandRequest& req,
+                                                 char* reply,
+                                                 size_t replyLen)
+{
+    PoolLogicModule* self = static_cast<PoolLogicModule*>(userCtx);
+    if (!self) return false;
+    return self->cmdFiltrationRecalc_(req, reply, replyLen);
 }
 
 bool PoolLogicModule::cmdFiltrationWrite_(const CommandRequest& req, char* reply, size_t replyLen)
@@ -258,6 +335,22 @@ bool PoolLogicModule::cmdFiltrationWrite_(const CommandRequest& req, char* reply
     snprintf(reply, replyLen, "{\"ok\":true,\"slot\":%u,\"value\":%s,\"auto_mode\":false}",
              (unsigned)filtrationDeviceSlot_,
              requested ? "true" : "false");
+    return true;
+}
+
+bool PoolLogicModule::cmdFiltrationRecalc_(const CommandRequest&, char* reply, size_t replyLen)
+{
+    if (!enabled_) {
+        writeCmdError_(reply, replyLen, "poollogic.filtration.recalc", ErrorCode::Disabled);
+        return false;
+    }
+
+    // Match scheduler-trigger behavior: queue the recalc and let loop() own execution.
+    portENTER_CRITICAL(&pendingMux_);
+    pendingDailyRecalc_ = true;
+    portEXIT_CRITICAL(&pendingMux_);
+
+    snprintf(reply, replyLen, "{\"ok\":true,\"queued\":true}");
     return true;
 }
 
@@ -308,7 +401,7 @@ void PoolLogicModule::loop()
     portEXIT_CRITICAL(&pendingMux_);
 
     if (doRecalc) {
-        recalcAndApplyFiltrationWindow_();
+        (void)recalcAndApplyFiltrationWindow_();
     }
 
     if (doDayReset) {
@@ -408,21 +501,23 @@ bool PoolLogicModule::computeFiltrationWindow_(float waterTemp, uint8_t& startHo
     return true;
 }
 
-void PoolLogicModule::recalcAndApplyFiltrationWindow_()
+bool PoolLogicModule::recalcAndApplyFiltrationWindow_(uint8_t* startHourOut,
+                                                      uint8_t* stopHourOut,
+                                                      uint8_t* durationOut)
 {
     if (!ioSvc_ || !ioSvc_->readAnalog) {
         LOGW("No IOServiceV2 available for water temperature");
-        return;
+        return false;
     }
     if (!schedSvc_ || !schedSvc_->setSlot) {
         LOGW("No time.scheduler service available");
-        return;
+        return false;
     }
 
     float waterTemp = 0.0f;
     if (!loadAnalogSensor_(waterTempIoId_, waterTemp)) {
         LOGW("Water temperature unavailable on ioId=%u", (unsigned)waterTempIoId_);
-        return;
+        return false;
     }
 
     uint8_t startHour = 0;
@@ -430,7 +525,7 @@ void PoolLogicModule::recalcAndApplyFiltrationWindow_()
     uint8_t duration = 0;
     if (!computeFiltrationWindow_(waterTemp, startHour, stopHour, duration)) {
         LOGW("Invalid water temperature value");
-        return;
+        return false;
     }
 
     TimeSchedulerSlot window{};
@@ -452,14 +547,25 @@ void PoolLogicModule::recalcAndApplyFiltrationWindow_()
 
     if (!schedSvc_->setSlot(schedSvc_->ctx, &window)) {
         LOGW("Failed to set filtration window slot=%u", (unsigned)SLOT_FILTR_WINDOW);
-        return;
+        return false;
     }
+
+    filtrationCalcStart_ = startHour;
+    filtrationCalcStop_ = stopHour;
+    if (cfgStore_) {
+        (void)cfgStore_->set(calcStartVar_, startHour);
+        (void)cfgStore_->set(calcStopVar_, stopHour);
+    }
+    if (startHourOut) *startHourOut = startHour;
+    if (stopHourOut) *stopHourOut = stopHour;
+    if (durationOut) *durationOut = duration;
 
     LOGI("Filtration duration=%uh water=%.2fC start=%uh stop=%uh",
          (unsigned)duration,
          (double)waterTemp,
          (unsigned)startHour,
          (unsigned)stopHour);
+    return true;
 }
 
 bool PoolLogicModule::readDeviceActualOn_(uint8_t deviceSlot, bool& onOut) const
@@ -587,7 +693,11 @@ void PoolLogicModule::runControlLoop_(uint32_t nowMs)
     const bool haveOrp = loadAnalogSensor_(orpIoId_, orp);
     const bool haveLevel = loadDigitalSensor_(levelIoId_, levelOk);
 
-    if (filtrationFsm_.on && havePsi) {
+    if (alarmSvc_ && alarmSvc_->isActive) {
+        const bool psiLow = alarmSvc_->isActive(alarmSvc_->ctx, AlarmId::PoolPsiLow);
+        const bool psiHigh = alarmSvc_->isActive(alarmSvc_->ctx, AlarmId::PoolPsiHigh);
+        psiError_ = psiLow || psiHigh;
+    } else if (filtrationFsm_.on && havePsi) {
         const uint32_t runSec = stateUptimeSec_(filtrationFsm_, nowMs);
         const bool underPressure = (runSec > psiStartupDelaySec_) && (psi < psiLowThreshold_);
         const bool overPressure = (psi > psiHighThreshold_);

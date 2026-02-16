@@ -136,4 +136,16 @@ constexpr uint32_t IoTracePeriodMs = 10000;
 /** @brief HA command payload buffer length for IO output switches (`IOModule::haSwitchPayloadOn_/Off_`). */
 constexpr size_t IoHaSwitchPayloadBuf = 128;
 
+/** @brief Alarm engine compile-time capacities and defaults. */
+namespace Alarm {
+/** @brief Maximum number of alarm slots managed by `AlarmModule`. */
+constexpr uint16_t MaxAlarms = 16;
+/** @brief Maximum JSON buffer used for alarm snapshot serialization. */
+constexpr size_t SnapshotJsonBuf = 768;
+/** @brief Default alarm evaluation period in ms (`AlarmModule::loop`). */
+constexpr uint32_t DefaultEvalPeriodMs = 250;
+/** @brief JSON capacity for alarm command args parsing. */
+constexpr size_t JsonCmdBuf = 256;
+}  // namespace Alarm
+
 }  // namespace Limits

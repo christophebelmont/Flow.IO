@@ -40,6 +40,7 @@
 #include "Modules/PoolLogicModule/PoolLogicModule.h"
 #include "Modules/EventBusModule/EventBusModule.h"
 #include "Modules/CommandModule/CommandModule.h"
+#include "Modules/AlarmModule/AlarmModule.h"
 
 #include "Core/Layout/PoolIoMap.h"
 #include "Core/Layout/PoolSensorMap.h"
@@ -80,6 +81,7 @@ static LogSerialSinkModule  logSerialSinkModule;
 static LogDispatcherModule  logDispatcherModule;
 static LogHubModule         logHubModule;
 static EventBusModule       eventBusModule;
+static AlarmModule          alarmModule;
 static IOModule             ioModule;
 static PoolDeviceModule     poolDeviceModule;
 static PoolLogicModule      poolLogicModule;
@@ -335,6 +337,7 @@ void setup() {
     moduleManager.add(&configStoreModule);
     moduleManager.add(&dataStoreModule);
     moduleManager.add(&commandModule);
+    moduleManager.add(&alarmModule);
     moduleManager.add(&wifiModule);
     moduleManager.add(&timeModule);
     moduleManager.add(&mqttModule);

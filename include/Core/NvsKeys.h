@@ -197,6 +197,8 @@ constexpr char FiltrationSlot[] = "pl_sfil"; // Pool logic module persisted key 
 constexpr char SwgSlot[] = "pl_sswg"; // Pool logic module persisted key for field `pl_sswg`.
 constexpr char RobotSlot[] = "pl_srob"; // Pool logic module persisted key for field `pl_srob`.
 constexpr char FillingSlot[] = "pl_sfill"; // Pool logic module persisted key for field `pl_sfill`.
+constexpr char FiltrationCalcStart[] = "pl_fcst"; // Pool logic runtime key for calculated filtration start hour.
+constexpr char FiltrationCalcStop[] = "pl_fcen"; // Pool logic runtime key for calculated filtration stop hour.
 }  // namespace PoolLogic
 
 namespace PoolDevice {
@@ -213,5 +215,10 @@ constexpr char TankCapFmt[] = "pd%utc"; // Pool device module key template; `%u`
 /** @brief printf format for per-slot tank initial value key (example `pd0ti`). */
 constexpr char TankInitFmt[] = "pd%uti"; // Pool device module key template; `%u` is replaced by slot index before NVS access.
 }  // namespace PoolDevice
+
+namespace Alarm {
+constexpr char Enabled[] = "al_en"; // Alarm module persisted key for field `enabled`.
+constexpr char EvalPeriodMs[] = "al_epms"; // Alarm module persisted key for field `eval_period_ms`.
+}  // namespace Alarm
 
 }  // namespace NvsKeys

@@ -138,6 +138,10 @@ bool ModuleManager::initAll(ConfigStore& cfg, ServiceRegistry& services) {
     cfg.loadPersistent();
 
     for (uint8_t i = 0; i < orderedCount; ++i) {
+        ordered[i]->onConfigLoaded(cfg, services);
+    }
+
+    for (uint8_t i = 0; i < orderedCount; ++i) {
         ///Logger::log(LogLevel::Info, "MOD", "Start %s", ordered[i]->moduleId());
         if (!ordered[i]->hasTask()) {
         continue;
