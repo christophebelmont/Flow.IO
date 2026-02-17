@@ -69,8 +69,6 @@ Le choix de `WINDOW SIZE` dépend du temps de réaction chimique du bassin. Si l
 - intégration possible avec Jeedom/Node-RED/InfluxDB/Grafana via MQTT
 - architecture modulaire robuste (FreeRTOS + services Core + EventBus + DataStore + ConfigStore/NVS)
 
-![Phone Interface](docs/pictures/Phone%20Interface.jpg)
-
 Résultat: une eau plus stable, une maintenance plus prévisible et une meilleure maîtrise des coûts d'exploitation.
 
 ![Grafana](docs/pictures/Grafana.png)
