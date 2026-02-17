@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
+  <title id="title">Flow.IO Logo Badge Variant</title>
+  <desc id="desc">Badge style Flow.IO logo for dark backgrounds with drop and waves.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#06243A"/>
+      <stop offset="100%" stop-color="#0A3B5F"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#28D3FF"/>
+      <stop offset="100%" stop-color="#2BE0A8"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="360" fill="url(#bg)"/>
+
+  <g transform="translate(42,34)">
+    <rect x="0" y="0" width="1116" height="292" rx="34" fill="none" stroke="#2F6B90" stroke-width="2"/>
+  </g>
+
+  <g transform="translate(92,64)">
+    <circle cx="114" cy="114" r="92" fill="none" stroke="#2C7099" stroke-width="3"/>
+    <path d="M114 28
+             C114 28, 64 90, 64 136
+             C64 174, 88 198, 114 198
+             C140 198, 164 174, 164 136
+             C164 90, 114 28, 114 28 Z"
+          fill="none" stroke="url(#accent)" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M82 132 C94 124, 108 124, 122 130 C136 136, 148 136, 160 130"
+          fill="none" stroke="#2AD7F8" stroke-width="8" stroke-linecap="round"/>
+  </g>
+
+  <g transform="translate(320,108)">
+    <text x="0" y="90" fill="#FFFFFF" font-family="Avenir Next, Montserrat, Segoe UI, Arial, sans-serif" font-size="120" font-weight="800" letter-spacing="2">FLOW</text>
+    <text x="398" y="90" fill="#2AD7F8" font-family="Avenir Next, Montserrat, Segoe UI, Arial, sans-serif" font-size="120" font-weight="800">.</text>
+    <text x="444" y="90" fill="#FFFFFF" font-family="Avenir Next, Montserrat, Segoe UI, Arial, sans-serif" font-size="120" font-weight="800">IO</text>
+    <text x="2" y="134" fill="#91BDD7" font-family="Avenir Next, Montserrat, Segoe UI, Arial, sans-serif" font-size="32" font-weight="500" letter-spacing="4">CONNECTED POOL CONTROL PLATFORM</text>
+  </g>
+</svg>

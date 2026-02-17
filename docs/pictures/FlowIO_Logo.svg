@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
+  <title id="title">Flow.IO Logo</title>
+  <desc id="desc">Logo Flow.IO with water drop and waves.</desc>
+  <defs>
+    <linearGradient id="gradDrop" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#21C7FF"/>
+      <stop offset="100%" stop-color="#0066FF"/>
+    </linearGradient>
+    <linearGradient id="gradWave" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00AEEF"/>
+      <stop offset="100%" stop-color="#1ED6A6"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#001A33" flood-opacity="0.2"/>
+    </filter>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="360" fill="#FFFFFF"/>
+
+  <g transform="translate(70,40)" filter="url(#softShadow)">
+    <circle cx="140" cy="140" r="116" fill="#FFFFFF"/>
+    <circle cx="140" cy="140" r="112" fill="none" stroke="#D7E9F8" stroke-width="2"/>
+
+    <path d="M140 40
+             C140 40, 72 116, 72 170
+             C72 222, 106 252, 140 252
+             C174 252, 208 222, 208 170
+             C208 116, 140 40, 140 40 Z"
+          fill="url(#gradDrop)"/>
+
+    <path d="M82 168
+             C98 154, 116 152, 134 160
+             C152 168, 170 170, 196 158"
+          fill="none" stroke="url(#gradWave)" stroke-width="10" stroke-linecap="round"/>
+
+    <path d="M86 196
+             C106 184, 126 184, 146 192
+             C166 200, 182 200, 196 194"
+          fill="none" stroke="url(#gradWave)" stroke-width="8" stroke-linecap="round" opacity="0.95"/>
+
+  </g>
+
+  <g transform="translate(340,94)">
+    <text x="0" y="110" fill="#073B66" font-family="Avenir Next, Montserrat, Segoe UI, Arial, sans-serif" font-size="132" font-weight="800" letter-spacing="1">
+      FLOW
+    </text>
+    <text x="420" y="110" fill="#00AEEF" font-family="Avenir Next, Montserrat, Segoe UI, Arial, sans-serif" font-size="132" font-weight="800">
+      .
+    </text>
+    <text x="470" y="110" fill="#073B66" font-family="Avenir Next, Montserrat, Segoe UI, Arial, sans-serif" font-size="132" font-weight="800">
+      IO
+    </text>
+    <text x="4" y="156" fill="#3C6E91" font-family="Avenir Next, Montserrat, Segoe UI, Arial, sans-serif" font-size="36" font-weight="500" letter-spacing="4">
+      SMART POOL WATER MANAGEMENT
+    </text>
+  </g>
+</svg>

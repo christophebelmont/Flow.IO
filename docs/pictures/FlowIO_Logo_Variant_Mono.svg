@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
+  <title id="title">Flow.IO Logo Monochrome Variant</title>
+  <desc id="desc">Monochrome Flow.IO logo for print and PCB documentation.</desc>
+
+  <rect width="1200" height="360" fill="#FFFFFF"/>
+
+  <g transform="translate(92,58)" fill="none" stroke="#0B1F2D" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="118" cy="118" r="102" stroke-width="4"/>
+    <path d="M118 30
+             C118 30, 58 100, 58 150
+             C58 194, 86 220, 118 220
+             C150 220, 178 194, 178 150
+             C178 100, 118 30, 118 30 Z" stroke-width="9"/>
+    <path d="M82 152 C96 144, 112 144, 128 150 C144 156, 158 156, 172 150" stroke-width="8"/>
+    <path d="M86 178 C100 172, 114 172, 130 178 C146 184, 158 184, 170 180" stroke-width="6"/>
+  </g>
+
+  <g transform="translate(334,104)" fill="#0B1F2D">
+    <text x="0" y="94" font-family="Montserrat, Avenir Next, Segoe UI, Arial, sans-serif" font-size="122" font-weight="800" letter-spacing="2">FLOW.IO</text>
+    <text x="2" y="138" font-family="Montserrat, Avenir Next, Segoe UI, Arial, sans-serif" font-size="30" font-weight="600" letter-spacing="5">WATER QUALITY CONTROL</text>
+  </g>
+</svg>

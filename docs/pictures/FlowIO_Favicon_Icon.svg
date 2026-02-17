@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Flow.IO Favicon Icon</title>
+  <desc id="desc">Standalone Flow.IO favicon icon with drop and waves.</desc>
+  <defs>
+    <linearGradient id="dropGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#21C7FF"/>
+      <stop offset="100%" stop-color="#0066FF"/>
+    </linearGradient>
+    <linearGradient id="waveGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00AEEF"/>
+      <stop offset="100%" stop-color="#1ED6A6"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="24" y="24" width="464" height="464" rx="110" fill="#F6FBFF"/>
+  <rect x="24" y="24" width="464" height="464" rx="110" fill="none" stroke="#D6E9F8" stroke-width="4"/>
+
+  <path d="M256 102
+           C256 102, 142 224, 142 306
+           C142 382, 196 424, 256 424
+           C316 424, 370 382, 370 306
+           C370 224, 256 102, 256 102 Z"
+        fill="url(#dropGrad)"/>
+
+  <path d="M164 298
+           C188 280, 216 276, 246 288
+           C276 300, 306 304, 350 286"
+        fill="none" stroke="url(#waveGrad)" stroke-width="20" stroke-linecap="round"/>
+
+  <path d="M170 346
+           C198 330, 228 330, 260 342
+           C292 354, 320 356, 348 346"
+        fill="none" stroke="url(#waveGrad)" stroke-width="16" stroke-linecap="round" opacity="0.95"/>
+
+</svg>
