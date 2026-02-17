@@ -14,9 +14,7 @@ Sans orchestration continue, on observe vite:
 
 Flow.IO apporte un pilotage cohérent de bout en bout.
 
-![PoolMaster Ecosystem](docs/pictures/PoolMasterIntegration.png)
-
-![Flow.IO Hardware](docs/pictures/PoolMasterBox_pf.jpg)
+![PoolMaster Ecosystem](docs/pictures/PoolMaster%20Ecosystem.png)
 
 ## Mesure et contrôle en continu
 
