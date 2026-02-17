@@ -65,6 +65,9 @@ Réactions:
 - payloads incluent:
   - device metadata
   - `availability` basée sur topic `status`
+- capteurs diagnostic natifs publiés:
+  - `alarms_pack` (`rt/alarms/p`)
+  - `uptime_seconds` (`rt/system/state`, valeur `upt_s`)
 
 ## Comportement refresh
 

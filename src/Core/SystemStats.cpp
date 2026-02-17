@@ -7,10 +7,14 @@
 #include <Arduino.h>
 #include <esp_system.h>
 #include <esp_heap_caps.h>
+#include <esp_timer.h>
 #define LOG_TAG_CORE "SysStats"
 
 void SystemStats::collect(SystemStatsSnapshot& out) {
-    out.uptimeMs = millis();
+    const uint64_t uptimeMs64 = (uint64_t)(esp_timer_get_time() / 1000ULL);
+    out.uptimeMs64 = uptimeMs64;
+    // Keep the legacy 32-bit view for code paths that still expect uint32_t.
+    out.uptimeMs = (uint32_t)uptimeMs64;
 
     const uint32_t free8 = heap_caps_get_free_size(MALLOC_CAP_8BIT);
     const uint32_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);

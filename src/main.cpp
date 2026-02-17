@@ -118,6 +118,9 @@ struct RuntimeSnapshotRoute {
 };
 static RuntimeSnapshotRoute gRuntimeRoutes[Limits::MaxRuntimeRoutes]{};
 static uint8_t gRuntimeRouteCount = 0;
+static_assert(Limits::MaxRuntimeRoutes >=
+                  (FLOW_POOL_SENSOR_BINDING_COUNT + FLOW_POOL_IO_BINDING_COUNT + (FLOW_POOL_IO_BINDING_COUNT * 2U) + 2U),
+              "MaxRuntimeRoutes too small for default Flow.IO runtime providers (io + pooldev + poollogic)");
 
 struct RuntimeMuxStats {
     uint32_t seq = 0;
@@ -174,7 +177,11 @@ static bool registerRuntimeProvider(MQTTModule& mqtt, const IRuntimeSnapshotProv
     bool any = false;
     const uint8_t count = provider->runtimeSnapshotCount();
     for (uint8_t idx = 0; idx < count; ++idx) {
-        if (gRuntimeRouteCount >= Limits::MaxRuntimeRoutes) break;
+        if (gRuntimeRouteCount >= Limits::MaxRuntimeRoutes) {
+            Serial.printf("Runtime route limit reached (%u), provider routes truncated\n",
+                          (unsigned)Limits::MaxRuntimeRoutes);
+            break;
+        }
         const char* suffix = provider->runtimeSnapshotSuffix(idx);
         if (!suffix || suffix[0] == '\0') continue;
 
@@ -304,9 +311,10 @@ static bool buildSystemSnapshot(MQTTModule* mqtt, char* out, size_t len) {
 
     int wrote = snprintf(
         out, len,
-        "{\"upt_ms\":%lu,\"heap\":{\"free\":%lu,\"min\":%lu,\"largest\":%lu,\"frag\":%u},"
+        "{\"upt_ms\":%llu,\"upt_s\":%llu,\"heap\":{\"free\":%lu,\"min\":%lu,\"largest\":%lu,\"frag\":%u},"
         "\"mqtt_rx\":{\"rx_drop\":%lu,\"oversize_drop\":%lu,\"parse_fail\":%lu,\"handler_fail\":%lu},\"ts\":%lu}",
-        (unsigned long)snap.uptimeMs,
+        (unsigned long long)snap.uptimeMs64,
+        (unsigned long long)(snap.uptimeMs64 / 1000ULL),
         (unsigned long)snap.heap.freeBytes,
         (unsigned long)snap.heap.minFreeBytes,
         (unsigned long)snap.heap.largestFreeBlock,
@@ -572,6 +580,7 @@ void setup() {
     gRuntimeRouteCount = 0;
     (void)registerRuntimeProvider(mqttModule, &ioModule);
     (void)registerRuntimeProvider(mqttModule, &poolDeviceModule);
+    (void)registerRuntimeProvider(mqttModule, &poolLogicModule);
     mqttModule.formatTopic(topicNetworkState, sizeof(topicNetworkState), "rt/network/state");
     mqttModule.formatTopic(topicSystemState, sizeof(topicSystemState), "rt/system/state");
     mqttModule.setSensorsPublisher(topicRuntimeMux, publishRuntimeStates);

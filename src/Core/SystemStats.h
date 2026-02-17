@@ -15,6 +15,7 @@ struct HeapStats {
 
 /** @brief Full system snapshot used by monitoring. */
 struct SystemStatsSnapshot {
+    uint64_t uptimeMs64;
     uint32_t uptimeMs;
     HeapStats heap;
 };

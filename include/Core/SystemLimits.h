@@ -25,7 +25,7 @@ constexpr size_t JsonCmdPoolDeviceBuf = 256;
 /** @brief JSON capacity for `ConfigStore::applyJson` root document (covers full multi-module patch). */
 constexpr size_t JsonConfigApplyBuf = JsonCfgBuf * 4;
 /** @brief Maximum number of registered config variables in `ConfigStore` metadata table. */
-constexpr size_t MaxConfigVars = 500;
+constexpr size_t MaxConfigVars = 256;
 /** @brief Maximum NVS key length (without null terminator) enforced by `ConfigTypes::NVS_KEY`. */
 constexpr size_t MaxNvsKeyLen = 15;
 /** @brief FreeRTOS log queue length used by `LogHub` (`LogHubModule::init`). */
@@ -45,7 +45,7 @@ constexpr uint8_t RxQueueLen = 8;
 /** @brief Maximum number of runtime publishers stored in `MQTTModule::publishers`. */
 constexpr uint8_t MaxPublishers = 8;
 /** @brief Maximum number of `cfg/<module>` blocks tracked by `MQTTModule::cfgModules/topicCfgBlocks`. */
-constexpr uint8_t CfgTopicMax = 48;
+constexpr uint8_t CfgTopicMax = 40;
 }  // namespace Capacity
 
 /** @brief MQTT default configuration values. */
@@ -129,7 +129,7 @@ constexpr uint8_t JitterPct = 15;
 
 }  // namespace Mqtt
 /** @brief Maximum number of runtime MQTT routes stored in the runtime mux (`main.cpp`). */
-constexpr uint8_t MaxRuntimeRoutes = 32;
+constexpr uint8_t MaxRuntimeRoutes = 34;
 /** @brief Default momentary digital output pulse duration in ms (`IOModule`). */
 constexpr uint16_t MomentaryPulseMs = 500;
 /** @brief Default periodic trace interval for ORP/pH/PSI calc logs (`IOModule`, `trace_period_ms`). */

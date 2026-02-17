@@ -97,6 +97,7 @@ private:
     EventBus* _eventBus = nullptr;
     ConfigMeta _meta[MAX_CONFIG_VARS];
     uint16_t _metaCount = 0;
+    bool _metaNearCapacityWarned = false;
 
     void notifyChanged(const char* nvsKey, const char* moduleName, uint8_t moduleId, uint16_t branchId);
     bool writePersistent(const ConfigMeta& m);
@@ -123,7 +124,14 @@ private:
 template<typename T, size_t H>
 void ConfigStore::registerVar(ConfigVariable<T, H>& var)
 {
-    if (_metaCount >= MAX_CONFIG_VARS) return;
+    if (_metaCount >= MAX_CONFIG_VARS) {
+        Log::error(LOG_TAG_CORE,
+                   "Config var capacity reached (%u), dropping module='%s' key='%s'",
+                   (unsigned)MAX_CONFIG_VARS,
+                   var.moduleName ? var.moduleName : "?",
+                   var.nvsKey ? var.nvsKey : "?");
+        return;
+    }
     /*if (var.nvsKey && strlen(var.nvsKey) > MAX_NVS_KEY_LEN) {
         Log::warn(LOG_TAG_CORE, "NVS key too long (%s)", var.nvsKey);
         return;
@@ -131,6 +139,17 @@ void ConfigStore::registerVar(ConfigVariable<T, H>& var)
 
     // ✅ champ par champ (évite initializer list incompatible)
     ConfigMeta& m = _meta[_metaCount++];
+
+    if (!_metaNearCapacityWarned) {
+        const uint16_t warnAt = (uint16_t)((MAX_CONFIG_VARS * 9U) / 10U);
+        if (_metaCount >= warnAt) {
+            _metaNearCapacityWarned = true;
+            Log::warn(LOG_TAG_CORE,
+                      "Config var usage high: %u/%u",
+                      (unsigned)_metaCount,
+                      (unsigned)MAX_CONFIG_VARS);
+        }
+    }
 
     m.module      = var.moduleName;
     m.name        = var.jsonName;

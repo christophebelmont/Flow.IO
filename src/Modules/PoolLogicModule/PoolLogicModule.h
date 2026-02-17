@@ -5,6 +5,7 @@
  */
 
 #include "Core/Module.h"
+#include "Core/RuntimeSnapshotProvider.h"
 #include "Core/ConfigTypes.h"
 #include "Core/NvsKeys.h"
 #include "Core/Layout/PoolIoMap.h"
@@ -16,7 +17,7 @@
 constexpr uint16_t POOLLOGIC_EVENT_DAILY_RECALC = 0x2101;
 constexpr uint16_t POOLLOGIC_EVENT_FILTRATION_WINDOW = 0x2102;
 
-class PoolLogicModule : public Module {
+class PoolLogicModule : public Module, public IRuntimeSnapshotProvider {
 public:
     const char* moduleId() const override { return "poollogic"; }
     const char* taskName() const override { return "poollogic"; }
@@ -38,6 +39,9 @@ public:
     void init(ConfigStore& cfg, ServiceRegistry& services) override;
     void onConfigLoaded(ConfigStore& cfg, ServiceRegistry& services) override;
     void loop() override;
+    uint8_t runtimeSnapshotCount() const override;
+    const char* runtimeSnapshotSuffix(uint8_t idx) const override;
+    bool buildRuntimeSnapshot(uint8_t idx, char* out, size_t len, uint32_t& maxTsOut) const override;
     void setStartupReady(bool ready) { startupReady_ = ready; }
 
 private:
@@ -49,9 +53,28 @@ private:
         uint32_t lastCmdMs = 0;
     };
 
+    struct TemporalPidState {
+        bool initialized = false;
+        bool sampleValid = false;
+        bool lastDemandOn = false;
+        uint32_t windowStartMs = 0;
+        uint32_t lastComputeMs = 0;
+        uint32_t sampleTsMs = 0;
+        uint32_t outputOnMs = 0;
+        uint32_t runtimeTsMs = 0;
+        float sampleInput = 0.0f;
+        float sampleSetpoint = 0.0f;
+        float sampleError = 0.0f;
+        float integral = 0.0f;
+        float prevError = 0.0f;
+        float lastError = 0.0f;
+    };
+
     static constexpr uint8_t SLOT_DAILY_RECALC = 3;
     static constexpr uint8_t SLOT_FILTR_WINDOW = 4;
 
+    static constexpr uint8_t IO_ID_PH_DEFAULT =
+        (uint8_t)FLOW_POOL_SENSOR_BINDINGS[POOL_SENSOR_SLOT_PH].ioId;
     static constexpr uint8_t IO_ID_ORP_DEFAULT =
         (uint8_t)FLOW_POOL_SENSOR_BINDINGS[POOL_SENSOR_SLOT_ORP].ioId;
     static constexpr uint8_t IO_ID_PSI_DEFAULT =
@@ -84,6 +107,7 @@ private:
 
     // Sensor IO ids for IOServiceV2 reads.
     // Stored as uint8_t because current static id map stays <= 255.
+    uint8_t phIoId_ = IO_ID_PH_DEFAULT;
     uint8_t orpIoId_ = IO_ID_ORP_DEFAULT;
     uint8_t psiIoId_ = IO_ID_PSI_DEFAULT;
     uint8_t waterTempIoId_ = IO_ID_WATER_TEMP_DEFAULT;
@@ -96,7 +120,18 @@ private:
     float winterStartTempC_ = -2.0f;
     float freezeHoldTempC_ = 2.0f;
     float secureElectroTempC_ = 15.0f;
-    float orpSetpoint_ = 700.0f;
+    float phSetpoint_ = PoolDefaults::PhSetpoint;
+    float orpSetpoint_ = PoolDefaults::OrpSetpoint;
+    float phKp_ = PoolDefaults::PhKp;
+    float phKi_ = PoolDefaults::PhKi;
+    float phKd_ = PoolDefaults::PhKd;
+    float orpKp_ = PoolDefaults::OrpKp;
+    float orpKi_ = PoolDefaults::OrpKi;
+    float orpKd_ = PoolDefaults::OrpKd;
+    int32_t phWindowMs_ = PoolDefaults::PidWindowMs;
+    int32_t orpWindowMs_ = PoolDefaults::PidWindowMs;
+    int32_t pidMinOnMs_ = PoolDefaults::PidMinOnMs;
+    int32_t pidSampleMs_ = PoolDefaults::PidSampleMs;
     uint8_t psiStartupDelaySec_ = 60;
     uint8_t delayPidsMin_ = 5;
     uint8_t delayElectroMin_ = 10;
@@ -109,12 +144,18 @@ private:
     uint8_t swgDeviceSlot_ = POOL_IO_SLOT_CHLORINE_GENERATOR;
     uint8_t robotDeviceSlot_ = POOL_IO_SLOT_ROBOT;
     uint8_t fillingDeviceSlot_ = POOL_IO_SLOT_FILL_PUMP;
+    uint8_t phPumpDeviceSlot_ = POOL_IO_SLOT_PH_PUMP;
+    uint8_t orpPumpDeviceSlot_ = POOL_IO_SLOT_CHLORINE_PUMP;
 
     // Runtime flags
     DeviceFsm filtrationFsm_{};
     DeviceFsm swgFsm_{};
     DeviceFsm robotFsm_{};
     DeviceFsm fillingFsm_{};
+    DeviceFsm phPumpFsm_{};
+    DeviceFsm orpPumpFsm_{};
+    TemporalPidState phPidState_{};
+    TemporalPidState orpPidState_{};
 
     bool filtrationWindowActive_ = false;
     bool pendingDailyRecalc_ = false;
@@ -166,6 +207,8 @@ private:
     ConfigVariable<uint8_t,0> calcStopVar_{NVS_KEY(NvsKeys::PoolLogic::FiltrationCalcStop), "filtr_stop_clc", "poollogic", ConfigType::UInt8,
                                            &filtrationCalcStop_, ConfigPersistence::Persistent, 0};
 
+    ConfigVariable<uint8_t,0> phIdVar_{NVS_KEY(NvsKeys::PoolLogic::PhIoId), "ph_io_id", "poollogic", ConfigType::UInt8,
+                                       &phIoId_, ConfigPersistence::Persistent, 0};
     ConfigVariable<uint8_t,0> orpIdVar_{NVS_KEY(NvsKeys::PoolLogic::OrpIoId), "orp_io_id", "poollogic", ConfigType::UInt8,
                                         &orpIoId_, ConfigPersistence::Persistent, 0};
     ConfigVariable<uint8_t,0> psiIdVar_{NVS_KEY(NvsKeys::PoolLogic::PsiIoId), "psi_io_id", "poollogic", ConfigType::UInt8,
@@ -187,8 +230,30 @@ private:
                                            &freezeHoldTempC_, ConfigPersistence::Persistent, 0};
     ConfigVariable<float,0> secureElectroVar_{NVS_KEY(NvsKeys::PoolLogic::SecureElectro), "secure_elec_t", "poollogic", ConfigType::Float,
                                               &secureElectroTempC_, ConfigPersistence::Persistent, 0};
+    ConfigVariable<float,0> phSetpointVar_{NVS_KEY(NvsKeys::PoolLogic::PhSetpoint), "ph_setpoint", "poollogic", ConfigType::Float,
+                                           &phSetpoint_, ConfigPersistence::Persistent, 0};
     ConfigVariable<float,0> orpSetpointVar_{NVS_KEY(NvsKeys::PoolLogic::OrpSetpoint), "orp_setpoint", "poollogic", ConfigType::Float,
                                             &orpSetpoint_, ConfigPersistence::Persistent, 0};
+    ConfigVariable<float,0> phKpVar_{NVS_KEY(NvsKeys::PoolLogic::PhKp), "ph_kp", "poollogic", ConfigType::Float,
+                                     &phKp_, ConfigPersistence::Persistent, 0};
+    ConfigVariable<float,0> phKiVar_{NVS_KEY(NvsKeys::PoolLogic::PhKi), "ph_ki", "poollogic", ConfigType::Float,
+                                     &phKi_, ConfigPersistence::Persistent, 0};
+    ConfigVariable<float,0> phKdVar_{NVS_KEY(NvsKeys::PoolLogic::PhKd), "ph_kd", "poollogic", ConfigType::Float,
+                                     &phKd_, ConfigPersistence::Persistent, 0};
+    ConfigVariable<float,0> orpKpVar_{NVS_KEY(NvsKeys::PoolLogic::OrpKp), "orp_kp", "poollogic", ConfigType::Float,
+                                      &orpKp_, ConfigPersistence::Persistent, 0};
+    ConfigVariable<float,0> orpKiVar_{NVS_KEY(NvsKeys::PoolLogic::OrpKi), "orp_ki", "poollogic", ConfigType::Float,
+                                      &orpKi_, ConfigPersistence::Persistent, 0};
+    ConfigVariable<float,0> orpKdVar_{NVS_KEY(NvsKeys::PoolLogic::OrpKd), "orp_kd", "poollogic", ConfigType::Float,
+                                      &orpKd_, ConfigPersistence::Persistent, 0};
+    ConfigVariable<int32_t,0> phWindowMsVar_{NVS_KEY(NvsKeys::PoolLogic::PhWindowMs), "ph_window_ms", "poollogic", ConfigType::Int32,
+                                             &phWindowMs_, ConfigPersistence::Persistent, 0};
+    ConfigVariable<int32_t,0> orpWindowMsVar_{NVS_KEY(NvsKeys::PoolLogic::OrpWindowMs), "orp_window_ms", "poollogic", ConfigType::Int32,
+                                              &orpWindowMs_, ConfigPersistence::Persistent, 0};
+    ConfigVariable<int32_t,0> pidMinOnMsVar_{NVS_KEY(NvsKeys::PoolLogic::PidMinOnMs), "pid_min_on_ms", "poollogic", ConfigType::Int32,
+                                             &pidMinOnMs_, ConfigPersistence::Persistent, 0};
+    ConfigVariable<int32_t,0> pidSampleMsVar_{NVS_KEY(NvsKeys::PoolLogic::PidSampleMs), "pid_sample_ms", "poollogic", ConfigType::Int32,
+                                              &pidSampleMs_, ConfigPersistence::Persistent, 0};
 
     ConfigVariable<uint8_t,0> psiDelayVar_{NVS_KEY(NvsKeys::PoolLogic::PsiDelay), "psi_start_dly_s", "poollogic", ConfigType::UInt8,
                                            &psiStartupDelaySec_, ConfigPersistence::Persistent, 0};
@@ -236,6 +301,18 @@ private:
     uint32_t stateUptimeSec_(const DeviceFsm& fsm, uint32_t nowMs) const;
     bool loadAnalogSensor_(uint8_t ioId, float& out) const;
     bool loadDigitalSensor_(uint8_t ioId, bool& out) const;
+    void resetTemporalPidState_(TemporalPidState& st, uint32_t nowMs);
+    bool stepTemporalPid_(TemporalPidState& st,
+                          float input,
+                          float setpoint,
+                          float kp,
+                          float ki,
+                          float kd,
+                          int32_t windowMsCfg,
+                          bool positiveWhenInputHigh,
+                          uint32_t nowMs,
+                          bool& demandOnOut,
+                          uint32_t& outputOnMsOut);
 
     void applyDeviceControl_(uint8_t deviceSlot, const char* label, DeviceFsm& fsm, bool desired, uint32_t nowMs);
     void runControlLoop_(uint32_t nowMs);

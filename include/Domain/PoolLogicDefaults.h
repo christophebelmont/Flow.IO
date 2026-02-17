@@ -19,4 +19,18 @@ constexpr float FactorHigh = 1.0f / 2.0f;
 constexpr uint8_t FiltrationStartMinHour = 8;
 constexpr uint8_t FiltrationStopMaxHour = 23;
 
+constexpr float PhSetpoint = 7.4f;
+constexpr float OrpSetpoint = 700.0f;
+
+constexpr float PhKp = 2000000.0f;
+constexpr float PhKi = 0.0f;
+constexpr float PhKd = 0.0f;
+constexpr float OrpKp = 4500.0f;
+constexpr float OrpKi = 0.0f;
+constexpr float OrpKd = 0.0f;
+
+constexpr int32_t PidWindowMs = 3600000;
+constexpr int32_t PidMinOnMs = 30000;
+constexpr int32_t PidSampleMs = 30000;
+
 }  // namespace PoolDefaults

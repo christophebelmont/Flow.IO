@@ -143,7 +143,7 @@ void SystemMonitorModule::buildHealthJson(char* out, size_t outLen) {
 
     snprintf(out, outLen,
         "{"
-            "\"upt_ms\":%lu,"
+            "\"upt_ms\":%llu,"
             "\"heap\":{"
                 "\"free\":%lu,"
                 "\"min\":%lu,"
@@ -151,7 +151,7 @@ void SystemMonitorModule::buildHealthJson(char* out, size_t outLen) {
                 "\"frag\":%u"
             "}"
         "}",
-        (unsigned long)snap.uptimeMs,
+        (unsigned long long)snap.uptimeMs64,
         (unsigned long)snap.heap.freeBytes,
         (unsigned long)snap.heap.minFreeBytes,
         (unsigned long)snap.heap.largestFreeBlock,

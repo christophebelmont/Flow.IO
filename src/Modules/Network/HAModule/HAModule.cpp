@@ -754,6 +754,18 @@ void HAModule::init(ConfigStore& cfg, ServiceRegistry& services)
     };
     (void)addSensorEntry(alarmsPack);
 
+    const HASensorEntry uptimeSeconds{
+        "system",
+        "uptime_seconds",
+        "Uptime",
+        "rt/system/state",
+        "{{ value_json.upt_s | int(0) }}",
+        "diagnostic",
+        "mdi:timer-outline",
+        "s"
+    };
+    (void)addSensorEntry(uptimeSeconds);
+
     if (dsSvc && dsSvc->store) {
         setHaAutoconfigPublished(*dsSvc->store, false);
     }

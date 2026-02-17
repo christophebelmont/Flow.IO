@@ -14,6 +14,7 @@
 #include <cstring>
 #include <ArduinoJson.h>
 #include <stdlib.h>
+#include <cmath>
 
 #define LOG_TAG "PoolLogc"
 #include "Core/ModuleLog.h"
@@ -97,6 +98,7 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
     cfg.registerVar(calcStartVar_, kCfgModuleId, kCfgBranchId);
     cfg.registerVar(calcStopVar_, kCfgModuleId, kCfgBranchId);
 
+    cfg.registerVar(phIdVar_, kCfgModuleId, kCfgBranchId);
     cfg.registerVar(orpIdVar_, kCfgModuleId, kCfgBranchId);
     cfg.registerVar(psiIdVar_, kCfgModuleId, kCfgBranchId);
     cfg.registerVar(waterTempIdVar_, kCfgModuleId, kCfgBranchId);
@@ -108,7 +110,18 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
     cfg.registerVar(winterStartVar_, kCfgModuleId, kCfgBranchId);
     cfg.registerVar(freezeHoldVar_, kCfgModuleId, kCfgBranchId);
     cfg.registerVar(secureElectroVar_, kCfgModuleId, kCfgBranchId);
+    cfg.registerVar(phSetpointVar_, kCfgModuleId, kCfgBranchId);
     cfg.registerVar(orpSetpointVar_, kCfgModuleId, kCfgBranchId);
+    cfg.registerVar(phKpVar_, kCfgModuleId, kCfgBranchId);
+    cfg.registerVar(phKiVar_, kCfgModuleId, kCfgBranchId);
+    cfg.registerVar(phKdVar_, kCfgModuleId, kCfgBranchId);
+    cfg.registerVar(orpKpVar_, kCfgModuleId, kCfgBranchId);
+    cfg.registerVar(orpKiVar_, kCfgModuleId, kCfgBranchId);
+    cfg.registerVar(orpKdVar_, kCfgModuleId, kCfgBranchId);
+    cfg.registerVar(phWindowMsVar_, kCfgModuleId, kCfgBranchId);
+    cfg.registerVar(orpWindowMsVar_, kCfgModuleId, kCfgBranchId);
+    cfg.registerVar(pidMinOnMsVar_, kCfgModuleId, kCfgBranchId);
+    cfg.registerVar(pidSampleMsVar_, kCfgModuleId, kCfgBranchId);
 
     cfg.registerVar(psiDelayVar_, kCfgModuleId, kCfgBranchId);
     cfg.registerVar(delayPidsVar_, kCfgModuleId, kCfgBranchId);
@@ -269,6 +282,103 @@ void PoolLogicModule::onConfigLoaded(ConfigStore&, ServiceRegistry&)
     portENTER_CRITICAL(&pendingMux_);
     pendingDailyRecalc_ = true;
     portEXIT_CRITICAL(&pendingMux_);
+}
+
+uint8_t PoolLogicModule::runtimeSnapshotCount() const
+{
+    return 2;
+}
+
+const char* PoolLogicModule::runtimeSnapshotSuffix(uint8_t idx) const
+{
+    if (idx == 0) return "rt/poollogic/ph";
+    if (idx == 1) return "rt/poollogic/orp";
+    return nullptr;
+}
+
+bool PoolLogicModule::buildRuntimeSnapshot(uint8_t idx, char* out, size_t len, uint32_t& maxTsOut) const
+{
+    if (!out || len == 0) return false;
+
+    const uint32_t nowMs = millis();
+    const bool isPh = (idx == 0);
+    const bool isOrp = (idx == 1);
+    if (!isPh && !isOrp) return false;
+
+    const TemporalPidState& st = isPh ? phPidState_ : orpPidState_;
+    const DeviceFsm& pumpFsm = isPh ? phPumpFsm_ : orpPumpFsm_;
+    const float kp = isPh ? phKp_ : orpKp_;
+    const float ki = isPh ? phKi_ : orpKi_;
+    const float kd = isPh ? phKd_ : orpKd_;
+    const int32_t windowMsCfg = isPh ? phWindowMs_ : orpWindowMs_;
+    const uint32_t windowMs = (windowMsCfg > 1000) ? (uint32_t)windowMsCfg : 1000U;
+
+    uint32_t elapsedMs = 0;
+    if (st.initialized) {
+        const uint32_t rawElapsed = nowMs - st.windowStartMs;
+        elapsedMs = (rawElapsed < windowMs) ? rawElapsed : windowMs;
+    }
+
+    const bool regulationEnabled = isPh ? phPidEnabled_ : orpPidEnabled_;
+    int wrote = 0;
+    if (st.sampleValid) {
+        wrote = snprintf(
+            out, len,
+            "{\"id\":\"%s\",\"input\":%.3f,\"setpoint\":%.3f,\"error\":%.3f,"
+            "\"enabled\":%s,\"demand\":%s,\"actual\":%s,"
+            "\"kp\":%.6f,\"ki\":%.6f,\"kd\":%.6f,"
+            "\"window_ms\":%ld,\"sample_ms\":%ld,\"min_on_ms\":%ld,"
+            "\"output_on_ms\":%lu,\"window_elapsed_ms\":%lu,\"compute_ts\":%lu,"
+            "\"electrolyse_mode\":%s,\"ts\":%lu}",
+            isPh ? "ph" : "orp",
+            (double)st.sampleInput,
+            (double)st.sampleSetpoint,
+            (double)st.sampleError,
+            regulationEnabled ? "true" : "false",
+            st.lastDemandOn ? "true" : "false",
+            pumpFsm.on ? "true" : "false",
+            (double)kp,
+            (double)ki,
+            (double)kd,
+            (long)windowMsCfg,
+            (long)pidSampleMs_,
+            (long)pidMinOnMs_,
+            (unsigned long)st.outputOnMs,
+            (unsigned long)elapsedMs,
+            (unsigned long)st.sampleTsMs,
+            electrolyseMode_ ? "true" : "false",
+            (unsigned long)nowMs
+        );
+    } else {
+        wrote = snprintf(
+            out, len,
+            "{\"id\":\"%s\",\"input\":null,\"setpoint\":%.3f,\"error\":null,"
+            "\"enabled\":%s,\"demand\":%s,\"actual\":%s,"
+            "\"kp\":%.6f,\"ki\":%.6f,\"kd\":%.6f,"
+            "\"window_ms\":%ld,\"sample_ms\":%ld,\"min_on_ms\":%ld,"
+            "\"output_on_ms\":%lu,\"window_elapsed_ms\":%lu,\"compute_ts\":0,"
+            "\"electrolyse_mode\":%s,\"ts\":%lu}",
+            isPh ? "ph" : "orp",
+            (double)(isPh ? phSetpoint_ : orpSetpoint_),
+            regulationEnabled ? "true" : "false",
+            st.lastDemandOn ? "true" : "false",
+            pumpFsm.on ? "true" : "false",
+            (double)kp,
+            (double)ki,
+            (double)kd,
+            (long)windowMsCfg,
+            (long)pidSampleMs_,
+            (long)pidMinOnMs_,
+            (unsigned long)st.outputOnMs,
+            (unsigned long)elapsedMs,
+            electrolyseMode_ ? "true" : "false",
+            (unsigned long)nowMs
+        );
+    }
+    if (wrote < 0 || (size_t)wrote >= len) return false;
+
+    maxTsOut = st.runtimeTsMs ? st.runtimeTsMs : 1U;
+    return true;
 }
 
 AlarmCondState PoolLogicModule::condPsiLowStatic_(void* ctx, uint32_t nowMs)
@@ -679,6 +789,110 @@ bool PoolLogicModule::loadDigitalSensor_(uint8_t ioId, bool& out) const
     return true;
 }
 
+void PoolLogicModule::resetTemporalPidState_(TemporalPidState& st, uint32_t nowMs)
+{
+    st.initialized = false;
+    st.sampleValid = false;
+    st.lastDemandOn = false;
+    st.windowStartMs = nowMs;
+    st.lastComputeMs = nowMs;
+    st.sampleTsMs = 0;
+    st.outputOnMs = 0;
+    st.sampleInput = 0.0f;
+    st.sampleSetpoint = 0.0f;
+    st.sampleError = 0.0f;
+    st.integral = 0.0f;
+    st.prevError = 0.0f;
+    st.lastError = 0.0f;
+    st.runtimeTsMs = nowMs;
+}
+
+bool PoolLogicModule::stepTemporalPid_(TemporalPidState& st,
+                                       float input,
+                                       float setpoint,
+                                       float kp,
+                                       float ki,
+                                       float kd,
+                                       int32_t windowMsCfg,
+                                       bool positiveWhenInputHigh,
+                                       uint32_t nowMs,
+                                       bool& demandOnOut,
+                                       uint32_t& outputOnMsOut)
+{
+    const uint32_t windowMs = (windowMsCfg > 1000) ? (uint32_t)windowMsCfg : 1000U;
+    const uint32_t sampleMs = (pidSampleMs_ > 100) ? (uint32_t)pidSampleMs_ : 100U;
+    const uint32_t minOnMs = (pidMinOnMs_ > 0) ? (uint32_t)pidMinOnMs_ : 0U;
+
+    if (!st.initialized) {
+        st.initialized = true;
+        st.windowStartMs = nowMs;
+        st.lastComputeMs = nowMs;
+        st.sampleValid = false;
+        st.sampleTsMs = 0;
+        st.sampleInput = 0.0f;
+        st.sampleSetpoint = 0.0f;
+        st.sampleError = 0.0f;
+        st.integral = 0.0f;
+        st.prevError = 0.0f;
+        st.lastError = 0.0f;
+        st.outputOnMs = 0;
+        st.lastDemandOn = false;
+        st.runtimeTsMs = nowMs;
+    }
+
+    while ((uint32_t)(nowMs - st.windowStartMs) >= windowMs) {
+        st.windowStartMs += windowMs;
+    }
+
+    if ((uint32_t)(nowMs - st.lastComputeMs) >= sampleMs) {
+        const uint32_t dtMs = nowMs - st.lastComputeMs;
+        const float dtSec = (dtMs > 0U) ? ((float)dtMs / 1000.0f) : 0.0f;
+        st.lastComputeMs = nowMs;
+
+        const float error = positiveWhenInputHigh ? (input - setpoint) : (setpoint - input);
+        st.lastError = error;
+
+        float outputMs = 0.0f;
+        if (error > 0.0f && std::isfinite(error)) {
+            if (ki != 0.0f && dtSec > 0.0f) {
+                st.integral += error * dtSec;
+            } else {
+                st.integral = 0.0f;
+            }
+            const float deriv = (dtSec > 0.0f) ? ((error - st.prevError) / dtSec) : 0.0f;
+            outputMs = (kp * error) + (ki * st.integral) + (kd * deriv);
+            if (!std::isfinite(outputMs) || outputMs < 0.0f) outputMs = 0.0f;
+            if (outputMs > (float)windowMs) outputMs = (float)windowMs;
+        } else {
+            st.integral = 0.0f;
+            outputMs = 0.0f;
+        }
+        st.prevError = error;
+        st.sampleValid = true;
+        st.sampleInput = input;
+        st.sampleSetpoint = setpoint;
+        st.sampleError = error;
+        st.sampleTsMs = nowMs;
+        st.runtimeTsMs = nowMs;
+
+        uint32_t outMs = (uint32_t)(outputMs + 0.5f);
+        if (outMs < minOnMs) outMs = 0U;
+        if (outMs > windowMs) outMs = windowMs;
+        st.outputOnMs = outMs;
+    }
+
+    const uint32_t elapsedMs = nowMs - st.windowStartMs;
+    const bool demandOn = (st.outputOnMs > 0U) && (elapsedMs < st.outputOnMs);
+    if (demandOn != st.lastDemandOn) {
+        st.lastDemandOn = demandOn;
+        st.runtimeTsMs = nowMs;
+    }
+
+    demandOnOut = demandOn;
+    outputOnMsOut = st.outputOnMs;
+    return true;
+}
+
 void PoolLogicModule::applyDeviceControl_(uint8_t deviceSlot,
                                           const char* label,
                                           DeviceFsm& fsm,
@@ -710,26 +924,34 @@ void PoolLogicModule::runControlLoop_(uint32_t nowMs)
     syncDeviceState_(robotDeviceSlot_, robotFsm_, nowMs, unusedStart, robotStopped);
     syncDeviceState_(swgDeviceSlot_, swgFsm_, nowMs, unusedStart, unusedStop);
     syncDeviceState_(fillingDeviceSlot_, fillingFsm_, nowMs, unusedStart, unusedStop);
+    syncDeviceState_(phPumpDeviceSlot_, phPumpFsm_, nowMs, unusedStart, unusedStop);
+    syncDeviceState_(orpPumpDeviceSlot_, orpPumpFsm_, nowMs, unusedStart, unusedStop);
 
     if (filtrationStarted) {
         phPidEnabled_ = false;
         orpPidEnabled_ = false;
+        resetTemporalPidState_(phPidState_, nowMs);
+        resetTemporalPidState_(orpPidState_, nowMs);
     }
     if (filtrationStopped) {
         phPidEnabled_ = false;
         orpPidEnabled_ = false;
+        resetTemporalPidState_(phPidState_, nowMs);
+        resetTemporalPidState_(orpPidState_, nowMs);
     }
     if (robotStopped) {
         cleaningDone_ = true;
     }
 
     float psi = 0.0f;
+    float ph = 0.0f;
     float waterTemp = 0.0f;
     float airTemp = 0.0f;
     float orp = 0.0f;
     bool levelOk = true;
 
     const bool havePsi = loadAnalogSensor_(psiIoId_, psi);
+    const bool havePh = loadAnalogSensor_(phIoId_, ph);
     const bool haveWaterTemp = loadAnalogSensor_(waterTempIoId_, waterTemp);
     const bool haveAirTemp = loadAnalogSensor_(airTempIoId_, airTemp);
     const bool haveOrp = loadAnalogSensor_(orpIoId_, orp);
@@ -832,6 +1054,54 @@ void PoolLogicModule::runControlLoop_(uint32_t nowMs)
         }
     }
 
+    bool phPumpDesired = false;
+    bool orpPumpDesired = false;
+    if (filtrationDesired) {
+        const bool phAllowed = phPidEnabled_ && havePh && !psiError_;
+        if (phAllowed) {
+            uint32_t outMs = 0;
+            (void)stepTemporalPid_(phPidState_,
+                                   ph,
+                                   phSetpoint_,
+                                   phKp_,
+                                   phKi_,
+                                   phKd_,
+                                   phWindowMs_,
+                                   true,
+                                   nowMs,
+                                   phPumpDesired,
+                                   outMs);
+        } else if (phPidState_.initialized || phPidState_.outputOnMs != 0U || phPidState_.lastDemandOn) {
+            resetTemporalPidState_(phPidState_, nowMs);
+        }
+
+        // ORP peristaltic dosing is disabled when electrolyse mode is active.
+        const bool orpAllowed = orpPidEnabled_ && haveOrp && !electrolyseMode_ && !psiError_;
+        if (orpAllowed) {
+            uint32_t outMs = 0;
+            (void)stepTemporalPid_(orpPidState_,
+                                   orp,
+                                   orpSetpoint_,
+                                   orpKp_,
+                                   orpKi_,
+                                   orpKd_,
+                                   orpWindowMs_,
+                                   false,
+                                   nowMs,
+                                   orpPumpDesired,
+                                   outMs);
+        } else if (orpPidState_.initialized || orpPidState_.outputOnMs != 0U || orpPidState_.lastDemandOn) {
+            resetTemporalPidState_(orpPidState_, nowMs);
+        }
+    } else {
+        if (phPidState_.initialized || phPidState_.outputOnMs != 0U || phPidState_.lastDemandOn) {
+            resetTemporalPidState_(phPidState_, nowMs);
+        }
+        if (orpPidState_.initialized || orpPidState_.outputOnMs != 0U || orpPidState_.lastDemandOn) {
+            resetTemporalPidState_(orpPidState_, nowMs);
+        }
+    }
+
     bool fillingDesired = false;
     if (haveLevel) {
         if (!fillingFsm_.on) {
@@ -843,6 +1113,8 @@ void PoolLogicModule::runControlLoop_(uint32_t nowMs)
     }
 
     applyDeviceControl_(filtrationDeviceSlot_, "Filtration Pump", filtrationFsm_, filtrationDesired, nowMs);
+    applyDeviceControl_(phPumpDeviceSlot_, "pH Pump", phPumpFsm_, phPumpDesired, nowMs);
+    applyDeviceControl_(orpPumpDeviceSlot_, "Chlorine Pump", orpPumpFsm_, orpPumpDesired, nowMs);
     applyDeviceControl_(robotDeviceSlot_, "Robot Pump", robotFsm_, robotDesired, nowMs);
     applyDeviceControl_(swgDeviceSlot_, "SWG Pump", swgFsm_, swgDesired, nowMs);
     applyDeviceControl_(fillingDeviceSlot_, "Filling Pump", fillingFsm_, fillingDesired, nowMs);

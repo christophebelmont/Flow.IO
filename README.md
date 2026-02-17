@@ -50,17 +50,16 @@ L'interface Nextion offre une vue synthétique des mesures, états et commandes 
 
 ## Principe de régulation PID (pH / ORP)
 
-Dans ce projet, la bibliothèque Arduino PID est utilisée pour démarrer/arrêter les pompes de produits chimiques de manière cyclique, comme un signal de type PWM temporel. La période de cycle est fixée par le paramètre `WINDOW SIZE` (en millisecondes) et le PID fait varier le rapport cyclique dans cette fenêtre.
+Flow.IO implémente une régulation PID temporelle dans `PoolLogicModule` pour les pompes péristaltiques pH et ORP:
+- calcul PID périodique (par défaut toutes les `30 s`)
+- conversion de la sortie en durée d'activation `output_on_ms` bornée dans une fenêtre fixe (`window_ms`, typiquement `1 h`)
+- commande ON/OFF dans la fenêtre: la pompe est active en début de fenêtre pendant `output_on_ms`
 
-Si l'erreur calculée par la boucle PID est nulle ou négative, la sortie est ramenée à 0 et la pompe n'est pas activée. Si l'erreur est positive, la sortie prend une valeur entre 0 et la `WINDOW SIZE`, jusqu'au fonctionnement continu à 100%.
+Les paramètres (`setpoint`, `Kp/Ki/Kd`, `window_ms`, `pid_sample_ms`, `pid_min_on_ms`) sont persistants via `ConfigStore`/NVS.  
+Si les conditions de sécurité ne sont pas réunies (filtration arrêtée, mode hiver, capteur indisponible, défaut pression, etc.), la sortie est remise à `0` et la pompe est coupée.
 
-En pratique, la sortie de `PID.Compute()` est donc une durée d'activation (en ms) à appliquer à chaque cycle. Par exemple, avec une `WINDOW SIZE = 3600000 ms` (1 heure) et une sortie PID de `600000 ms` (10 minutes), la pompe fonctionne 10 minutes au début de chaque cycle d'une heure.
-
-Concernant les gains par défaut, `Ki` et `Kd` peuvent être laissés à 0 pour privilégier la stabilité, ce qui revient à une régulation proportionnelle pure (boucle P). Ajouter du `Ki`/`Kd` peut améliorer la performance théorique, mais augmente la complexité de réglage et le risque d'instabilité.
-
-Le choix de `Kp` se fait expérimentalement à partir de la réponse réelle du bassin. Exemple: si `83 ml` d'acide font varier le pH de `0,1` et que le débit de pompe est `1,5 L/h`, on obtient environ `3,3 min` d'injection pour corriger `0,1` pH, soit ~`200000 ms`. Pour une erreur de `1,0`, on peut en déduire un `Kp` de l'ordre de `2000000` pour la boucle pH (même logique pour la boucle ORP).
-
-Le choix de `WINDOW SIZE` dépend du temps de réaction chimique du bassin. Si l'effet d'une injection met jusqu'à ~30 minutes à se stabiliser, la fenêtre doit être d'au moins 30 minutes (souvent plus) pour éviter le surdosage par corrections trop rapprochées. Une fenêtre d'1 heure (`3600000 ms`) constitue généralement un réglage prudent.
+Détail complet de l'algorithme, des conditions d'activation et des topics runtime dans la documentation module:
+- [PoolLogicModule](docs/modules/PoolLogicModule.md)
 
 ## Intégration et exploitation
 
