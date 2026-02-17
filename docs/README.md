@@ -8,6 +8,7 @@ Cette documentation couvre l'architecture complète du firmware Flow.IO (ESP32),
 - [Services Core et invocation](core/services.md)
 - [Modèle DataStore + EventBus + Config](core/data-event-model.md)
 - [Topologie MQTT détaillée](core/mqtt-topics.md)
+- [Quality Gates Modules (10 points)](core/module-quality-gates.md)
 
 ## Vue d'ensemble runtime
 
@@ -71,6 +72,10 @@ Puis:
 - [IOModule](modules/IOModule.md)
 - [PoolLogicModule](modules/PoolLogicModule.md)
 - [PoolDeviceModule](modules/PoolDeviceModule.md)
+
+Évaluation qualité transversale:
+
+- [Quality Gates Modules (notes + description des 10 points)](core/module-quality-gates.md)
 
 ## Notes importantes
 

@@ -46,6 +46,19 @@ Pour chaque module de `ConfigStore::listModules()`:
 - publication incrémentale par `ConfigChanged` (branch routing)
 - reconnect MQTT si changement de clé de connexion (`host`, `port`, `user`, `pass`, `baseTopic`)
 
+### Exemples de champs de configuration notables
+
+- `cfg/pdm/pdN`:
+  - `flow_l_h`
+  - `tank_cap_ml`
+  - `tank_init_ml`
+  - `max_uptime_day_s`
+- `cfg/poollogic`:
+  - `delay_pids_min`
+  - `ph_setpoint`, `orp_setpoint`
+  - `ph_window_ms`, `orp_window_ms`
+  - `psi_low_th`, `psi_high_th`
+
 ## Publication runtime (`rt/*`)
 
 ### Multiplex runtime (depuis `main.cpp`)
@@ -56,6 +69,8 @@ Routage snapshots providers:
 - `rt/io/output/dN`
 - `rt/pdm/state/pdN`
 - `rt/pdm/metrics/pdN`
+- `rt/poollogic/ph`
+- `rt/poollogic/orp`
 
 Le callback multiplex (`rt/runtime/mux`) publie directement les routes détaillées et ne publie pas de payload sur son topic lié.
 

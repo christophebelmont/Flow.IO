@@ -5,6 +5,7 @@
 Couche domaine actionneurs piscine:
 - inventorie les 8 slots `pd0..pd7` et leur mapping I/O
 - applique commandes désirées avec interlocks de dépendance
+- applique une limite de runtime journalier par slot (`max_uptime_day_s`)
 - synchronise état réel I/O et état désiré
 - comptabilise runtime (jour/semaine/mois/total) et volumes injectés
 - persiste les métriques runtime dans `ConfigStore` (`pdmrt/pdN.metrics_blob`)
@@ -62,6 +63,7 @@ Clés persistantes (format):
 - `pd%uflh` -> `flow_l_h`
 - `pd%utc` -> `tank_cap_ml`
 - `pd%uti` -> `tank_init_ml`
+- `pd%umu` -> `max_uptime_day_s`
 - `pd%urt` -> `metrics_blob` (runtime persistant)
 
 Format `metrics_blob`:
@@ -134,7 +136,7 @@ Le module maintient des clés:
 
 Si l'heure n'est pas prête: reconcile replanifié.
 
-## Contrôle des dépendances (interlocks)
+## Contrôle des dépendances et limites (interlocks)
 
 Chaque slot peut dépendre d'autres slots (`dependsOnMask`):
 - au démarrage d'un slot, tous les slots dépendance doivent être `actualOn`
@@ -145,6 +147,18 @@ Blocages possibles:
 - `disabled`
 - `interlock`
 - `io_error`
+- `max_uptime`
+
+### Limite de runtime journalier (`max_uptime_day_s`)
+
+- portée: par slot `pdm/pdN`
+- unité: secondes
+- `0` = illimité
+- si la limite est atteinte:
+  - le slot est coupé immédiatement s'il est ON
+  - les demandes de démarrage sont refusées
+  - `blockReason` passe à `max_uptime`
+- le blocage est levé automatiquement au reset journalier (`runningMsDay`)
 
 ## Snapshots runtime (MQTT indirect)
 
@@ -162,19 +176,28 @@ Publication assurée par `MQTTModule` via mux runtime global.
 Entités créées:
 - sensors uptime journalière (chlorine/ph/fill/filtration/chlorine_generator selon slots présents)
   - sources `rt/pdm/metrics/pdN`
+- sensors niveau cuve restant:
+  - `chlorine_tank_remaining_l` (`rt/pdm/metrics/pd2`, conversion `remaining_ml -> L`)
+  - `ph_tank_remaining_l` (`rt/pdm/metrics/pd1`, conversion `remaining_ml -> L`)
 - number sliders `flow_l_h` pour `pd0`, `pd1`, `pd2`
   - source `cfg/pdm/pdN`
   - commande `cfg/set` patch JSON
+- number sliders max runtime journalier (exposés en minutes):
+  - `pd1_max_uptime_min`
+  - `pd2_max_uptime_min`
+  - `pd5_max_uptime_min`
+- buttons de service:
+  - `refill_ph_tank` (libellé HA: `Fill pH Tank`) -> `{"cmd":"pool.refill","args":{"slot":1}}`
+  - `refill_chlorine_tank` (libellé HA: `Fill Chlorine Tank`) -> `{"cmd":"pool.refill","args":{"slot":2}}`
 
 ## Initialisation des slots (main)
 
 Les slots `pd0..pd7` sont définis via `defineDevice()` depuis `main.cpp` à partir de `FLOW_POOL_IO_BINDINGS`:
 - `pd0` filtration
-- `pd1` pH (peristaltique, cuve, dépend filtration)
-- `pd2` chlore (peristaltique, cuve, dépend filtration)
+- `pd1` pH (peristaltique, cuve, dépend filtration, max uptime défaut `30 min`)
+- `pd2` chlore (peristaltique, cuve, dépend filtration, max uptime défaut `30 min`)
 - `pd3` robot (dépend filtration)
-- `pd4` remplissage
-- `pd5` électrolyse (dépend filtration)
+- `pd4` remplissage (max uptime défaut `30 min`)
+- `pd5` électrolyse (dépend filtration, max uptime défaut `600 min`)
 - `pd6` lumières
 - `pd7` chauffage eau
-

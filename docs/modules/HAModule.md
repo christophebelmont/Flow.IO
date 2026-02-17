@@ -6,6 +6,7 @@ Publication Home Assistant MQTT Discovery:
 - registre d'entités statiques (sensor, binary_sensor, switch, number, button)
 - publication discovery retainée
 - refresh automatique sur changements runtime pertinents
+- support du champ discovery `has_entity_name` sur les sensors (piloté par l'entité appelante)
 
 Type: module actif (event-driven par notification task).
 
@@ -68,6 +69,9 @@ Réactions:
 - capteurs diagnostic natifs publiés:
   - `alarms_pack` (`rt/alarms/p`)
   - `uptime_seconds` (`rt/system/state`, valeur `upt_s`)
+  - `heap_free_bytes` (`rt/system/state`, conversion en `ko`)
+  - `heap_min_free_bytes` (`rt/system/state`, conversion en `ko`)
+  - `heap_fragmentation` (`rt/system/state`, valeur `%`)
 
 ## Comportement refresh
 

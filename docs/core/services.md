@@ -92,6 +92,7 @@ services.add("myservice", &svc);
   - `addSwitch`
   - `addNumber`
   - `addButton`
+- pour `addSensor`, l'entrée peut porter `hasEntityName` pour publier `has_entity_name=true` côté discovery
 - refresh: `requestRefresh`
 
 ### `IOServiceV2`

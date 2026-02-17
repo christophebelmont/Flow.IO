@@ -276,11 +276,21 @@ Sémantique importante:
 
 Entités enregistrées par `PoolLogicModule`:
 - switches:
-  - `pool_auto_mode`
+  - `pool_auto_mode` (`Pool Auto-regulation`)
   - `pool_winter_mode`
+  - `pool_ph_auto_mode` (`pH Auto-regulation`)
+  - `pool_orp_auto_mode` (`Orp Auto-regulation`)
 - sensors:
   - `calculated_filtration_start`
   - `calculated_filtration_stop`
+- numbers (section configuration):
+  - `delay_pids_min`
+  - `ph_setpoint`
+  - `orp_setpoint`
+  - `ph_pid_window_min` (conversion vers `ph_window_ms`)
+  - `orp_pid_window_min` (conversion vers `orp_window_ms`)
+  - `psi_low_threshold`
+  - `psi_high_threshold`
 - button:
   - `filtration_recalc` -> `{"cmd":"poollogic.filtration.recalc"}`
 
