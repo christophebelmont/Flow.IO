@@ -4,6 +4,7 @@
  */
 #include "LogSerialSinkModule.h"
 #include <Arduino.h>
+#include "Board/BoardSerialMap.h"
 #include "Core/SnprintfCheck.h"
 
 #undef snprintf
@@ -16,6 +17,7 @@ struct SerialSinkCtx {
 };
 
 static SerialSinkCtx gSerialSinkCtx{};
+static HardwareSerial* gLogSerial = &Serial;
 
 static const char* lvlStr(LogLevel lvl) {
     switch (lvl) {
@@ -111,19 +113,28 @@ static void serialSinkWrite(void* ctx, const LogEntry& e) {
     }
 
     const char* color = lvlColor(e.lvl);
-    Serial.printf("[%s][%s][%s] %s%s%s\n",
-                  ts,
-                  lvlStr(e.lvl),
-                  e.tag,
-                  color,
-                  e.msg,
-                  colorReset());
+    if (gLogSerial) {
+        gLogSerial->printf("[%s][%s][%s] %s%s%s\n",
+                           ts,
+                           lvlStr(e.lvl),
+                           e.tag,
+                           color,
+                           e.msg,
+                           colorReset());
+    }
 }
 
 void LogSerialSinkModule::init(ConfigStore& cfg, ServiceRegistry& services) {
     (void)cfg;
 
-    Serial.begin(115200);
+    gLogSerial = &Board::SerialMap::logSerial();
+    const int8_t rx = Board::SerialMap::logRxPin();
+    const int8_t tx = Board::SerialMap::logTxPin();
+    if (rx >= 0 && tx >= 0) {
+        gLogSerial->begin(Board::SerialMap::LogBaud, SERIAL_8N1, rx, tx);
+    } else {
+        gLogSerial->begin(Board::SerialMap::LogBaud);
+    }
 
     auto sinks = services.get<LogSinkRegistryService>("logsinks");
     if (!sinks) return;

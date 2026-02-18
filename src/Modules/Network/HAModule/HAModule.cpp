@@ -305,10 +305,8 @@ bool HAModule::publishSensor(const char* objectId, const char* name,
     if (icon && icon[0] != '\0') {
         snprintf(iconField, sizeof(iconField), ",\"icon\":\"%s\"", icon);
     }
-    char hasEntityNameField[40] = {0};
-    if (hasEntityName) {
-        snprintf(hasEntityNameField, sizeof(hasEntityNameField), ",\"has_entity_name\":true");
-    }
+    (void)hasEntityName;
+    const char* hasEntityNameField = ",\"has_entity_name\":false";
     char defaultEntityId[224] = {0};
     if (!buildDefaultEntityId("sensor", objectId, defaultEntityId, sizeof(defaultEntityId))) return false;
     char uniqueId[256] = {0};
@@ -361,7 +359,8 @@ bool HAModule::publishBinarySensor(const char* objectId, const char* name,
 
     if (!formatChecked(payloadBuf, sizeof(payloadBuf),
              "{\"name\":\"%s\",\"object_id\":\"%s\",\"default_entity_id\":\"%s\",\"unique_id\":\"%s\","
-             "\"state_topic\":\"%s\",\"value_template\":\"%s\",\"payload_on\":\"True\",\"payload_off\":\"False\"%s%s%s%s,"
+             "\"state_topic\":\"%s\",\"value_template\":\"%s\",\"payload_on\":\"True\",\"payload_off\":\"False\","
+             "\"has_entity_name\":false%s%s%s%s,"
              "\"origin\":{\"name\":\"Flow.IO\"},"
              "\"device\":{\"identifiers\":[\"%s\"],\"name\":\"%s\","
              "\"manufacturer\":\"%s\",\"model\":\"%s\",\"sw_version\":\"%s\"}}",

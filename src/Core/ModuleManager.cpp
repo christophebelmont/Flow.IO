@@ -3,6 +3,7 @@
  * @brief Implementation file.
  */
 #include "ModuleManager.h"
+#include "Board/BoardSerialMap.h"
 #include "Core/Log.h"
 #include <cstring>
 
@@ -16,16 +17,16 @@ static void logRegisteredModules(Module* modules[], uint8_t count) {
 }
 
 static void dbgDumpModules(Module* modules[], uint8_t count) {
-    Serial.printf("[MOD] Registered modules (%u):\n", count);
+    Board::SerialMap::logSerial().printf("[MOD] Registered modules (%u):\n", count);
     for (uint8_t i = 0; i < count; ++i) {
         if (!modules[i]) continue;
-        Serial.printf("  - %s deps=%u\n", modules[i]->moduleId(), modules[i]->dependencyCount());
+        Board::SerialMap::logSerial().printf("  - %s deps=%u\n", modules[i]->moduleId(), modules[i]->dependencyCount());
         for (uint8_t d = 0; d < modules[i]->dependencyCount(); ++d) {
             const char* dep = modules[i]->dependency(d);
-            Serial.printf("      -> %s\n", dep ? dep : "(null)");
+            Board::SerialMap::logSerial().printf("      -> %s\n", dep ? dep : "(null)");
         }
     }
-    Serial.flush();
+    Board::SerialMap::logSerial().flush();
     delay(50);
 }
 
@@ -60,9 +61,9 @@ bool ModuleManager::buildInitOrder() {
 
                 Module* dep = findById(depId);
                 if (!dep) {
-                    Serial.printf("[MOD][ERR] Missing dependency: module='%s' requires='%s'\n",
-                                  m->moduleId(), depId);
-                    Serial.flush();
+                    Board::SerialMap::logSerial().printf("[MOD][ERR] Missing dependency: module='%s' requires='%s'\n",
+                                                         m->moduleId(), depId);
+                    Board::SerialMap::logSerial().flush();
                     delay(20);
             Log::error(LOG_TAG_CORE, "missing dependency: module=%s requires=%s",
                                m->moduleId(), depId);
@@ -96,14 +97,14 @@ bool ModuleManager::buildInitOrder() {
         }
 
         if (!progress) {
-            Serial.println("[MOD][ERR] Cyclic deps detected (or unresolved deps)");
-            Serial.println("[MOD] Remaining not placed:");
+            Board::SerialMap::logSerial().println("[MOD][ERR] Cyclic deps detected (or unresolved deps)");
+            Board::SerialMap::logSerial().println("[MOD] Remaining not placed:");
             for (uint8_t i = 0; i < count; ++i) {
                 if (modules[i] && !placed[i]) {
-                    Serial.printf("   * %s\n", modules[i]->moduleId());
+                    Board::SerialMap::logSerial().printf("   * %s\n", modules[i]->moduleId());
                 }
             }
-            Serial.flush();
+            Board::SerialMap::logSerial().flush();
             delay(50);
             Log::error(LOG_TAG_CORE, "cyclic or unresolved deps detected");
             return false;

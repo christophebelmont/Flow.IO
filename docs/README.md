@@ -30,17 +30,18 @@ Ordre d'enregistrement dans `main.cpp`:
 5. `config`
 6. `datastore`
 7. `cmd`
-8. `alarms`
-9. `log.sink.alarm`
-10. `wifi`
-11. `time`
-12. `mqtt`
-13. `ha`
-14. `system`
-15. `io`
-16. `poollogic`
-17. `pooldev`
-18. `sysmon`
+8. `hmi`
+9. `alarms`
+10. `log.sink.alarm`
+11. `wifi`
+12. `time`
+13. `mqtt`
+14. `ha`
+15. `system`
+16. `io`
+17. `poollogic`
+18. `pooldev`
+19. `sysmon`
 
 Puis:
 1. init de tous les modules (ordre topologique)
@@ -66,6 +67,7 @@ Puis:
 - [CommandModule](modules/CommandModule.md)
 - [SystemModule](modules/SystemModule.md)
 - [SystemMonitorModule](modules/SystemMonitorModule.md)
+- [HMIModule](modules/HMIModule.md)
 - [AlarmModule](modules/AlarmModule.md)
 - [WifiModule](modules/WifiModule.md)
 - [TimeModule](modules/TimeModule.md)

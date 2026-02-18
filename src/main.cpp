@@ -42,6 +42,7 @@
 #include "Modules/EventBusModule/EventBusModule.h"
 #include "Modules/CommandModule/CommandModule.h"
 #include "Modules/AlarmModule/AlarmModule.h"
+#include "Modules/HMIModule/HMIModule.h"
 
 #include "Core/Layout/PoolIoMap.h"
 #include "Core/Layout/PoolSensorMap.h"
@@ -50,6 +51,7 @@
 #include "Core/SnprintfCheck.h"
 #include "Board/BoardLayout.h"
 #include "Board/BoardPinMap.h"
+#include "Board/BoardSerialMap.h"
 #include "Core/SystemLimits.h"
 #include "Domain/Calibration.h"
 #include <WiFi.h>
@@ -84,6 +86,7 @@ static LogDispatcherModule  logDispatcherModule;
 static LogHubModule         logHubModule;
 static EventBusModule       eventBusModule;
 static AlarmModule          alarmModule;
+static HMIModule            hmiModule;
 static IOModule             ioModule;
 static PoolDeviceModule     poolDeviceModule;
 static PoolLogicModule      poolLogicModule;
@@ -167,7 +170,7 @@ static void onIoBoolValue(void* ctx, bool value) {
 static void requireSetup(bool ok, const char* step)
 {
     if (ok) return;
-    Serial.printf("Setup failure: %s\n", step ? step : "unknown");
+    Board::SerialMap::logSerial().printf("Setup failure: %s\n", step ? step : "unknown");
     while (true) delay(1000);
 }
 
@@ -178,8 +181,8 @@ static bool registerRuntimeProvider(MQTTModule& mqtt, const IRuntimeSnapshotProv
     const uint8_t count = provider->runtimeSnapshotCount();
     for (uint8_t idx = 0; idx < count; ++idx) {
         if (gRuntimeRouteCount >= Limits::MaxRuntimeRoutes) {
-            Serial.printf("Runtime route limit reached (%u), provider routes truncated\n",
-                          (unsigned)Limits::MaxRuntimeRoutes);
+            Board::SerialMap::logSerial().printf("Runtime route limit reached (%u), provider routes truncated\n",
+                                                 (unsigned)Limits::MaxRuntimeRoutes);
             break;
         }
         const char* suffix = provider->runtimeSnapshotSuffix(idx);
@@ -340,10 +343,10 @@ static void startBootOrchestrator()
     mqttModule.setStartupReady(false);
     haModule.setStartupReady(false);
     poolLogicModule.setStartupReady(false);
-    Serial.printf("[BOOT] staged startup armed (mqtt=%lums ha=%lums poollogic=%lums)\n",
-                  (unsigned long)Limits::Boot::MqttStartDelayMs,
-                  (unsigned long)Limits::Boot::HaStartDelayMs,
-                  (unsigned long)Limits::Boot::PoolLogicStartDelayMs);
+    Board::SerialMap::logSerial().printf("[BOOT] staged startup armed (mqtt=%lums ha=%lums poollogic=%lums)\n",
+                                         (unsigned long)Limits::Boot::MqttStartDelayMs,
+                                         (unsigned long)Limits::Boot::HaStartDelayMs,
+                                         (unsigned long)Limits::Boot::PoolLogicStartDelayMs);
 }
 
 static void runBootOrchestrator()
@@ -356,24 +359,24 @@ static void runBootOrchestrator()
     if (!gBootOrchestrator.mqttReleased && elapsed >= Limits::Boot::MqttStartDelayMs) {
         mqttModule.setStartupReady(true);
         gBootOrchestrator.mqttReleased = true;
-        Serial.printf("[BOOT] mqtt stage released at %lums\n", (unsigned long)elapsed);
+        Board::SerialMap::logSerial().printf("[BOOT] mqtt stage released at %lums\n", (unsigned long)elapsed);
     }
 
     if (!gBootOrchestrator.haReleased && elapsed >= Limits::Boot::HaStartDelayMs) {
         haModule.setStartupReady(true);
         gBootOrchestrator.haReleased = true;
-        Serial.printf("[BOOT] ha stage released at %lums\n", (unsigned long)elapsed);
+        Board::SerialMap::logSerial().printf("[BOOT] ha stage released at %lums\n", (unsigned long)elapsed);
     }
 
     if (!gBootOrchestrator.poolLogicReleased && elapsed >= Limits::Boot::PoolLogicStartDelayMs) {
         poolLogicModule.setStartupReady(true);
         gBootOrchestrator.poolLogicReleased = true;
-        Serial.printf("[BOOT] poollogic stage released at %lums\n", (unsigned long)elapsed);
+        Board::SerialMap::logSerial().printf("[BOOT] poollogic stage released at %lums\n", (unsigned long)elapsed);
     }
 
     if (gBootOrchestrator.mqttReleased && gBootOrchestrator.haReleased && gBootOrchestrator.poolLogicReleased) {
         gBootOrchestrator.active = false;
-        Serial.println("[BOOT] staged startup completed");
+        Board::SerialMap::logSerial().println("[BOOT] staged startup completed");
     }
 }
 /* Test task currently deactivated */
@@ -391,7 +394,7 @@ static void ledRandomTask(void*)
 }
 
 void setup() {
-    Serial.begin(115200);
+    Serial.begin(Board::SerialMap::uart0Baud());
     delay(50);
     preferences.begin(NvsKeys::StorageNamespace, false);
     registry.setPreferences(preferences);
@@ -408,6 +411,7 @@ void setup() {
     moduleManager.add(&configStoreModule);
     moduleManager.add(&dataStoreModule);
     moduleManager.add(&commandModule);
+    moduleManager.add(&hmiModule);
     moduleManager.add(&alarmModule);
     moduleManager.add(&logAlarmSinkModule);
     moduleManager.add(&wifiModule);
@@ -605,7 +609,7 @@ void setup() {
         1
     );*/
 
-    Serial.print(
+    Board::SerialMap::logSerial().print(
         "\x1b[34m"
         "__        __   _                               _        \n"
         "\\ \\      / /__| | ___ ___  _ __ ___   ___     | |_ ___  \n"

@@ -29,6 +29,7 @@ services.add("myservice", &svc);
 - `config` -> `ConfigStoreService`
 - `datastore` -> `DataStoreService`
 - `cmd` -> `CommandService`
+- `hmi` -> `HmiService`
 - `alarms` -> `AlarmService`
 - `wifi` -> `WifiService`
 - `time` -> `TimeService`
@@ -44,6 +45,11 @@ services.add("myservice", &svc);
 - `registerHandler(cmd, fn, userCtx)`
 - `execute(cmd, json, args, reply, replyLen)`
 - Utilisé par MQTT (`cmd`) et console logique interne.
+
+### `HmiService`
+- navigation menu config (`openConfigHome`, `openConfigModule`)
+- synchronisation affichage (`requestRefresh`)
+- snapshot JSON menu (`buildConfigMenuJson`)
 
 ### `ConfigStoreService`
 - `applyJson(json)`
