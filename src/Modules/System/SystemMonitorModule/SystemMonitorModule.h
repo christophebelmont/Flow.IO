@@ -58,7 +58,7 @@ private:
     uint32_t lastTraceLogMs = 0;
 
     void logBootInfo();
-    void logHeapAndWifi();
+    void logHeapStats();
     void logTaskStacks();
     void buildHealthJson(char* out, size_t outLen);
 

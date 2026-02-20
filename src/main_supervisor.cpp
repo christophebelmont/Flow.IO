@@ -126,7 +126,8 @@ void setup()
     moduleManager.add(&webInterfaceModule);
     moduleManager.add(&firmwareUpdateModule);
     moduleManager.add(&systemModule);
-    moduleManager.add(&ioModule);
+    // Temporarily disabled in Supervisor profile to avoid runtime conflicts.
+    // moduleManager.add(&ioModule);
 
     systemMonitorModule.setModuleManager(&moduleManager);
     moduleManager.add(&systemMonitorModule);

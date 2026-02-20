@@ -7,6 +7,7 @@
 #include "Core/Module.h"
 #include "Core/Services/Services.h"
 #include "Core/Services/ILogger.h"
+#include "Core/NvsKeys.h"
 
 #include <HardwareSerial.h>
 #include <ESPAsyncWebServer.h>
@@ -65,12 +66,37 @@ private:
     const LogHubService* logHub_ = nullptr;
     const WifiService* wifiSvc_ = nullptr;
     DataStore* dataStore_ = nullptr;
+    ConfigStore* cfgStore_ = nullptr;
     EventBus* eventBus_ = nullptr;
     bool started_ = false;
     volatile bool netReady_ = false;
     volatile bool uartPaused_ = false;
     const FirmwareUpdateService* fwUpdateSvc_ = nullptr;
     ServiceRegistry* services_ = nullptr;
+
+    struct MqttWebConfigData {
+        char host[Limits::Mqtt::Buffers::Host] = "192.168.86.250";
+        int32_t port = Limits::Mqtt::Defaults::Port;
+        char user[Limits::Mqtt::Buffers::User] = "";
+        char pass[Limits::Mqtt::Buffers::Pass] = "";
+    } mqttCfg_{};
+
+    ConfigVariable<char, 2> mqttHostVar_{
+        NVS_KEY(NvsKeys::Mqtt::Host), "host", "mqtt",
+        ConfigType::CharArray, mqttCfg_.host, ConfigPersistence::Persistent, sizeof(mqttCfg_.host)
+    };
+    ConfigVariable<int32_t, 2> mqttPortVar_{
+        NVS_KEY(NvsKeys::Mqtt::Port), "port", "mqtt",
+        ConfigType::Int32, &mqttCfg_.port, ConfigPersistence::Persistent, 0
+    };
+    ConfigVariable<char, 2> mqttUserVar_{
+        NVS_KEY(NvsKeys::Mqtt::User), "user", "mqtt",
+        ConfigType::CharArray, mqttCfg_.user, ConfigPersistence::Persistent, sizeof(mqttCfg_.user)
+    };
+    ConfigVariable<char, 2> mqttPassVar_{
+        NVS_KEY(NvsKeys::Mqtt::Pass), "pass", "mqtt",
+        ConfigType::CharArray, mqttCfg_.pass, ConfigPersistence::Persistent, sizeof(mqttCfg_.pass)
+    };
 
     char lineBuf_[kLineBufferSize] = {0};
     size_t lineLen_ = 0;

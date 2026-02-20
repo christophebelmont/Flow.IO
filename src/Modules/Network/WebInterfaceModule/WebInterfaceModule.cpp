@@ -5,13 +5,117 @@
 
 #include "WebInterfaceModule.h"
 
-#define LOG_TAG "WebIntf"
+#define LOG_TAG "WebServr"
 #include "Core/ModuleLog.h"
 
 #include <string.h>
+#include <stdlib.h>
 #include "Core/DataKeys.h"
 #include "Core/EventBus/EventPayloads.h"
 #include "Modules/Network/WifiModule/WifiRuntime.h"
+
+static void sanitizeJsonString_(char* s)
+{
+    if (!s) return;
+    for (size_t i = 0; s[i] != '\0'; ++i) {
+        if (s[i] == '"' || s[i] == '\\' || s[i] == '\n' || s[i] == '\r' || s[i] == '\t') {
+            s[i] = ' ';
+        }
+    }
+}
+
+static const char kFlowIoLogoSvg[] PROGMEM = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
+  <title id="title">Flow.IO Logo</title>
+  <desc id="desc">Logo Flow.IO with water drop and waves.</desc>
+  <defs>
+    <linearGradient id="gradDrop" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#21C7FF"/>
+      <stop offset="100%" stop-color="#0066FF"/>
+    </linearGradient>
+    <linearGradient id="gradWave" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00AEEF"/>
+      <stop offset="100%" stop-color="#1ED6A6"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#001A33" flood-opacity="0.2"/>
+    </filter>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="360" fill="#FFFFFF"/>
+
+  <g transform="translate(70,40)" filter="url(#softShadow)">
+    <circle cx="140" cy="140" r="116" fill="#FFFFFF"/>
+    <circle cx="140" cy="140" r="112" fill="none" stroke="#D7E9F8" stroke-width="2"/>
+
+    <path d="M140 40
+             C140 40, 72 116, 72 170
+             C72 222, 106 252, 140 252
+             C174 252, 208 222, 208 170
+             C208 116, 140 40, 140 40 Z"
+          fill="url(#gradDrop)"/>
+
+    <path d="M82 168
+             C98 154, 116 152, 134 160
+             C152 168, 170 170, 196 158"
+          fill="none" stroke="url(#gradWave)" stroke-width="10" stroke-linecap="round"/>
+
+    <path d="M86 196
+             C106 184, 126 184, 146 192
+             C166 200, 182 200, 196 194"
+          fill="none" stroke="url(#gradWave)" stroke-width="8" stroke-linecap="round" opacity="0.95"/>
+
+  </g>
+
+  <g transform="translate(340,94)">
+    <text x="0" y="110" fill="#073B66" font-family="Avenir Next, Montserrat, Segoe UI, Arial, sans-serif" font-size="132" font-weight="800" letter-spacing="1">
+      FLOW
+    </text>
+    <text x="420" y="110" fill="#00AEEF" font-family="Avenir Next, Montserrat, Segoe UI, Arial, sans-serif" font-size="132" font-weight="800">
+      .
+    </text>
+    <text x="470" y="110" fill="#073B66" font-family="Avenir Next, Montserrat, Segoe UI, Arial, sans-serif" font-size="132" font-weight="800">
+      IO
+    </text>
+    <text x="4" y="156" fill="#3C6E91" font-family="Avenir Next, Montserrat, Segoe UI, Arial, sans-serif" font-size="36" font-weight="500" letter-spacing="4">
+      SMART POOL WATER MANAGEMENT
+    </text>
+  </g>
+</svg>
+)SVG";
+
+static const char kFlowIoIconSvg[] PROGMEM = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Flow.IO App Icon</title>
+  <desc id="desc">Flow.IO icon with drop and waves.</desc>
+  <defs>
+    <linearGradient id="dropGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#21C7FF"/>
+      <stop offset="100%" stop-color="#0066FF"/>
+    </linearGradient>
+    <linearGradient id="waveGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00AEEF"/>
+      <stop offset="100%" stop-color="#1ED6A6"/>
+    </linearGradient>
+  </defs>
+  <rect x="24" y="24" width="464" height="464" rx="110" fill="#F6FBFF"/>
+  <rect x="24" y="24" width="464" height="464" rx="110" fill="none" stroke="#D6E9F8" stroke-width="4"/>
+  <path d="M256 102
+           C256 102, 142 224, 142 306
+           C142 382, 196 424, 256 424
+           C316 424, 370 382, 370 306
+           C370 224, 256 102, 256 102 Z"
+        fill="url(#dropGrad)"/>
+  <path d="M164 298
+           C188 280, 216 276, 246 288
+           C276 300, 306 304, 350 286"
+        fill="none" stroke="url(#waveGrad)" stroke-width="20" stroke-linecap="round"/>
+  <path d="M170 346
+           C198 330, 228 330, 260 342
+           C292 354, 320 356, 348 346"
+        fill="none" stroke="url(#waveGrad)" stroke-width="16" stroke-linecap="round" opacity="0.95"/>
+</svg>
+)SVG";
 
 static const char kWebInterfacePage[] PROGMEM = R"HTML(
 <!doctype html>
@@ -23,7 +127,7 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" />
   <style>
     :root {
-      --md-bg: #fef7ff;
+      --md-bg: #fffbfe;
       --md-surface: #fffbfe;
       --md-on-surface: #1d1b20;
       --md-outline: #79747e;
@@ -40,10 +144,7 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
       margin: 0;
       min-height: 100vh;
       font-family: "Inter", "Segoe UI", Roboto, Arial, sans-serif;
-      background:
-        radial-gradient(1200px 800px at -10% -20%, #ede4ff 0%, transparent 45%),
-        radial-gradient(900px 600px at 120% -10%, #ffe7ef 0%, transparent 45%),
-        var(--md-bg);
+      background: var(--md-bg);
       color: var(--md-on-surface);
     }
     .app { display: flex; min-height: 100vh; }
@@ -51,10 +152,12 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
       width: 280px;
       padding: 12px;
       border-right: 1px solid rgba(121,116,126,0.35);
-      background: rgba(255,251,254,0.95);
+      background: #ffffff;
       overflow: hidden;
       transition: width 0.2s ease;
       z-index: 20;
+      display: flex;
+      flex-direction: column;
     }
     .drawer.collapsed { width: 78px; }
     .drawer-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
@@ -63,9 +166,38 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
       background: var(--md-secondary-container); color: var(--md-on-secondary-container);
       cursor: pointer; font-size: 18px; line-height: 1;
     }
-    .brand { font-weight: 700; white-space: nowrap; }
-    .drawer.collapsed .brand { display: none; }
+    .drawer-user {
+      font-size: 18px;
+      font-weight: 700;
+      color: #073b66;
+      line-height: 1;
+      white-space: nowrap;
+    }
+    .drawer.collapsed .drawer-user { display: none; }
     .menu-group { display: grid; gap: 6px; margin-top: 10px; }
+    .drawer-footer {
+      margin-top: auto;
+      display: flex;
+      justify-content: center;
+      padding-top: 14px;
+    }
+    .app-icon-shell {
+      width: 100%;
+      max-width: 210px;
+      border-radius: 10px;
+      background: #ffffff;
+      border: 1px solid #d6e9f8;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 6px 8px;
+    }
+    .app-icon {
+      width: 100%;
+      max-width: 170px;
+      height: auto;
+      display: block;
+    }
     .menu-item {
       border: 0; border-radius: 14px; padding: 12px 14px;
       display: flex; align-items: center; gap: 12px; cursor: pointer;
@@ -86,7 +218,38 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
       font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
     }
     .drawer.collapsed .menu-item .label { display: none; }
+    @media (min-width: 901px) {
+      .drawer.collapsed .drawer-header { justify-content: center; }
+      .drawer.collapsed .menu-group { justify-items: center; }
+      .drawer.collapsed .menu-btn,
+      .drawer.collapsed .menu-item {
+        width: 48px;
+        min-width: 48px;
+        height: 42px;
+        padding-left: 0;
+        padding-right: 0;
+        justify-content: center;
+      }
+      .drawer.collapsed .menu-item .ico { width: auto; }
+      .drawer.collapsed .app-icon-shell {
+        width: 48px;
+        max-width: 48px;
+        min-height: 48px;
+        padding: 8px 6px;
+        border-radius: 14px;
+      }
+      .drawer.collapsed .app-icon {
+        max-width: 100%;
+      }
+    }
     .content { flex: 1; padding: 18px; min-width: 0; }
+    .mobile-topbar { display: none; }
+    .mobile-topbar .mobile-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: #073b66;
+      line-height: 1;
+    }
     .page { display: none; }
     .page.active { display: block; }
     .topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; gap: 12px; }
@@ -117,6 +280,11 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
     .log-line { white-space: pre-wrap; }
     .term-toolbar { display: flex; gap: 8px; margin-top: 10px; }
     .term-toolbar input { flex: 1; }
+    .btn-toggle-off {
+      background: #eef2f7;
+      color: #5b6673;
+      border-color: rgba(121,116,126,0.35);
+    }
     .form-grid { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(220px, 1fr)); }
     .field { display: grid; gap: 6px; min-width: 0; }
     .field.full { grid-column: 1 / -1; }
@@ -134,17 +302,127 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
       margin-top: 10px; padding: 10px; border-radius: 12px;
       background: rgba(232,222,248,0.7); font-size: 13px;
     }
+    .upgrade-progress {
+      margin-top: 12px;
+      height: 8px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: var(--md-surface-variant);
+      border: 1px solid rgba(121,116,126,0.22);
+    }
+    .upgrade-progress-bar {
+      height: 100%;
+      width: 0%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #6750a4 0%, #7f67be 100%);
+      transition: width 0.2s ease;
+    }
+    .config-status {
+      margin-top: 10px;
+      padding: 10px;
+      border-radius: 12px;
+      background: rgba(214, 233, 248, 0.8);
+      font-size: 13px;
+      color: #073b66;
+    }
+    .control-list {
+      display: grid;
+      gap: 6px;
+      max-width: 640px;
+      margin: 0 auto;
+    }
+    .control-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 4px;
+      border: none;
+      background: transparent;
+    }
+    .control-name {
+      font-size: 14px;
+      font-weight: 600;
+      color: #073b66;
+    }
+    .control-card {
+      border: none;
+      background: transparent;
+      padding: 6px 0;
+    }
+    .md3-switch {
+      position: relative;
+      width: 52px;
+      height: 32px;
+      flex: 0 0 auto;
+    }
+    .md3-switch input {
+      position: absolute;
+      inset: 0;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      opacity: 0;
+      cursor: pointer;
+      appearance: none;
+      -webkit-appearance: none;
+    }
+    .md3-track {
+      position: absolute;
+      inset: 0;
+      border-radius: 999px;
+      border: 2px solid #7c8ea4;
+      background: #e5edf5;
+      transition: all 0.18s ease;
+    }
+    .md3-thumb {
+      position: absolute;
+      top: 50%;
+      left: 8px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #3e4f62;
+      transform: translateY(-50%);
+      transition: all 0.18s ease;
+    }
+    .md3-switch input:checked + .md3-track {
+      border-color: #0066ff;
+      background: #9dc7ff;
+    }
+    .md3-switch input:checked + .md3-track + .md3-thumb {
+      left: 30px;
+      background: #ffffff;
+    }
+    .md3-switch input:focus-visible + .md3-track {
+      box-shadow: 0 0 0 3px rgba(0, 102, 255, 0.25);
+    }
     .overlay { position: fixed; inset: 0; background: rgba(24,20,38,0.25); display: none; z-index: 10; }
     @media (max-width: 900px) {
       .drawer {
         position: fixed; left: 0; top: 0; bottom: 0;
-        transform: translateX(-100%); transition: transform 0.2s ease;
+        width: min(280px, calc(100vw - 32px));
+        transform: translateX(-104%);
+        transition: transform 0.2s ease;
+        box-shadow: 0 10px 28px rgba(7, 59, 102, 0.22);
       }
       .drawer.mobile-open { transform: translateX(0); }
       .drawer.collapsed { width: 280px; }
-      .drawer.collapsed .brand, .drawer.collapsed .menu-item .label { display: inline; }
+      .drawer.collapsed .drawer-user, .drawer.collapsed .menu-item .label { display: inline; }
       .overlay.visible { display: block; }
       .content { width: 100%; padding: 12px; }
+      .mobile-topbar {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: -12px -12px 12px -12px;
+        padding: 10px 12px;
+        border-bottom: 1px solid rgba(121,116,126,0.35);
+        background: #ffffff;
+      }
       .form-grid { grid-template-columns: 1fr; }
     }
   </style>
@@ -154,16 +432,25 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
   <div class="app">
     <aside id="drawer" class="drawer">
       <div class="drawer-header">
-        <button id="menuToggle" class="menu-btn" aria-label="Toggle menu">=</button>
-        <div class="brand">Flow.IO Supervisor</div>
+        <button id="menuToggle" class="menu-btn" data-menu-toggle aria-label="Toggle menu">=</button>
+        <div class="drawer-user">Admin</div>
       </div>
       <nav class="menu-group">
         <button class="menu-item active" data-page="page-terminal"><span class="ico material-symbols-outlined">terminal</span><span class="label">Journaux</span></button>
         <button class="menu-item" data-page="page-upgrade"><span class="ico material-symbols-outlined">update</span><span class="label">Mise à jour Firmware</span></button>
+        <button class="menu-item" data-page="page-config"><span class="ico material-symbols-outlined">settings</span><span class="label">Configuration</span></button>
+        <button class="menu-item" data-page="page-control"><span class="ico material-symbols-outlined">pool</span><span class="label">Control</span></button>
       </nav>
+      <div class="drawer-footer">
+        <span class="app-icon-shell"><img class="app-icon" src="/assets/flowio-logo.svg" alt="Flow.IO" /></span>
+      </div>
     </aside>
 
     <main class="content">
+      <div class="mobile-topbar">
+        <button class="menu-btn" data-menu-toggle aria-label="Open menu">=</button>
+        <div class="mobile-title">Admin</div>
+      </div>
       <section id="page-terminal" class="page active">
         <div class="topbar">
           <h1>Journaux</h1>
@@ -172,6 +459,7 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
         <div class="card">
           <div id="term" class="terminal"></div>
           <div class="term-toolbar">
+            <button id="toggleAutoscroll" class="btn-tonal" aria-pressed="true">Auto-scroll: ON</button>
             <input id="line" placeholder="Send line to UART" />
             <button id="send" class="btn-tonal">Send</button>
             <button id="clear">Clear</button>
@@ -205,7 +493,63 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
             <button id="upNextion" class="btn-primary">Upgrade Nextion</button>
             <button id="refreshState">Refresh Status</button>
           </div>
-          <div id="upgradeStatus" class="upgrade-status">No operation running.</div>
+          <div class="upgrade-progress" aria-label="Progression mise à jour firmware">
+            <div id="upgradeProgressBar" class="upgrade-progress-bar"></div>
+          </div>
+          <div id="upgradeStatusText" class="upgrade-status">No operation running.</div>
+        </div>
+      </section>
+
+      <section id="page-config" class="page">
+        <div class="topbar">
+          <h1>Configuration</h1>
+          <span class="status-chip">MQTT</span>
+        </div>
+        <div class="card">
+          <div class="form-grid">
+            <div class="field full">
+              <label for="mqttServer">Serveur MQTT</label>
+              <input id="mqttServer" placeholder="e.g. 192.168.1.20" />
+            </div>
+            <div class="field">
+              <label for="mqttPort">Port</label>
+              <input id="mqttPort" type="number" min="1" max="65535" placeholder="1883" />
+            </div>
+            <div class="field">
+              <label for="mqttUser">Username</label>
+              <input id="mqttUser" placeholder="username" />
+            </div>
+            <div class="field full">
+              <label for="mqttPass">Password</label>
+              <input id="mqttPass" type="password" placeholder="password" />
+            </div>
+          </div>
+          <div class="btn-row">
+            <button id="applyMqttCfg" class="btn-primary">Appliquer</button>
+          </div>
+          <div id="mqttConfigStatus" class="config-status">Configuration MQTT prête.</div>
+        </div>
+      </section>
+
+      <section id="page-control" class="page">
+        <div class="topbar">
+          <h1>Control</h1>
+          <span class="status-chip">manual</span>
+        </div>
+        <div class="card control-card">
+          <div class="control-list">
+            <label class="control-item"><span class="control-name">Remplissage</span><span class="md3-switch"><input type="checkbox" /><span class="md3-track"></span><span class="md3-thumb"></span></span></label>
+            <label class="control-item"><span class="control-name">Electrolyseur</span><span class="md3-switch"><input type="checkbox" /><span class="md3-track"></span><span class="md3-thumb"></span></span></label>
+            <label class="control-item"><span class="control-name">Filtration</span><span class="md3-switch"><input type="checkbox" /><span class="md3-track"></span><span class="md3-thumb"></span></span></label>
+            <label class="control-item"><span class="control-name">Robot</span><span class="md3-switch"><input type="checkbox" /><span class="md3-track"></span><span class="md3-thumb"></span></span></label>
+            <label class="control-item"><span class="control-name">Pompe pH</span><span class="md3-switch"><input type="checkbox" /><span class="md3-track"></span><span class="md3-thumb"></span></span></label>
+            <label class="control-item"><span class="control-name">Pompe Chlore</span><span class="md3-switch"><input type="checkbox" /><span class="md3-track"></span><span class="md3-thumb"></span></span></label>
+            <label class="control-item"><span class="control-name">Eclairage</span><span class="md3-switch"><input type="checkbox" /><span class="md3-track"></span><span class="md3-thumb"></span></span></label>
+            <label class="control-item"><span class="control-name">Régulation pH</span><span class="md3-switch"><input type="checkbox" /><span class="md3-track"></span><span class="md3-thumb"></span></span></label>
+            <label class="control-item"><span class="control-name">Régulation Orp</span><span class="md3-switch"><input type="checkbox" /><span class="md3-track"></span><span class="md3-thumb"></span></span></label>
+            <label class="control-item"><span class="control-name">Mode automatique</span><span class="md3-switch"><input type="checkbox" /><span class="md3-track"></span><span class="md3-thumb"></span></span></label>
+            <label class="control-item"><span class="control-name">Hivernage</span><span class="md3-switch"><input type="checkbox" /><span class="md3-track"></span><span class="md3-thumb"></span></span></label>
+          </div>
         </div>
       </section>
     </main>
@@ -214,14 +558,22 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
   <script>
     const drawer = document.getElementById('drawer');
     const overlay = document.getElementById('overlay');
-    const menuToggle = document.getElementById('menuToggle');
+    const menuToggles = Array.from(document.querySelectorAll('[data-menu-toggle]'));
     const menuItems = Array.from(document.querySelectorAll('.menu-item'));
     const pages = Array.from(document.querySelectorAll('.page'));
 
+    function isMobileLayout() {
+      return window.innerWidth <= 900;
+    }
+
+    function setMobileDrawerOpen(open) {
+      drawer.classList.toggle('mobile-open', open);
+      overlay.classList.toggle('visible', open);
+    }
+
     function closeMobileDrawer() {
-      if (window.innerWidth <= 900) {
-        drawer.classList.remove('mobile-open');
-        overlay.classList.remove('visible');
+      if (isMobileLayout()) {
+        setMobileDrawerOpen(false);
       }
     }
 
@@ -233,20 +585,18 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
 
     menuItems.forEach((item) => item.addEventListener('click', () => showPage(item.dataset.page)));
 
-    menuToggle.addEventListener('click', () => {
-      if (window.innerWidth <= 900) {
-        drawer.classList.toggle('mobile-open');
-        overlay.classList.toggle('visible');
+    menuToggles.forEach((btn) => btn.addEventListener('click', () => {
+      if (isMobileLayout()) {
+        setMobileDrawerOpen(!drawer.classList.contains('mobile-open'));
       } else {
         drawer.classList.toggle('collapsed');
       }
-    });
+    }));
 
     overlay.addEventListener('click', closeMobileDrawer);
     window.addEventListener('resize', () => {
-      if (window.innerWidth > 900) {
-        drawer.classList.remove('mobile-open');
-        overlay.classList.remove('visible');
+      if (!isMobileLayout()) {
+        setMobileDrawerOpen(false);
       }
     });
 
@@ -255,6 +605,8 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
     const line = document.getElementById('line');
     const sendBtn = document.getElementById('send');
     const clearBtn = document.getElementById('clear');
+    const toggleAutoscrollBtn = document.getElementById('toggleAutoscroll');
+    let autoScrollEnabled = true;
 
     const updateHost = document.getElementById('updateHost');
     const flowPath = document.getElementById('flowPath');
@@ -263,8 +615,16 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
     const upFlowBtn = document.getElementById('upFlow');
     const upNextionBtn = document.getElementById('upNextion');
     const refreshStateBtn = document.getElementById('refreshState');
-    const upgradeStatus = document.getElementById('upgradeStatus');
+    const upgradeStatusText = document.getElementById('upgradeStatusText');
+    const upgradeProgressBar = document.getElementById('upgradeProgressBar');
     const upStatusChip = document.getElementById('upStatusChip');
+
+    const mqttServer = document.getElementById('mqttServer');
+    const mqttPort = document.getElementById('mqttPort');
+    const mqttUser = document.getElementById('mqttUser');
+    const mqttPass = document.getElementById('mqttPass');
+    const applyMqttCfgBtn = document.getElementById('applyMqttCfg');
+    const mqttConfigStatus = document.getElementById('mqttConfigStatus');
 
     const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(wsProto + '://' + location.host + '/wsserial');
@@ -319,8 +679,15 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
       row.textContent = parsed.text;
       term.appendChild(row);
       while (term.childNodes.length > 2000) term.removeChild(term.firstChild);
-      term.scrollTop = term.scrollHeight;
+      if (autoScrollEnabled) term.scrollTop = term.scrollHeight;
     };
+
+    function refreshAutoscrollUi() {
+      toggleAutoscrollBtn.textContent = autoScrollEnabled ? 'Auto-scroll: ON' : 'Auto-scroll: OFF';
+      toggleAutoscrollBtn.setAttribute('aria-pressed', autoScrollEnabled ? 'true' : 'false');
+      toggleAutoscrollBtn.classList.toggle('btn-tonal', autoScrollEnabled);
+      toggleAutoscrollBtn.classList.toggle('btn-toggle-off', !autoScrollEnabled);
+    }
 
     function sendLine() {
       const txt = line.value;
@@ -334,6 +701,21 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
       if (e.key === 'Enter') sendLine();
     });
     clearBtn.addEventListener('click', () => { term.textContent = ''; });
+    toggleAutoscrollBtn.addEventListener('click', () => {
+      autoScrollEnabled = !autoScrollEnabled;
+      refreshAutoscrollUi();
+      if (autoScrollEnabled) term.scrollTop = term.scrollHeight;
+    });
+    refreshAutoscrollUi();
+
+    function setUpgradeProgress(value) {
+      const p = Math.max(0, Math.min(100, Number(value) || 0));
+      upgradeProgressBar.style.width = p + '%';
+    }
+
+    function setUpgradeMessage(text) {
+      upgradeStatusText.textContent = text;
+    }
 
     function updateUpgradeView(data) {
       if (!data || data.ok !== true) return;
@@ -342,7 +724,11 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
       const progress = Number.isFinite(data.progress) ? data.progress : 0;
       const msg = data.msg || '';
       upStatusChip.textContent = state;
-      upgradeStatus.textContent = state + ' | target=' + target + ' | progress=' + progress + '% | ' + msg;
+      let p = progress;
+      if (state === 'done') p = 100;
+      if (state === 'queued' && p <= 0) p = 2;
+      setUpgradeProgress(p);
+      setUpgradeMessage(state + ' | target=' + target + (msg ? ' | ' + msg : ''));
     }
 
     async function loadUpgradeConfig() {
@@ -355,7 +741,7 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
           nextionPath.value = data.nextion_path || '';
         }
       } catch (err) {
-        upgradeStatus.textContent = 'Config load failed: ' + err;
+        setUpgradeMessage('Config load failed: ' + err);
       }
     }
 
@@ -371,7 +757,7 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) throw new Error('save failed');
-      upgradeStatus.textContent = 'Configuration saved.';
+      setUpgradeMessage('Configuration saved.');
     }
 
     async function refreshUpgradeStatus() {
@@ -380,7 +766,7 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
         const data = await res.json();
         if (data && data.ok) updateUpgradeView(data);
       } catch (err) {
-        upgradeStatus.textContent = 'Status read failed: ' + err;
+        setUpgradeMessage('Status read failed: ' + err);
       }
     }
 
@@ -391,25 +777,68 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
         const res = await fetch(endpoint, { method: 'POST' });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) throw new Error('start failed');
-        upgradeStatus.textContent = 'Upgrade request accepted for ' + target + '.';
+        setUpgradeProgress(1);
+        setUpgradeMessage('Upgrade request accepted for ' + target + '.');
         await refreshUpgradeStatus();
       } catch (err) {
-        upgradeStatus.textContent = 'Upgrade failed: ' + err;
+        setUpgradeMessage('Upgrade failed: ' + err);
       }
+    }
+
+    async function loadMqttConfig() {
+      try {
+        const res = await fetch('/api/mqtt/config', { cache: 'no-store' });
+        const data = await res.json();
+        if (data && data.ok) {
+          mqttServer.value = data.server || '';
+          mqttPort.value = Number.isFinite(data.port) ? String(data.port) : '1883';
+          mqttUser.value = data.username || '';
+          mqttPass.value = data.password || '';
+          mqttConfigStatus.textContent = 'Configuration MQTT chargée.';
+        }
+      } catch (err) {
+        mqttConfigStatus.textContent = 'Chargement MQTT échoué: ' + err;
+      }
+    }
+
+    async function saveMqttConfig() {
+      const body = new URLSearchParams();
+      body.set('server', mqttServer.value.trim());
+      body.set('port', (mqttPort.value || '1883').trim());
+      body.set('username', mqttUser.value.trim());
+      body.set('password', mqttPass.value);
+
+      const res = await fetch('/api/mqtt/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+        body: body.toString()
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error('apply failed');
+      mqttConfigStatus.textContent = 'Configuration MQTT appliquée.';
     }
 
     saveCfgBtn.addEventListener('click', async () => {
       try {
         await saveUpgradeConfig();
       } catch (err) {
-        upgradeStatus.textContent = 'Save failed: ' + err;
+        setUpgradeMessage('Save failed: ' + err);
       }
     });
     upFlowBtn.addEventListener('click', () => startUpgrade('flowio'));
     upNextionBtn.addEventListener('click', () => startUpgrade('nextion'));
     refreshStateBtn.addEventListener('click', refreshUpgradeStatus);
+    applyMqttCfgBtn.addEventListener('click', async () => {
+      try {
+        await saveMqttConfig();
+      } catch (err) {
+        mqttConfigStatus.textContent = 'Application MQTT échouée: ' + err;
+      }
+    });
 
     loadUpgradeConfig();
+    setUpgradeProgress(0);
+    loadMqttConfig();
     refreshUpgradeStatus();
     setInterval(refreshUpgradeStatus, 2000);
   </script>
@@ -417,8 +846,16 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
 </html>
 )HTML";
 
-void WebInterfaceModule::init(ConfigStore&, ServiceRegistry& services)
+void WebInterfaceModule::init(ConfigStore& cfg, ServiceRegistry& services)
 {
+    constexpr uint8_t kCfgModuleId = (uint8_t)ConfigModuleId::Mqtt;
+    constexpr uint16_t kCfgBranchId = (uint16_t)ConfigBranchId::Mqtt;
+    cfgStore_ = &cfg;
+    cfg.registerVar(mqttHostVar_, kCfgModuleId, kCfgBranchId);
+    cfg.registerVar(mqttPortVar_, kCfgModuleId, kCfgBranchId);
+    cfg.registerVar(mqttUserVar_, kCfgModuleId, kCfgBranchId);
+    cfg.registerVar(mqttPassVar_, kCfgModuleId, kCfgBranchId);
+
     services_ = &services;
     logHub_ = services.get<LogHubService>("loghub");
     wifiSvc_ = services.get<WifiService>("wifi");
@@ -453,6 +890,13 @@ void WebInterfaceModule::init(ConfigStore&, ServiceRegistry& services)
 void WebInterfaceModule::startServer_()
 {
     if (started_) return;
+
+    server_.on("/assets/flowio-icon.svg", HTTP_GET, [](AsyncWebServerRequest* request) {
+        request->send(200, "image/svg+xml", kFlowIoIconSvg);
+    });
+    server_.on("/assets/flowio-logo.svg", HTTP_GET, [](AsyncWebServerRequest* request) {
+        request->send(200, "image/svg+xml", kFlowIoLogoSvg);
+    });
 
     server_.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
         request->redirect("/webinterface");
@@ -551,6 +995,81 @@ void WebInterfaceModule::startServer_()
         request->send(200, "application/json", "{\"ok\":true}");
     });
 
+    server_.on("/api/mqtt/config", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        char host[sizeof(mqttCfg_.host)] = {0};
+        char user[sizeof(mqttCfg_.user)] = {0};
+        char pass[sizeof(mqttCfg_.pass)] = {0};
+        snprintf(host, sizeof(host), "%s", mqttCfg_.host);
+        snprintf(user, sizeof(user), "%s", mqttCfg_.user);
+        snprintf(pass, sizeof(pass), "%s", mqttCfg_.pass);
+        sanitizeJsonString_(host);
+        sanitizeJsonString_(user);
+        sanitizeJsonString_(pass);
+
+        char out[512] = {0};
+        const int n = snprintf(out,
+                               sizeof(out),
+                               "{\"ok\":true,\"server\":\"%s\",\"port\":%ld,\"username\":\"%s\",\"password\":\"%s\"}",
+                               host,
+                               (long)mqttCfg_.port,
+                               user,
+                               pass);
+        if (n <= 0 || (size_t)n >= sizeof(out)) {
+            request->send(500, "application/json",
+                          "{\"ok\":false,\"err\":{\"code\":\"Failed\",\"where\":\"mqtt.config.get\"}}");
+            return;
+        }
+        request->send(200, "application/json", out);
+    });
+
+    server_.on("/api/mqtt/config", HTTP_POST, [this](AsyncWebServerRequest* request) {
+        if (!cfgStore_) {
+            request->send(503, "application/json",
+                          "{\"ok\":false,\"err\":{\"code\":\"NotReady\",\"where\":\"mqtt.config.set\"}}");
+            return;
+        }
+
+        String serverStr = request->hasParam("server", true)
+                               ? request->getParam("server", true)->value()
+                               : String(mqttCfg_.host);
+        String userStr = request->hasParam("username", true)
+                             ? request->getParam("username", true)->value()
+                             : String(mqttCfg_.user);
+        String passStr = request->hasParam("password", true)
+                             ? request->getParam("password", true)->value()
+                             : String(mqttCfg_.pass);
+
+        int32_t portVal = mqttCfg_.port;
+        if (request->hasParam("port", true)) {
+            String portStr = request->getParam("port", true)->value();
+            if (portStr.length() == 0) {
+                portVal = Limits::Mqtt::Defaults::Port;
+            } else {
+                char* end = nullptr;
+                const long parsed = strtol(portStr.c_str(), &end, 10);
+                if (!end || *end != '\0' || parsed < 1 || parsed > 65535) {
+                    request->send(400, "application/json",
+                                  "{\"ok\":false,\"err\":{\"code\":\"InvalidArg\",\"where\":\"mqtt.port\"}}");
+                    return;
+                }
+                portVal = (int32_t)parsed;
+            }
+        }
+
+        bool ok = true;
+        ok = ok && cfgStore_->set(mqttHostVar_, serverStr.c_str());
+        ok = ok && cfgStore_->set(mqttPortVar_, portVal);
+        ok = ok && cfgStore_->set(mqttUserVar_, userStr.c_str());
+        ok = ok && cfgStore_->set(mqttPassVar_, passStr.c_str());
+        if (!ok) {
+            request->send(500, "application/json",
+                          "{\"ok\":false,\"err\":{\"code\":\"Failed\",\"where\":\"mqtt.config.set\"}}");
+            return;
+        }
+
+        request->send(200, "application/json", "{\"ok\":true}");
+    });
+
     server_.on("/fwupdate/flowio", HTTP_POST, [this](AsyncWebServerRequest* request) {
         handleUpdateRequest_(request, FirmwareUpdateTarget::FlowIO);
     });
@@ -571,16 +1090,17 @@ void WebInterfaceModule::startServer_()
     server_.addHandler(&ws_);
     server_.begin();
     started_ = true;
+    LOGI("WebInterface server started, listening on 0.0.0.0:%d", kServerPort);
 
     if (wifiSvc_ && wifiSvc_->isConnected && wifiSvc_->isConnected(wifiSvc_->ctx)) {
         char ip[16] = {0};
         if (wifiSvc_->getIP && wifiSvc_->getIP(wifiSvc_->ctx, ip, sizeof(ip)) && ip[0] != '\0') {
-            LOGI("WebInterface ready: http://%s/webinterface", ip);
+            LOGI("WebInterface URL: http://%s/webinterface", ip);
         } else {
-            LOGI("WebInterface ready: WiFi connected (IP unavailable)");
+            LOGI("WebInterface URL: WiFi connected (IP unavailable)");
         }
     } else {
-        LOGI("WebInterface ready: waiting for WiFi IP");
+        LOGI("WebInterface URL: waiting for WiFi IP");
     }
 }
 

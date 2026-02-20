@@ -363,6 +363,8 @@ bool FirmwareUpdateModule::runFlowIoUpdate_(const char* url, char* errOut, size_
 
     HTTPClient http;
     http.setReuse(false);
+    http.setConnectTimeout(15000);
+    http.setTimeout(60000);
     if (!http.begin(url)) {
         writeSimpleError_(errOut, errOutLen, "http begin failed");
         return false;
@@ -407,8 +409,14 @@ bool FirmwareUpdateModule::runFlowIoUpdate_(const char* url, char* errOut, size_
         snprintf(msg, sizeof(msg), "target connect failed (%d)", connectStatus);
         writeSimpleError_(errOut, errOutLen, msg);
     } else {
-        flasher.espFlashBinStream(*http.getStreamPtr(), (uint32_t)contentLength);
-        ok = true;
+        const int flashStatus = flasher.espFlashBinStream(*http.getStreamPtr(), (uint32_t)contentLength);
+        if (flashStatus != SUCCESS) {
+            char msg[64] = {0};
+            snprintf(msg, sizeof(msg), "stream flash failed (%d)", flashStatus);
+            writeSimpleError_(errOut, errOutLen, msg);
+        } else {
+            ok = true;
+        }
     }
 
     if (webInterfaceSvc_ && webInterfaceSvc_->setPaused) {

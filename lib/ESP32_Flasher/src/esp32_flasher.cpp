@@ -7,8 +7,10 @@
    Returns: Calculated timeout value
 */
 static uint32_t timeout_per_mb(uint32_t size_bytes, uint32_t time_per_mb) {
-  uint32_t timeout = time_per_mb * (size_bytes / 1e6);
+  constexpr uint32_t kMb = 1000000UL;
+  uint32_t timeout = (uint32_t)(((uint64_t)time_per_mb * (uint64_t)size_bytes + (kMb - 1U)) / kMb);
   timeout = MAX(timeout, DEFAULT_FLASH_TIMEOUT);
+  timeout += 2000U;  // safety margin for slow targets/busy bus
   return timeout;
 }
 
@@ -598,8 +600,8 @@ int ESP32Flasher::espFlashStart(uint32_t flash_address, uint32_t image_size, uin
 
   // Validate image size
   if (image_size > ESP_FLASH_MAX_SIZE) {
-    Serial.printf("[ERROR] Image size %d exceeds maximum flash size %d\n",
-                  image_size, ESP_FLASH_MAX_SIZE);
+    Serial.printf("[ERROR] Image size %lu exceeds maximum flash size %lu\n",
+                  (unsigned long)image_size, (unsigned long)ESP_FLASH_MAX_SIZE);
     return ERR_IMG_SIZE;
   }
 
@@ -612,7 +614,7 @@ int ESP32Flasher::espFlashStart(uint32_t flash_address, uint32_t image_size, uin
   uint32_t timeout = timeout_per_mb(erase_size, ERASE_REGION_TIMEOUT_PER_MB);
   s_time_end = millis() + timeout;
   
-  Serial.printf("[DEBUG] Flash timeout set to: %d ms\n", timeout);
+  Serial.printf("[DEBUG] Flash timeout set to: %lu ms\n", (unsigned long)timeout);
   
   // Initialize flash operation
   int result = flashBeginCmd(flash_address, erase_size, block_size, blocks_to_write);
@@ -646,14 +648,11 @@ int ESP32Flasher::espFlashWrite(void *payload, uint32_t size) {
     }
   }
 
-  // Set timeout for operation
-  s_time_end = millis() + DEFAULT_TIMEOUT;
+  // Set timeout for FLASH_DATA response (write + flash latency).
+  s_time_end = millis() + FLASH_DATA_TIMEOUT;
 
   // Write data to flash
   int result = flashDataCmd(data, s_flash_write_size);
-  if (result == SUCCESS) {
-  } else {
-  }
   return result;
 }
 
@@ -686,21 +685,34 @@ void ESP32Flasher::espFlasherInit(void) {
    Flash a binary stream to the ESP32
    @param myFile: Name of data stream
 */
-void ESP32Flasher::espFlashBinStream(Stream &myFile, uint32_t size)  // Flash binary file
+int ESP32Flasher::espFlashBinStream(Stream &myFile, uint32_t size)  // Flash binary file
 {
   Serial.println("\n[INFO] ========== Starting Binary Stream Flash Process ==========");
   Serial.println("[WARN] Do not interrupt the flashing process!");
-  Serial.printf("[INFO] Attempting to flash stream");
+  Serial.printf("[INFO] Attempting to flash stream\n");
 
-  flashBinaryStream(myFile, size, ESP_FLASH_OFFSET);
+  const int flashStatus = flashBinaryStream(myFile, size, ESP_FLASH_OFFSET);
+  if (flashStatus != SUCCESS) {
+    Serial.printf("[ERROR] Stream flash failed with error: %d\n", flashStatus);
+    Serial.println("================================================\n");
+    return flashStatus;
+  }
 
-  // Reset ESP32
-  Serial.println("[INFO] Resetting ESP32...");
+  const int endStatus = epsFlashFinish(false);
+  if (endStatus != SUCCESS) {
+    Serial.printf("[ERROR] Flash end command failed with error: %d\n", endStatus);
+    Serial.println("================================================\n");
+    return endStatus;
+  }
+
+  // Reset ESP32 after a clean FLASH_END.
+  Serial.println("[INFO] Flash completed, resetting ESP32...");
   digitalWrite(EN_PIN, LOW);
   delay(100);
   digitalWrite(EN_PIN, HIGH);
 
   Serial.println("================================================\n");
+  return SUCCESS;
 }
 
 /**
@@ -767,15 +779,55 @@ int ESP32Flasher::flashBinaryStream(Stream &myFile, uint32_t size, uint32_t addr
   //size_t written = 0;
   //int previousProgress = -1;
 
-  uint32_t _undownloadByte = size;
+  const uint32_t total_size = size;
+  uint32_t remaining = size;
+  uint32_t streamIdleSince = millis();
+  uint32_t lastWaitLogMs = streamIdleSince;
+  uint32_t lastProgressLogMs = streamIdleSince;
+  uint32_t lastProgressLoggedBytes = 0;
+  myFile.setTimeout(250);
+
+  Serial.printf("[INFO] Stream writer started: total=%lu block=%u stall_timeout=%u ms\n",
+                (unsigned long)total_size,
+                (unsigned)sizeof(payload),
+                (unsigned)STREAM_STALL_TIMEOUT);
 
   // Write data in chunks
-  while (_undownloadByte > 0) {
+  while (remaining > 0) {
+    const uint32_t chunkCap = sizeof(payload);
+    uint32_t toRead = chunkCap;
+    if (toRead > remaining) toRead = remaining;
 
-    size = myFile.available();
-    if(size) {
-      // read up to 2048 byte into the buffer
-			int c = myFile.readBytes(payload, ((size > sizeof(payload)) ? sizeof(payload) : size));
+    // Read directly from stream; do not gate on available() to avoid false stalls.
+    int c = myFile.readBytes(payload, toRead);
+    if (c <= 0) {
+      const uint32_t nowMs = millis();
+      const uint32_t idleMs = (uint32_t)(nowMs - streamIdleSince);
+      const int availNow = myFile.available();
+      const uint32_t written = total_size - remaining;
+      if ((uint32_t)(nowMs - lastWaitLogMs) >= 5000U) {
+        Serial.printf("[DEBUG] Waiting stream data... written=%lu remaining=%lu idle=%lu ms avail=%d\n",
+                      (unsigned long)written,
+                      (unsigned long)remaining,
+                      (unsigned long)idleMs,
+                      availNow);
+        lastWaitLogMs = nowMs;
+      }
+      if (idleMs > STREAM_STALL_TIMEOUT) {
+        const uint32_t elapsedMs = (uint32_t)(nowMs - lastProgressLogMs);
+        Serial.printf("[ERROR] Stream read timeout at offset=%lu (remaining=%lu idle=%lu elapsed=%lu avail=%d)\n",
+                      (unsigned long)written,
+                      (unsigned long)remaining,
+                      (unsigned long)idleMs,
+                      (unsigned long)elapsedMs,
+                      availNow);
+        return ERR_TIMEOUT;
+      }
+      delay(2);
+      continue;
+    }
+    streamIdleSince = millis();
+    lastWaitLogMs = streamIdleSince;
 
 
     // Calculate chunk size
@@ -785,12 +837,15 @@ int ESP32Flasher::flashBinaryStream(Stream &myFile, uint32_t size, uint32_t addr
     //   myFile.readBytes(payload, to_read);
 
     // Write chunk to flash
-      flash_start_status = espFlashWrite(payload, c);
-      if (flash_start_status != SUCCESS) {
-       // Serial.printf("[ERROR] Flash write failed at offset 0x%X with error: %d\n",
-        //            written, flash_start_status);
+    flash_start_status = espFlashWrite(payload, c);
+    if (flash_start_status != SUCCESS) {
+      const uint32_t written = total_size - remaining;
+        Serial.printf("[ERROR] Flash write failed at offset=%lu chunk=%d err=%d\n",
+                      (unsigned long)written,
+                      c,
+                      flash_start_status);
         return flash_start_status;
-      }
+    }
     // Update progress
     //size -= to_read;
     //written += to_read;
@@ -801,9 +856,21 @@ int ESP32Flasher::flashBinaryStream(Stream &myFile, uint32_t size, uint32_t addr
     // previousProgress = progress;
        //Serial.printf("[INFO] Programming progress: %d%% (%d/%d)\n", progress,written,binary_size);  
       //Callback function called at every new percent done
-      if(_updateProgressCallback) _updateProgressCallback();
-
-      _undownloadByte -= c;
+    if (_updateProgressCallback) _updateProgressCallback();
+    remaining -= (uint32_t)c;
+    const uint32_t written = total_size - remaining;
+    const uint32_t nowMs = millis();
+    if ((written - lastProgressLoggedBytes) >= (32U * 1024U) || remaining == 0 ||
+        (uint32_t)(nowMs - lastProgressLogMs) >= 5000U) {
+      const uint32_t elapsedMs = (uint32_t)(nowMs - lastProgressLogMs);
+      const uint32_t rate = (elapsedMs > 0U) ? (uint32_t)(((uint64_t)(written - lastProgressLoggedBytes) * 1000ULL) / elapsedMs) : 0U;
+      Serial.printf("[DEBUG] Stream progress: written=%lu/%lu (%.1f%%) rate=%lu B/s\n",
+                    (unsigned long)written,
+                    (unsigned long)total_size,
+                    total_size > 0 ? (100.0f * (float)written / (float)total_size) : 0.0f,
+                    (unsigned long)rate);
+      lastProgressLogMs = nowMs;
+      lastProgressLoggedBytes = written;
     }
     delay(1);
   }

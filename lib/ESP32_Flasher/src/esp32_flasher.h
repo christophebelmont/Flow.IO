@@ -11,7 +11,9 @@ typedef std::function<void(void)> THandlerFunction;
 // Timeouts and retry parameters
 #define DEFAULT_TIMEOUT 1000              // Standard timeout for most operations (ms)
 #define DEFAULT_FLASH_TIMEOUT 3000        // Extended timeout for flash operations (ms)
-#define ERASE_REGION_TIMEOUT_PER_MB 10000 // Timeout per MB for flash erase (ms)
+#define FLASH_DATA_TIMEOUT 5000           // Timeout for each FLASH_DATA response (ms)
+#define STREAM_STALL_TIMEOUT 60000        // Max wait for next HTTP stream bytes (ms)
+#define ERASE_REGION_TIMEOUT_PER_MB 30000 // Timeout per MB for flash erase (ms)
 #define PADDING_PATTERN 0xFF              // Pattern used for padding incomplete blocks
 #define MAX_TRIALS 5                      // Maximum connection attempts
 
@@ -84,7 +86,7 @@ class ESP32Flasher {
   private:
     uint32_t s_flash_write_size = 0;    // Current flash write block size
     uint32_t s_sequence_number = 0;     // Packet sequence counter
-    int32_t s_time_end = 0;            // Operation timeout timestamp
+    uint32_t s_time_end = 0;           // Operation timeout timestamp
     uint32_t _undownloadByte; 	    /* undownload byte of tft file */
     THandlerFunction _updateProgressCallback;
 
@@ -108,7 +110,7 @@ class ESP32Flasher {
     void espFlasherInit(void);           // Initialize flasher
     int espConnect(void);                // Establish connection
     //void espFlashBinFile(const char* bin_file_name);  // Flash binary file
-    void espFlashBinStream(Stream &myFile,uint32_t size);  // Flash binary file
+    int espFlashBinStream(Stream &myFile,uint32_t size);  // Flash binary file
 
 
 };

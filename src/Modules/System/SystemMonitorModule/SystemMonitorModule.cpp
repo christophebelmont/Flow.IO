@@ -41,7 +41,7 @@ void SystemMonitorModule::logBootInfo() {
     LOGI("CPU=%luMHz", (unsigned long)ESP.getCpuFreqMHz());
 }
 
-void SystemMonitorModule::logHeapAndWifi() {
+void SystemMonitorModule::logHeapStats() {
     SystemStatsSnapshot snap{};
     SystemStats::collect(snap);
 
@@ -50,23 +50,6 @@ void SystemMonitorModule::logHeapAndWifi() {
                 (unsigned long)snap.heap.minFreeBytes,
                 (unsigned long)snap.heap.largestFreeBlock,
                 (unsigned int)snap.heap.fragPercent);
-
-    if (wifiSvc) {
-        WifiState st = wifiSvc->state(wifiSvc->ctx);
-        bool con = wifiSvc->isConnected(wifiSvc->ctx);
-
-        char ip[16] = "";
-        wifiSvc->getIP(wifiSvc->ctx, ip, sizeof(ip));
-
-        int rssi = -127;
-        if (con) rssi = WiFi.RSSI(); ///< optional but very useful
-
-        LOGI("WIFI state=%s connected=%d ip=%s rssi=%d",
-                    wifiStateStr(st),
-                    con ? 1 : 0,
-                    ip,
-                    rssi);
-    }
 }
 
 void SystemMonitorModule::logTaskStacks() {
@@ -175,7 +158,7 @@ void SystemMonitorModule::loop() {
 
     if (lastTraceLogMs == 0U || (uint32_t)(now - lastTraceLogMs) >= periodMs) {
         lastTraceLogMs = now;
-        logHeapAndWifi();
+        logHeapStats();
     }
 
     if (lastStackDumpMs == 0U || (uint32_t)(now - lastStackDumpMs) >= stackPeriodMs) {
