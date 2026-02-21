@@ -20,3 +20,4 @@
 #include "INetworkAccess.h"
 #include "IWebInterface.h"
 #include "IFirmwareUpdate.h"
+#include "IFlowCfg.h"

@@ -82,7 +82,11 @@ public:
     /** @brief Serialize all registered config to JSON. */
     void toJson(char* out, size_t outLen) const;
     /** @brief Serialize a single module's config (flat object). */
-    bool toJsonModule(const char* module, char* out, size_t outLen, bool* truncated = nullptr) const;
+    bool toJsonModule(const char* module,
+                      char* out,
+                      size_t outLen,
+                      bool* truncated = nullptr,
+                      bool maskSecrets = true) const;
     /** @brief List unique module names present in config metadata. */
     uint8_t listModules(const char** out, uint8_t max) const;
     /** @brief Apply JSON patch to registered config variables. */

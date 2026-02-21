@@ -9,7 +9,8 @@
 
 enum class FirmwareUpdateTarget : uint8_t {
     FlowIO = 1,
-    Nextion = 2
+    Nextion = 2,
+    Supervisor = 3
 };
 
 struct FirmwareUpdateService {
@@ -19,6 +20,7 @@ struct FirmwareUpdateService {
     bool (*setConfig)(void* ctx,
                       const char* updateHost,
                       const char* flowioPath,
+                      const char* supervisorPath,
                       const char* nextionPath,
                       char* errOut,
                       size_t errOutLen);

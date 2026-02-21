@@ -18,8 +18,17 @@ enum class ConfigBranchId : uint16_t {
     PoolLogic = 7,
     Alarms = 8,
 
+    PoolLogicMode = 9,
+    PoolLogicFiltration = 10,
+    PoolLogicSensors = 11,
+    PoolLogicPid = 12,
+    PoolLogicDelay = 13,
+    PoolLogicDevice = 14,
+
     Io = 16,
     IoDebug = 17,
+    I2cCfgServer = 18,
+    I2cCfgClient = 19,
     IoInputA0 = 32,
     IoInputA1 = 33,
     IoInputA2 = 34,
@@ -77,8 +86,16 @@ inline const char* configBranchModuleName(ConfigBranchId id)
         case ConfigBranchId::SystemMonitor: return "sysmon";
         case ConfigBranchId::PoolLogic: return "poollogic";
         case ConfigBranchId::Alarms: return "alarms";
+        case ConfigBranchId::PoolLogicMode: return "poollogic/mode";
+        case ConfigBranchId::PoolLogicFiltration: return "poollogic/filtration";
+        case ConfigBranchId::PoolLogicSensors: return "poollogic/sensors";
+        case ConfigBranchId::PoolLogicPid: return "poollogic/pid";
+        case ConfigBranchId::PoolLogicDelay: return "poollogic/delay";
+        case ConfigBranchId::PoolLogicDevice: return "poollogic/device";
         case ConfigBranchId::Io: return "io";
         case ConfigBranchId::IoDebug: return "io/debug";
+        case ConfigBranchId::I2cCfgServer: return "i2c/cfg/server";
+        case ConfigBranchId::I2cCfgClient: return "i2c/cfg/client";
         case ConfigBranchId::IoInputA0: return "io/input/a0";
         case ConfigBranchId::IoInputA1: return "io/input/a1";
         case ConfigBranchId::IoInputA2: return "io/input/a2";

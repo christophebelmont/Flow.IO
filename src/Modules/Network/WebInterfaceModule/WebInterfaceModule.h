@@ -20,13 +20,14 @@ public:
     BaseType_t taskCore() const override { return 0; }
     uint16_t taskStackSize() const override { return 4096; }
 
-    uint8_t dependencyCount() const override { return 5; }
+    uint8_t dependencyCount() const override { return 6; }
     const char* dependency(uint8_t i) const override {
         if (i == 0) return "loghub";
         if (i == 1) return "wifi";
         if (i == 2) return "eventbus";
         if (i == 3) return "datastore";
         if (i == 4) return "cmd";
+        if (i == 5) return "i2ccfg.client";
         return nullptr;
     }
 
@@ -67,6 +68,7 @@ private:
     const LogHubService* logHub_ = nullptr;
     const WifiService* wifiSvc_ = nullptr;
     const CommandService* cmdSvc_ = nullptr;
+    const FlowCfgRemoteService* flowCfgSvc_ = nullptr;
     const NetworkAccessService* netAccessSvc_ = nullptr;
     DataStore* dataStore_ = nullptr;
     ConfigStore* cfgStore_ = nullptr;

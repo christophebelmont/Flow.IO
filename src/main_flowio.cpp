@@ -23,6 +23,7 @@
 #include "Modules/Network/TimeModule/TimeModule.h"
 #include "Modules/Network/MQTTModule/MQTTModule.h"
 #include "Modules/Network/HAModule/HAModule.h"
+#include "Modules/Network/I2CCfgServerModule/I2CCfgServerModule.h"
 // Stores Modules
 #include "Modules/Stores/ConfigStoreModule/ConfigStoreModule.h"
 #include "Modules/Stores/DataStoreModule/DataStoreModule.h"
@@ -73,6 +74,7 @@ static ServiceRegistry services;
 ///static LoggerModule loggerModule;
 static WifiModule           wifiModule;
 static TimeModule           timeModule;
+static I2CCfgServerModule   i2cCfgServerModule;
 static CommandModule        commandModule;
 static ConfigStoreModule    configStoreModule;
 static DataStoreModule      dataStoreModule;
@@ -411,6 +413,7 @@ void setup() {
     moduleManager.add(&configStoreModule);
     moduleManager.add(&dataStoreModule);
     moduleManager.add(&commandModule);
+    moduleManager.add(&i2cCfgServerModule);
     moduleManager.add(&hmiModule);
     moduleManager.add(&alarmModule);
     moduleManager.add(&logAlarmSinkModule);

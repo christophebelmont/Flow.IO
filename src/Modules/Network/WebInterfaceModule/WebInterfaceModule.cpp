@@ -10,7 +10,9 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <Arduino.h>
 #include <ArduinoJson.h>
+#include <esp_heap_caps.h>
 #include "Core/DataKeys.h"
 #include "Core/EventBus/EventPayloads.h"
 #include "Modules/Network/WifiModule/WifiRuntime.h"
@@ -39,6 +41,77 @@ static bool parseBoolParam_(const String& in, bool fallback)
     }
     return fallback;
 }
+
+template <size_t N>
+static inline void sendProgmemLiteral_(AsyncWebServerRequest* request, const char* contentType, const char (&content)[N])
+{
+    if (!request || !contentType || N == 0U) return;
+    request->send(200, contentType, reinterpret_cast<const uint8_t*>(content), N - 1U);
+}
+
+namespace {
+constexpr uint32_t kHttpLatencyInfoMs = 40U;
+constexpr uint32_t kHttpLatencyWarnMs = 120U;
+constexpr uint32_t kHttpLatencyFlowCfgInfoMs = 200U;
+constexpr uint32_t kHttpLatencyFlowCfgWarnMs = 900U;
+
+const char* httpMethodName_(uint8_t method)
+{
+    switch (method) {
+    case HTTP_GET: return "GET";
+    case HTTP_POST: return "POST";
+    case HTTP_PUT: return "PUT";
+    case HTTP_PATCH: return "PATCH";
+    case HTTP_DELETE: return "DELETE";
+    case HTTP_OPTIONS: return "OPTIONS";
+    default: return "OTHER";
+    }
+}
+
+struct HttpLatencyScope {
+    AsyncWebServerRequest* req;
+    const char* route;
+    uint32_t startUs;
+    uint32_t infoMs;
+    uint32_t warnMs;
+
+    HttpLatencyScope(AsyncWebServerRequest* request,
+                     const char* routePath,
+                     uint32_t infoThresholdMs = kHttpLatencyInfoMs,
+                     uint32_t warnThresholdMs = kHttpLatencyWarnMs)
+        : req(request),
+          route(routePath),
+          startUs(micros()),
+          infoMs(infoThresholdMs),
+          warnMs((warnThresholdMs > infoThresholdMs) ? warnThresholdMs : (infoThresholdMs + 1U)) {}
+
+    ~HttpLatencyScope()
+    {
+        const uint32_t elapsedUs = micros() - startUs;
+        const uint32_t elapsedMs = elapsedUs / 1000U;
+        if (elapsedMs < infoMs) return;
+
+        const char* method = req ? httpMethodName_(req->method()) : "?";
+        const uint32_t heapFree = (uint32_t)ESP.getFreeHeap();
+        const uint32_t heapLargest = (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+        if (elapsedMs >= warnMs) {
+            LOGW("HTTP slow %s %s latency=%lums heap=%lu largest=%lu",
+                 method,
+                 route ? route : "?",
+                 (unsigned long)elapsedMs,
+                 (unsigned long)heapFree,
+                 (unsigned long)heapLargest);
+        } else {
+            LOGI("HTTP %s %s latency=%lums heap=%lu largest=%lu",
+                 method,
+                 route ? route : "?",
+                 (unsigned long)elapsedMs,
+                 (unsigned long)heapFree,
+                 (unsigned long)heapLargest);
+        }
+    }
+};
+} // namespace
 
 static const char kFlowIoLogoSvg[] PROGMEM = R"SVG(
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" role="img" aria-labelledby="title desc">
@@ -274,6 +347,52 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
       font-size: 12px; padding: 7px 10px; border-radius: 999px;
       background: var(--md-surface-variant);
     }
+    .status-grid {
+      margin-top: 10px;
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(2, minmax(220px, 1fr));
+    }
+    .status-card {
+      border: 1px solid rgba(121,116,126,0.25);
+      border-radius: 14px;
+      padding: 10px 12px;
+      background: rgba(255,255,255,0.8);
+    }
+    .status-card h3 {
+      margin: 0 0 8px 0;
+      font-size: 13px;
+      font-weight: 700;
+      color: #073b66;
+    }
+    .status-kv {
+      display: grid;
+      gap: 5px;
+      font-size: 13px;
+      color: #455a70;
+    }
+    .status-kv div {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .status-kv b {
+      color: #073b66;
+      font-weight: 700;
+    }
+    .status-raw {
+      margin-top: 10px;
+      border: 1px solid rgba(121,116,126,0.25);
+      border-radius: 12px;
+      background: #f9fbff;
+      color: #234;
+      padding: 10px;
+      max-height: 220px;
+      overflow: auto;
+      font-size: 12px;
+      line-height: 1.35;
+      white-space: pre-wrap;
+    }
     .card {
       background: rgba(255,251,254,0.95);
       border: 1px solid rgba(121,116,126,0.35);
@@ -394,30 +513,130 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
       font-size: 13px;
       color: #516170;
     }
-    .control-list {
-      display: grid;
-      gap: 6px;
-      max-width: 640px;
-      margin: 0 auto;
-    }
-    .control-item {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 10px 4px;
-      border: none;
-      background: transparent;
-    }
-    .control-name {
-      font-size: 14px;
-      font-weight: 600;
-      color: #073b66;
-    }
     .control-card {
       border: none;
       background: transparent;
       padding: 6px 0;
+    }
+    .control-shell {
+      max-width: 860px;
+      margin: 0 auto;
+      display: grid;
+      gap: 12px;
+    }
+    .control-breadcrumb {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      color: #516170;
+      padding: 2px 2px 0 2px;
+    }
+    .control-crumb-btn {
+      border: 0;
+      background: transparent;
+      color: #44617e;
+      font-size: 13px;
+      padding: 0;
+      margin: 0;
+      cursor: pointer;
+      line-height: 1.2;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    .control-crumb-btn:hover {
+      color: #073b66;
+    }
+    .control-crumb-btn.active {
+      color: #073b66;
+      font-weight: 700;
+      text-decoration: none;
+      cursor: default;
+    }
+    .control-crumb-sep {
+      color: #7a8a9b;
+      user-select: none;
+      line-height: 1.2;
+    }
+    .control-fields {
+      display: grid;
+      gap: 8px;
+    }
+    .control-section-title {
+      margin-top: 2px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      color: #4b6074;
+    }
+    .control-sections {
+      display: grid;
+      gap: 8px;
+    }
+    .control-section-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      border: 1px solid rgba(121,116,126,0.25);
+      border-radius: 12px;
+      background: rgba(255,255,255,0.75);
+      color: #073b66;
+      font-size: 14px;
+      font-weight: 600;
+      padding: 10px 12px;
+      cursor: pointer;
+      text-align: left;
+    }
+    .control-section-item:hover {
+      border-color: rgba(0,102,255,0.35);
+      background: rgba(240,248,255,0.9);
+    }
+    .control-section-arrow {
+      font-size: 16px;
+      color: #5b6f82;
+      user-select: none;
+    }
+    .control-section-empty {
+      padding: 10px 12px;
+      border: 1px dashed rgba(121,116,126,0.35);
+      border-radius: 12px;
+      color: #607689;
+      font-size: 13px;
+      background: rgba(255,255,255,0.55);
+    }
+    .control-divider {
+      height: 1px;
+      background: rgba(121,116,126,0.25);
+      margin: 2px 0 0 0;
+    }
+    .control-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 12px;
+      border: 1px solid rgba(121,116,126,0.25);
+      border-radius: 12px;
+      background: rgba(255,255,255,0.75);
+    }
+    .control-label {
+      font-size: 14px;
+      font-weight: 600;
+      color: #073b66;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    .control-input {
+      width: 240px;
+      max-width: 100%;
+    }
+    .control-actions {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 2px;
     }
     .md3-switch {
       position: relative;
@@ -435,6 +654,7 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
       cursor: pointer;
       appearance: none;
       -webkit-appearance: none;
+      z-index: 2;
     }
     .md3-track {
       position: absolute;
@@ -443,6 +663,7 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
       border: 2px solid #7c8ea4;
       background: #e5edf5;
       transition: all 0.18s ease;
+      pointer-events: none;
     }
     .md3-thumb {
       position: absolute;
@@ -454,6 +675,7 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
       background: #3e4f62;
       transform: translateY(-50%);
       transition: all 0.18s ease;
+      pointer-events: none;
     }
     .md3-switch input:checked + .md3-track {
       border-color: #0066ff;
@@ -493,6 +715,7 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
         background: #ffffff;
       }
       .form-grid { grid-template-columns: 1fr; }
+      .status-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -505,11 +728,12 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
         <div class="drawer-user">Superviseur</div>
       </div>
       <nav class="menu-group">
-        <button class="menu-item active" data-page="page-terminal"><span class="ico"><img class="ico-svg" src="/assets/icon-journaux.svg" alt="" /></span><span class="label">Journaux</span></button>
+        <button class="menu-item active" data-page="page-status"><span class="ico"><img class="ico-svg" src="/assets/icon-status.svg" alt="" /></span><span class="label">Statut</span></button>
+        <button class="menu-item" data-page="page-terminal"><span class="ico"><img class="ico-svg" src="/assets/icon-journaux.svg" alt="" /></span><span class="label">Journaux</span></button>
         <button class="menu-item" data-page="page-upgrade"><span class="ico"><img class="ico-svg" src="/assets/icon-upgrade.svg" alt="" /></span><span class="label">Mise à jour Firmware</span></button>
-        <button class="menu-item" data-page="page-config"><span class="ico"><img class="ico-svg" src="/assets/icon-config.svg?v=2" alt="" /></span><span class="label">Configuration</span></button>
+        <button class="menu-item" data-page="page-config"><span class="ico"><img class="ico-svg" src="/assets/icon-connections.svg" alt="" /></span><span class="label">Connexions</span></button>
         <button class="menu-item" data-page="page-system"><span class="ico"><img class="ico-svg" src="/assets/icon-system.svg" alt="" /></span><span class="label">Système</span></button>
-        <button class="menu-item" data-page="page-control"><span class="ico"><img class="ico-svg" src="/assets/icon-control.svg" alt="" /></span><span class="label">Contrôle</span></button>
+        <button class="menu-item" data-page="page-control"><span class="ico"><img class="ico-svg" src="/assets/icon-config.svg?v=2" alt="" /></span><span class="label">Configuration</span></button>
       </nav>
       <div class="drawer-footer">
         <span class="app-icon-shell"><img class="app-icon" src="/assets/flowio-logo.svg" alt="Flow.IO" /></span>
@@ -521,7 +745,19 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
         <button class="menu-btn" data-menu-toggle aria-label="Open menu">=</button>
         <div class="mobile-title">Superviseur</div>
       </div>
-      <section id="page-terminal" class="page active">
+      <section id="page-status" class="page active">
+        <div class="topbar">
+          <h1>Statut Flow.IO</h1>
+          <button id="flowStatusRefresh" class="btn-tonal">Rafraîchir</button>
+        </div>
+        <div class="card">
+          <div id="flowStatusChip" class="status-chip">en attente...</div>
+          <div id="flowStatusGrid" class="status-grid"></div>
+          <pre id="flowStatusRaw" class="status-raw">Aucune donnée.</pre>
+        </div>
+      </section>
+
+      <section id="page-terminal" class="page">
         <div class="topbar">
           <h1>Journaux</h1>
           <span id="wsStatus" class="status-chip">connexion...</span>
@@ -556,9 +792,14 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
               <label for="nextionPath">Chemin image Nextion</label>
               <input id="nextionPath" placeholder="/build/Nextion.tft" />
             </div>
+            <div class="field">
+              <label for="supervisorPath">Chemin image Supervisor</label>
+              <input id="supervisorPath" placeholder="/build/Supervisor/firmware.bin" />
+            </div>
           </div>
           <div class="btn-row">
             <button id="saveCfg" class="btn-tonal">Enregistrer la configuration</button>
+            <button id="upSupervisor" class="btn-primary">Mettre à jour Supervisor</button>
             <button id="upFlow" class="btn-primary">Mettre à jour Flow.IO</button>
             <button id="upNextion" class="btn-primary">Mettre à jour Nextion</button>
             <button id="refreshState">Rafraîchir l'état</button>
@@ -572,7 +813,7 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
 
       <section id="page-config" class="page">
         <div class="topbar">
-          <h1>Configuration</h1>
+          <h1>Connexions</h1>
           <span class="status-chip">WiFi + MQTT</span>
         </div>
         <div class="card">
@@ -663,22 +904,25 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
 
       <section id="page-control" class="page">
         <div class="topbar">
-          <h1>Contrôle</h1>
-          <span class="status-chip">manuel</span>
+          <h1 id="flowCfgTitle">cfg</h1>
+          <button id="flowCfgRefresh" class="btn-tonal">Rafraîchir</button>
         </div>
         <div class="card control-card">
-          <div class="control-list">
-            <label class="control-item"><span class="control-name">Remplissage</span><span class="md3-switch"><input type="checkbox" /><span class="md3-track"></span><span class="md3-thumb"></span></span></label>
-            <label class="control-item"><span class="control-name">Electrolyseur</span><span class="md3-switch"><input type="checkbox" /><span class="md3-track"></span><span class="md3-thumb"></span></span></label>
-            <label class="control-item"><span class="control-name">Filtration</span><span class="md3-switch"><input type="checkbox" /><span class="md3-track"></span><span class="md3-thumb"></span></span></label>
-            <label class="control-item"><span class="control-name">Robot</span><span class="md3-switch"><input type="checkbox" /><span class="md3-track"></span><span class="md3-thumb"></span></span></label>
-            <label class="control-item"><span class="control-name">Pompe pH</span><span class="md3-switch"><input type="checkbox" /><span class="md3-track"></span><span class="md3-thumb"></span></span></label>
-            <label class="control-item"><span class="control-name">Pompe Chlore</span><span class="md3-switch"><input type="checkbox" /><span class="md3-track"></span><span class="md3-thumb"></span></span></label>
-            <label class="control-item"><span class="control-name">Eclairage</span><span class="md3-switch"><input type="checkbox" /><span class="md3-track"></span><span class="md3-thumb"></span></span></label>
-            <label class="control-item"><span class="control-name">Régulation pH</span><span class="md3-switch"><input type="checkbox" /><span class="md3-track"></span><span class="md3-thumb"></span></span></label>
-            <label class="control-item"><span class="control-name">Régulation Orp</span><span class="md3-switch"><input type="checkbox" /><span class="md3-track"></span><span class="md3-thumb"></span></span></label>
-            <label class="control-item"><span class="control-name">Mode automatique</span><span class="md3-switch"><input type="checkbox" /><span class="md3-track"></span><span class="md3-thumb"></span></span></label>
-            <label class="control-item"><span class="control-name">Hivernage</span><span class="md3-switch"><input type="checkbox" /><span class="md3-track"></span><span class="md3-thumb"></span></span></label>
+          <div class="control-shell">
+            <div id="flowCfgBreadcrumb" class="control-breadcrumb">cfg</div>
+            <div class="control-section-title">Sections</div>
+            <div id="flowCfgSections" class="control-sections"></div>
+            <div class="field full">
+              <label for="flowCfgModuleSelect">Sous-branche</label>
+              <select id="flowCfgModuleSelect"></select>
+            </div>
+            <div class="control-divider"></div>
+            <div class="control-section-title">Variables</div>
+            <div id="flowCfgFields" class="control-fields"></div>
+            <div id="flowCfgStatus" class="config-status">Configuration distante prête.</div>
+            <div class="control-actions">
+              <button id="flowCfgApply" class="btn-primary">Appliquer</button>
+            </div>
           </div>
         </div>
       </section>
@@ -710,6 +954,17 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
     function showPage(pageId) {
       pages.forEach((el) => el.classList.toggle('active', el.id === pageId));
       menuItems.forEach((el) => el.classList.toggle('active', el.dataset.page === pageId));
+      if (pageId === 'page-status') {
+        onStatusPageShown().catch(() => {});
+      } else {
+        stopFlowStatusPolling();
+      }
+      if (pageId === 'page-config') {
+        onConfigPageShown().catch(() => {});
+      }
+      if (pageId === 'page-control') {
+        onControlPageShown().catch(() => {});
+      }
       closeMobileDrawer();
     }
 
@@ -753,7 +1008,9 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
     const updateHost = document.getElementById('updateHost');
     const flowPath = document.getElementById('flowPath');
     const nextionPath = document.getElementById('nextionPath');
+    const supervisorPath = document.getElementById('supervisorPath');
     const saveCfgBtn = document.getElementById('saveCfg');
+    const upSupervisorBtn = document.getElementById('upSupervisor');
     const upFlowBtn = document.getElementById('upFlow');
     const upNextionBtn = document.getElementById('upNextion');
     const refreshStateBtn = document.getElementById('refreshState');
@@ -779,7 +1036,30 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
     const rebootSupervisorBtn = document.getElementById('rebootSupervisor');
     const factoryResetBtn = document.getElementById('factoryReset');
     const systemStatusText = document.getElementById('systemStatusText');
+    const flowStatusRefreshBtn = document.getElementById('flowStatusRefresh');
+    const flowStatusChip = document.getElementById('flowStatusChip');
+    const flowStatusGrid = document.getElementById('flowStatusGrid');
+    const flowStatusRaw = document.getElementById('flowStatusRaw');
+    const flowCfgTitle = document.getElementById('flowCfgTitle');
+    const flowCfgModuleSelect = document.getElementById('flowCfgModuleSelect');
+    const flowCfgRefreshBtn = document.getElementById('flowCfgRefresh');
+    const flowCfgApplyBtn = document.getElementById('flowCfgApply');
+    const flowCfgBreadcrumb = document.getElementById('flowCfgBreadcrumb');
+    const flowCfgSections = document.getElementById('flowCfgSections');
+    const flowCfgFields = document.getElementById('flowCfgFields');
+    const flowCfgStatus = document.getElementById('flowCfgStatus');
     let wifiScanPollTimer = null;
+    let flowStatusPollTimer = null;
+    let flowStatusPolling = false;
+    let flowCfgCurrentModule = '';
+    let flowCfgCurrentData = {};
+    let flowCfgChildrenCache = {};
+    let flowCfgPath = [];
+    let wifiConfigLoadedOnce = false;
+    let mqttConfigLoadedOnce = false;
+    let flowStatusLoadedOnce = false;
+    let flowCfgLoadedOnce = false;
+    let wifiScanAutoRequested = false;
 
     const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(wsProto + '://' + location.host + '/wsserial');
@@ -883,6 +1163,7 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
       if (autoScrollEnabled) term.scrollTop = term.scrollHeight;
     });
     refreshAutoscrollUi();
+    flowCfgApplyBtn.disabled = true;
 
     function setUpgradeProgress(value) {
       const p = Math.max(0, Math.min(100, Number(value) || 0));
@@ -920,6 +1201,7 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
         if (data && data.ok) {
           updateHost.value = data.update_host || '';
           flowPath.value = data.flowio_path || '';
+          supervisorPath.value = data.supervisor_path || '';
           nextionPath.value = data.nextion_path || '';
         }
       } catch (err) {
@@ -931,6 +1213,7 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
       const body = new URLSearchParams();
       body.set('update_host', updateHost.value.trim());
       body.set('flowio_path', flowPath.value.trim());
+      body.set('supervisor_path', supervisorPath.value.trim());
       body.set('nextion_path', nextionPath.value.trim());
       const res = await fetch('/api/fwupdate/config', {
         method: 'POST',
@@ -955,7 +1238,9 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
     async function startUpgrade(target) {
       try {
         await saveUpgradeConfig();
-        const endpoint = target === 'flowio' ? '/fwupdate/flowio' : '/fwupdate/nextion';
+        let endpoint = '/fwupdate/nextion';
+        if (target === 'supervisor') endpoint = '/fwupdate/supervisor';
+        else if (target === 'flowio') endpoint = '/fwupdate/flowio';
         const res = await fetch(endpoint, { method: 'POST' });
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) throw new Error('échec démarrage');
@@ -998,6 +1283,155 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) throw new Error('échec application');
       mqttConfigStatus.textContent = 'Configuration MQTT appliquée.';
+    }
+
+    async function onConfigPageShown() {
+      if (!wifiConfigLoadedOnce) {
+        wifiConfigLoadedOnce = true;
+        await loadWifiConfig();
+      }
+      if (!mqttConfigLoadedOnce) {
+        mqttConfigLoadedOnce = true;
+        await loadMqttConfig();
+      }
+      if (!wifiScanAutoRequested) {
+        wifiScanAutoRequested = true;
+        await refreshWifiScanStatus(true);
+      } else {
+        await refreshWifiScanStatus(false);
+      }
+    }
+
+    async function onControlPageShown() {
+      if (!flowCfgLoadedOnce) {
+        flowCfgLoadedOnce = true;
+        await chargerFlowCfgModules(false);
+        return;
+      }
+      await chargerFlowCfgModules(false);
+    }
+
+    function stopFlowStatusPolling() {
+      flowStatusPolling = false;
+      if (flowStatusPollTimer) {
+        clearTimeout(flowStatusPollTimer);
+        flowStatusPollTimer = null;
+      }
+    }
+
+    function scheduleFlowStatusPolling() {
+      if (!flowStatusPolling) return;
+      if (flowStatusPollTimer) {
+        clearTimeout(flowStatusPollTimer);
+      }
+      flowStatusPollTimer = setTimeout(() => {
+        refreshFlowStatus();
+      }, 2500);
+    }
+
+    function boolFlowStatus(v) {
+      return v ? 'oui' : 'non';
+    }
+
+    function fmtFlowStatusVal(v) {
+      if (v === null || typeof v === 'undefined') return '-';
+      if (typeof v === 'boolean') return boolFlowStatus(v);
+      return String(v);
+    }
+
+    function fmtFlowUptime(ms) {
+      if (!Number.isFinite(ms) || ms < 0) return '-';
+      const sec = Math.floor(ms / 1000);
+      const h = Math.floor(sec / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      const s = sec % 60;
+      if (h > 0) return h + 'h ' + m + 'm ' + s + 's';
+      if (m > 0) return m + 'm ' + s + 's';
+      return s + 's';
+    }
+
+    function appendFlowStatusCard(title, rows) {
+      const card = document.createElement('div');
+      card.className = 'status-card';
+      const heading = document.createElement('h3');
+      heading.textContent = title;
+      card.appendChild(heading);
+
+      const kv = document.createElement('div');
+      kv.className = 'status-kv';
+      rows.forEach((row) => {
+        const line = document.createElement('div');
+        const key = document.createElement('span');
+        key.textContent = row[0];
+        const value = document.createElement('b');
+        value.textContent = fmtFlowStatusVal(row[1]);
+        line.appendChild(key);
+        line.appendChild(value);
+        kv.appendChild(line);
+      });
+      card.appendChild(kv);
+      flowStatusGrid.appendChild(card);
+    }
+
+    function renderFlowStatus(data) {
+      const wifi = (data && typeof data.wifi === 'object') ? data.wifi : {};
+      const mqtt = (data && typeof data.mqtt === 'object') ? data.mqtt : {};
+      const heap = (data && data.heap && typeof data.heap === 'object') ? data.heap : {};
+      const i2c = (data && data.i2c && typeof data.i2c === 'object') ? data.i2c : {};
+
+      flowStatusGrid.innerHTML = '';
+      appendFlowStatusCard('Réseau', [
+        ['WiFi connecté', !!wifi.ready],
+        ['IP', wifi.ip || '-'],
+        ['RSSI (dBm)', wifi.has_rssi ? wifi.rssi_dbm : '-'],
+        ['MQTT connecté', !!mqtt.ready]
+      ]);
+      appendFlowStatusCard('I2C Supervisor', [
+        ['Lien actif', !!i2c.supervisor_link_ok],
+        ['Supervisor vu', !!i2c.supervisor_seen],
+        ['Req total', i2c.request_count],
+        ['Dernière req (ms)', i2c.last_request_ago_ms]
+      ]);
+      appendFlowStatusCard('Système Flow.IO', [
+        ['Firmware', data.firmware || '-'],
+        ['Uptime', fmtFlowUptime(data.uptime_ms)],
+        ['Heap libre', heap.free],
+        ['Heap min', heap.min]
+      ]);
+      appendFlowStatusCard('Diagnostic MQTT', [
+        ['RX drop', mqtt.rx_drop],
+        ['Parse fail', mqtt.parse_fail],
+        ['Handler fail', mqtt.handler_fail],
+        ['Oversize drop', mqtt.oversize_drop]
+      ]);
+
+      flowStatusChip.textContent = i2c.supervisor_link_ok ? 'Flow.IO en ligne (I2C OK)' : 'Flow.IO partiel / lien I2C faible';
+      flowStatusRaw.textContent = JSON.stringify(data, null, 2);
+    }
+
+    async function refreshFlowStatus() {
+      try {
+        const res = await fetch('/api/flow/status', { cache: 'no-store' });
+        const data = await res.json();
+        if (!res.ok || !data || data.ok !== true) {
+          throw new Error('statut indisponible');
+        }
+        renderFlowStatus(data);
+      } catch (err) {
+        flowStatusChip.textContent = 'erreur lecture statut';
+        flowStatusGrid.innerHTML = '';
+        flowStatusRaw.textContent = 'Erreur: ' + err;
+      } finally {
+        scheduleFlowStatusPolling();
+      }
+    }
+
+    async function onStatusPageShown() {
+      flowStatusPolling = true;
+      if (!flowStatusLoadedOnce) {
+        flowStatusLoadedOnce = true;
+      }
+      await refreshFlowStatus();
     }
 
     function stopWifiScanPolling() {
@@ -1138,6 +1572,356 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
       wifiConfigStatus.textContent = 'Configuration WiFi appliquée (reconnexion en cours).';
     }
 
+    function nettoyerNomFlowCfg(moduleName) {
+      return String(moduleName || '').trim().replace(/^\/+|\/+$/g, '');
+    }
+
+    function cheminFlowCfgCourant() {
+      return flowCfgPath.length > 0 ? flowCfgPath.join('/') : '';
+    }
+
+    function flowCfgTitreDepuisChemin(pathValue) {
+      const cleanPath = nettoyerNomFlowCfg(pathValue);
+      if (!cleanPath) return 'cfg';
+      return 'cfg > ' + cleanPath.split('/').join(' > ');
+    }
+
+    function renderFlowCfgBreadcrumb(pathValue) {
+      const cleanPath = nettoyerNomFlowCfg(pathValue);
+      const segs = cleanPath.length > 0 ? cleanPath.split('/') : [];
+      flowCfgBreadcrumb.innerHTML = '';
+
+      const items = ['cfg'].concat(segs);
+      for (let i = 0; i < items.length; ++i) {
+        if (i > 0) {
+          const sep = document.createElement('span');
+          sep.className = 'control-crumb-sep';
+          sep.textContent = '>';
+          flowCfgBreadcrumb.appendChild(sep);
+        }
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'control-crumb-btn';
+        btn.textContent = items[i];
+
+        const depth = i; // 0 => root(cfg), 1 => first segment, ...
+        if (depth === segs.length) {
+          btn.classList.add('active');
+          btn.disabled = true;
+        } else {
+          btn.addEventListener('click', async () => {
+            flowCfgPath = depth === 0 ? [] : segs.slice(0, depth);
+            await renderFlowCfgNavigator(false);
+          });
+        }
+        flowCfgBreadcrumb.appendChild(btn);
+      }
+    }
+
+    function renderFlowCfgSections(node, currentPath) {
+      flowCfgSections.innerHTML = '';
+      const children = (node && Array.isArray(node.children)) ? node.children : [];
+      if (children.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'control-section-empty';
+        empty.textContent = 'Aucune sous-section.';
+        flowCfgSections.appendChild(empty);
+        return;
+      }
+
+      for (const child of children) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'control-section-item';
+
+        const name = document.createElement('span');
+        name.textContent = child;
+        const arrow = document.createElement('span');
+        arrow.className = 'control-section-arrow';
+        arrow.textContent = '>';
+
+        button.appendChild(name);
+        button.appendChild(arrow);
+        button.addEventListener('click', async () => {
+          const nextPath = currentPath ? (currentPath + '/' + child) : child;
+          flowCfgPath = nextPath.split('/');
+          await renderFlowCfgNavigator(false);
+        });
+        flowCfgSections.appendChild(button);
+      }
+    }
+
+    function flowCfgCacheKey(prefix) {
+      const p = nettoyerNomFlowCfg(prefix);
+      return p.length > 0 ? p : '__root__';
+    }
+
+    async function chargerFlowCfgChildren(prefix, forceReload) {
+      const p = nettoyerNomFlowCfg(prefix);
+      const key = flowCfgCacheKey(p);
+      if (!forceReload && flowCfgChildrenCache[key]) {
+        return flowCfgChildrenCache[key];
+      }
+
+      const url = p.length > 0
+        ? ('/api/flowcfg/children?prefix=' + encodeURIComponent(p))
+        : '/api/flowcfg/children';
+      const res = await fetch(url, { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok || !data || data.ok !== true || !Array.isArray(data.children)) {
+        throw new Error('liste enfants indisponible');
+      }
+
+      const children = data.children
+        .filter((name) => typeof name === 'string' && name.length > 0)
+        .map((name) => nettoyerNomFlowCfg(name))
+        .filter((name) => name.length > 0)
+        .sort((a, b) => a.localeCompare(b));
+
+      const node = {
+        prefix: p,
+        hasExact: !!data.has_exact,
+        children: Array.from(new Set(children))
+      };
+      flowCfgChildrenCache[key] = node;
+      return node;
+    }
+
+    function resetFlowCfgEditor(message) {
+      flowCfgCurrentModule = '';
+      flowCfgCurrentData = {};
+      flowCfgFields.innerHTML = '';
+      flowCfgApplyBtn.disabled = true;
+      if (message) {
+        flowCfgStatus.textContent = message;
+      }
+    }
+
+    function renderFlowCfgFields(dataObj) {
+      flowCfgFields.innerHTML = '';
+      const data = (dataObj && typeof dataObj === 'object') ? dataObj : {};
+      const keys = Object.keys(data).sort();
+      if (keys.length === 0) {
+        const row = document.createElement('div');
+        row.className = 'control-row';
+        const label = document.createElement('span');
+        label.className = 'control-label';
+        label.textContent = 'Aucun champ configurable dans cette branche.';
+        row.appendChild(label);
+        flowCfgFields.appendChild(row);
+        return;
+      }
+
+      for (const key of keys) {
+        const value = data[key];
+        const row = document.createElement('div');
+        row.className = 'control-row';
+
+        const label = document.createElement('span');
+        label.className = 'control-label';
+        label.textContent = key;
+        row.appendChild(label);
+
+        if (typeof value === 'boolean') {
+          const sw = document.createElement('span');
+          sw.className = 'md3-switch';
+          const input = document.createElement('input');
+          input.type = 'checkbox';
+          input.checked = value;
+          input.dataset.key = key;
+          input.dataset.kind = 'bool';
+          const track = document.createElement('span');
+          track.className = 'md3-track';
+          const thumb = document.createElement('span');
+          thumb.className = 'md3-thumb';
+          sw.appendChild(input);
+          sw.appendChild(track);
+          sw.appendChild(thumb);
+          row.appendChild(sw);
+        } else if (typeof value === 'number') {
+          const input = document.createElement('input');
+          input.className = 'control-input';
+          input.type = 'number';
+          input.value = String(value);
+          input.step = Number.isInteger(value) ? '1' : '0.001';
+          input.dataset.key = key;
+          input.dataset.kind = Number.isInteger(value) ? 'int' : 'float';
+          row.appendChild(input);
+        } else {
+          const isSecret = /pass|token|secret/i.test(key);
+          const textValue = String(value ?? '');
+          const input = document.createElement('input');
+          input.className = 'control-input';
+          input.type = isSecret ? 'password' : 'text';
+          if (isSecret && textValue === '***') {
+            input.value = '';
+            input.placeholder = 'Conserver (masqué)';
+            input.dataset.masked = '1';
+          } else {
+            input.value = textValue;
+            input.dataset.masked = '0';
+          }
+          input.dataset.key = key;
+          input.dataset.kind = 'string';
+          row.appendChild(input);
+        }
+
+        flowCfgFields.appendChild(row);
+      }
+    }
+
+    function buildFlowCfgPatchJson() {
+      if (!flowCfgCurrentModule) throw new Error('branche non sélectionnée');
+      const patch = {};
+      const modulePatch = {};
+      const fields = flowCfgFields.querySelectorAll('[data-key]');
+      fields.forEach((el) => {
+        const key = el.dataset.key;
+        const kind = el.dataset.kind;
+        if (!key || !kind) return;
+        if (kind === 'bool') {
+          modulePatch[key] = !!el.checked;
+          return;
+        }
+        if (kind === 'int') {
+          const v = Number.parseInt(el.value, 10);
+          modulePatch[key] = Number.isFinite(v) ? v : 0;
+          return;
+        }
+        if (kind === 'float') {
+          const v = Number.parseFloat(el.value);
+          modulePatch[key] = Number.isFinite(v) ? v : 0;
+          return;
+        }
+        const masked = el.dataset.masked === '1';
+        const raw = String(el.value ?? '');
+        if (masked && raw.length === 0) return;
+        modulePatch[key] = raw;
+      });
+      patch[flowCfgCurrentModule] = modulePatch;
+      return JSON.stringify(patch);
+    }
+
+    async function chargerFlowCfgModule(moduleName) {
+      const m = nettoyerNomFlowCfg(moduleName);
+      if (!m) {
+        renderFlowCfgBreadcrumb(cheminFlowCfgCourant());
+        resetFlowCfgEditor('Aucune branche sélectionnée.');
+        return;
+      }
+      try {
+        const res = await fetch('/api/flowcfg/module?name=' + encodeURIComponent(m), { cache: 'no-store' });
+        const data = await res.json();
+        if (!res.ok || !data || data.ok !== true || typeof data.data !== 'object') {
+          throw new Error('lecture module impossible');
+        }
+        flowCfgCurrentModule = m;
+        flowCfgCurrentData = data.data;
+        renderFlowCfgBreadcrumb(m);
+        renderFlowCfgFields(flowCfgCurrentData);
+        flowCfgApplyBtn.disabled = false;
+        flowCfgStatus.textContent = data.truncated
+          ? 'Branche chargée (tronquée, buffer distant atteint).'
+          : 'Branche chargée.';
+      } catch (err) {
+        renderFlowCfgBreadcrumb(cheminFlowCfgCourant());
+        resetFlowCfgEditor('Chargement branche échoué: ' + err);
+      }
+    }
+
+    async function renderFlowCfgNavigator(forceReloadCurrent) {
+      const currentPath = cheminFlowCfgCourant();
+      const node = await chargerFlowCfgChildren(currentPath, !!forceReloadCurrent);
+      renderFlowCfgBreadcrumb(currentPath);
+      flowCfgModuleSelect.innerHTML = '';
+
+      if (node.hasExact && node.children.length > 0) {
+        const selfOpt = document.createElement('option');
+        selfOpt.value = '__self__';
+        selfOpt.textContent = 'Configurer cette branche';
+        flowCfgModuleSelect.appendChild(selfOpt);
+      }
+
+      for (const child of node.children) {
+        const opt = document.createElement('option');
+        opt.value = child;
+        opt.textContent = child;
+        flowCfgModuleSelect.appendChild(opt);
+      }
+
+      if (node.children.length === 0 && node.hasExact) {
+        const leafOpt = document.createElement('option');
+        leafOpt.value = '__self__';
+        leafOpt.textContent = 'Branche courante';
+        flowCfgModuleSelect.appendChild(leafOpt);
+        flowCfgModuleSelect.value = '__self__';
+        await chargerFlowCfgModule(currentPath);
+        return;
+      }
+
+      if (flowCfgModuleSelect.options.length === 0) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'Aucune sous-branche disponible';
+        flowCfgModuleSelect.appendChild(opt);
+        resetFlowCfgEditor('Aucune sous-branche disponible.');
+        return;
+      }
+
+      if (node.hasExact && node.children.length > 0) {
+        flowCfgModuleSelect.value = '__self__';
+        resetFlowCfgEditor('Sélectionnez une sous-branche ou choisissez "Configurer cette branche".');
+        return;
+      }
+
+      if (node.children.length > 0) {
+        flowCfgModuleSelect.value = node.children[0];
+      } else {
+        flowCfgModuleSelect.selectedIndex = 0;
+      }
+      resetFlowCfgEditor('Sélectionnez une sous-branche.');
+    }
+
+    async function chargerFlowCfgModules(forceReload) {
+      const force = !!forceReload;
+      try {
+        if (force) {
+          flowCfgChildrenCache = {};
+        }
+        try {
+          await chargerFlowCfgChildren(cheminFlowCfgCourant(), force);
+        } catch (err) {
+          flowCfgPath = [];
+          await chargerFlowCfgChildren('', force);
+        }
+        await renderFlowCfgNavigator(force);
+      } catch (err) {
+        flowCfgStatus.textContent = 'Chargement des branches échoué: ' + err;
+      }
+    }
+
+    async function appliquerFlowCfg() {
+      try {
+        const patch = buildFlowCfgPatchJson();
+        const body = new URLSearchParams();
+        body.set('patch', patch);
+        const res = await fetch('/api/flowcfg/apply', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+          body: body.toString()
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data || data.ok !== true) {
+          throw new Error('apply refusé');
+        }
+        flowCfgStatus.textContent = 'Configuration appliquée sur Flow.IO.';
+        await chargerFlowCfgModule(flowCfgCurrentModule);
+      } catch (err) {
+        flowCfgStatus.textContent = 'Application cfg échouée: ' + err;
+      }
+    }
+
     async function callSystemAction(action) {
       const endpoint = action === 'factory_reset' ? '/api/system/factory-reset' : '/api/system/reboot';
       const res = await fetch(endpoint, { method: 'POST' });
@@ -1155,6 +1939,10 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
         setUpgradeMessage('Échec de l\'enregistrement : ' + err);
       }
     });
+    flowStatusRefreshBtn.addEventListener('click', async () => {
+      await refreshFlowStatus();
+    });
+    upSupervisorBtn.addEventListener('click', () => startUpgrade('supervisor'));
     upFlowBtn.addEventListener('click', () => startUpgrade('flowio'));
     upNextionBtn.addEventListener('click', () => startUpgrade('nextion'));
     refreshStateBtn.addEventListener('click', refreshUpgradeStatus);
@@ -1228,12 +2016,30 @@ static const char kWebInterfacePage[] PROGMEM = R"HTML(
         systemStatusText.textContent = 'Réinitialisation usine échouée : ' + err;
       }
     });
+    flowCfgModuleSelect.addEventListener('change', async () => {
+      const picked = flowCfgModuleSelect.value || '';
+      if (picked === '__self__') {
+        await chargerFlowCfgModule(cheminFlowCfgCourant());
+        return;
+      }
+      const cleanPicked = nettoyerNomFlowCfg(picked);
+      if (!cleanPicked) {
+        resetFlowCfgEditor('Sélectionnez une sous-branche.');
+        return;
+      }
+      flowCfgPath.push(cleanPicked);
+      await renderFlowCfgNavigator();
+    });
+    flowCfgRefreshBtn.addEventListener('click', async () => {
+      await chargerFlowCfgModules(true);
+    });
+    flowCfgApplyBtn.addEventListener('click', async () => {
+      await appliquerFlowCfg();
+    });
 
     loadUpgradeConfig();
     setUpgradeProgress(0);
-    loadWifiConfig();
-    loadMqttConfig();
-    refreshWifiScanStatus(true);
+    onStatusPageShown().catch(() => {});
     ouvrirPageParDefautSelonModeReseau();
     refreshUpgradeStatus();
     setInterval(refreshUpgradeStatus, 2000);
@@ -1256,6 +2062,7 @@ void WebInterfaceModule::init(ConfigStore& cfg, ServiceRegistry& services)
     logHub_ = services.get<LogHubService>("loghub");
     wifiSvc_ = services.get<WifiService>("wifi");
     cmdSvc_ = services.get<CommandService>("cmd");
+    flowCfgSvc_ = services.get<FlowCfgRemoteService>("flowcfg");
     netAccessSvc_ = services.get<NetworkAccessService>("network_access");
     const DataStoreService* dsSvc = services.get<DataStoreService>("datastore");
     dataStore_ = dsSvc ? dsSvc->store : nullptr;
@@ -1290,25 +2097,31 @@ void WebInterfaceModule::startServer_()
     if (started_) return;
 
     server_.on("/assets/flowio-icon.svg", HTTP_GET, [](AsyncWebServerRequest* request) {
-        request->send(200, "image/svg+xml", kFlowIoIconSvg);
+        sendProgmemLiteral_(request, "image/svg+xml", kFlowIoIconSvg);
     });
     server_.on("/assets/flowio-logo.svg", HTTP_GET, [](AsyncWebServerRequest* request) {
-        request->send(200, "image/svg+xml", kFlowIoLogoSvg);
+        sendProgmemLiteral_(request, "image/svg+xml", kFlowIoLogoSvg);
     });
     server_.on("/assets/icon-journaux.svg", HTTP_GET, [](AsyncWebServerRequest* request) {
-        request->send(200, "image/svg+xml", kMenuIconJournauxSvg);
+        sendProgmemLiteral_(request, "image/svg+xml", kMenuIconJournauxSvg);
+    });
+    server_.on("/assets/icon-status.svg", HTTP_GET, [](AsyncWebServerRequest* request) {
+        sendProgmemLiteral_(request, "image/svg+xml", kMenuIconStatusSvg);
     });
     server_.on("/assets/icon-upgrade.svg", HTTP_GET, [](AsyncWebServerRequest* request) {
-        request->send(200, "image/svg+xml", kMenuIconUpgradeSvg);
+        sendProgmemLiteral_(request, "image/svg+xml", kMenuIconUpgradeSvg);
     });
     server_.on("/assets/icon-config.svg", HTTP_GET, [](AsyncWebServerRequest* request) {
-        request->send(200, "image/svg+xml", kMenuIconConfigSvg);
+        sendProgmemLiteral_(request, "image/svg+xml", kMenuIconConfigSvg);
+    });
+    server_.on("/assets/icon-connections.svg", HTTP_GET, [](AsyncWebServerRequest* request) {
+        sendProgmemLiteral_(request, "image/svg+xml", kMenuIconConnectionsSvg);
     });
     server_.on("/assets/icon-system.svg", HTTP_GET, [](AsyncWebServerRequest* request) {
-        request->send(200, "image/svg+xml", kMenuIconSystemSvg);
+        sendProgmemLiteral_(request, "image/svg+xml", kMenuIconSystemSvg);
     });
     server_.on("/assets/icon-control.svg", HTTP_GET, [](AsyncWebServerRequest* request) {
-        request->send(200, "image/svg+xml", kMenuIconControlSvg);
+        sendProgmemLiteral_(request, "image/svg+xml", kMenuIconControlSvg);
     });
 
     server_.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
@@ -1316,7 +2129,8 @@ void WebInterfaceModule::startServer_()
     });
 
     server_.on("/webinterface", HTTP_GET, [](AsyncWebServerRequest* request) {
-        request->send(200, "text/html", kWebInterfacePage);
+        HttpLatencyScope latency(request, "/webinterface");
+        sendProgmemLiteral_(request, "text/html", kWebInterfacePage);
     });
     server_.on("/webserial", HTTP_GET, [](AsyncWebServerRequest* request) {
         request->redirect("/webinterface");
@@ -1329,6 +2143,7 @@ void WebInterfaceModule::startServer_()
         request->redirect("/webinterface/health");
     });
     server_.on("/api/network/mode", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        HttpLatencyScope latency(request, "/api/network/mode");
         NetworkAccessMode mode = NetworkAccessMode::None;
         if (!netAccessSvc_ && services_) {
             netAccessSvc_ = services_->get<NetworkAccessService>("network_access");
@@ -1376,6 +2191,7 @@ void WebInterfaceModule::startServer_()
     });
 
     auto fwStatusHandler = [this](AsyncWebServerRequest* request) {
+        HttpLatencyScope latency(request, "/api/fwupdate/status");
         if (!fwUpdateSvc_ && services_) {
             fwUpdateSvc_ = services_->get<FirmwareUpdateService>("fwupdate");
         }
@@ -1397,6 +2213,7 @@ void WebInterfaceModule::startServer_()
     server_.on("/api/fwupdate/status", HTTP_GET, fwStatusHandler);
 
     server_.on("/api/fwupdate/config", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        HttpLatencyScope latency(request, "/api/fwupdate/config");
         if (!fwUpdateSvc_ && services_) {
             fwUpdateSvc_ = services_->get<FirmwareUpdateService>("fwupdate");
         }
@@ -1406,7 +2223,7 @@ void WebInterfaceModule::startServer_()
             return;
         }
 
-        char out[320] = {0};
+        char out[512] = {0};
         if (!fwUpdateSvc_->configJson(fwUpdateSvc_->ctx, out, sizeof(out))) {
             request->send(500, "application/json",
                           "{\"ok\":false,\"err\":{\"code\":\"Failed\",\"where\":\"fwupdate.config\"}}");
@@ -1416,6 +2233,7 @@ void WebInterfaceModule::startServer_()
     });
 
     server_.on("/api/fwupdate/config", HTTP_POST, [this](AsyncWebServerRequest* request) {
+        HttpLatencyScope latency(request, "/api/fwupdate/config");
         if (!fwUpdateSvc_ && services_) {
             fwUpdateSvc_ = services_->get<FirmwareUpdateService>("fwupdate");
         }
@@ -1427,12 +2245,16 @@ void WebInterfaceModule::startServer_()
 
         String hostStr;
         String flowStr;
+        String supStr;
         String nxStr;
         if (request->hasParam("update_host", true)) {
             hostStr = request->getParam("update_host", true)->value();
         }
         if (request->hasParam("flowio_path", true)) {
             flowStr = request->getParam("flowio_path", true)->value();
+        }
+        if (request->hasParam("supervisor_path", true)) {
+            supStr = request->getParam("supervisor_path", true)->value();
         }
         if (request->hasParam("nextion_path", true)) {
             nxStr = request->getParam("nextion_path", true)->value();
@@ -1442,6 +2264,7 @@ void WebInterfaceModule::startServer_()
         if (!fwUpdateSvc_->setConfig(fwUpdateSvc_->ctx,
                                      hostStr.c_str(),
                                      flowStr.c_str(),
+                                     supStr.c_str(),
                                      nxStr.c_str(),
                                      err,
                                      sizeof(err))) {
@@ -1455,6 +2278,7 @@ void WebInterfaceModule::startServer_()
     });
 
     server_.on("/api/mqtt/config", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        HttpLatencyScope latency(request, "/api/mqtt/config");
         char host[sizeof(mqttCfg_.host)] = {0};
         char user[sizeof(mqttCfg_.user)] = {0};
         char pass[sizeof(mqttCfg_.pass)] = {0};
@@ -1482,6 +2306,7 @@ void WebInterfaceModule::startServer_()
     });
 
     server_.on("/api/mqtt/config", HTTP_POST, [this](AsyncWebServerRequest* request) {
+        HttpLatencyScope latency(request, "/api/mqtt/config");
         if (!cfgStore_) {
             request->send(503, "application/json",
                           "{\"ok\":false,\"err\":{\"code\":\"NotReady\",\"where\":\"mqtt.config.set\"}}");
@@ -1530,6 +2355,7 @@ void WebInterfaceModule::startServer_()
     });
 
     server_.on("/api/wifi/config", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        HttpLatencyScope latency(request, "/api/wifi/config");
         if (!cfgStore_) {
             request->send(503, "application/json",
                           "{\"ok\":false,\"err\":{\"code\":\"NotReady\",\"where\":\"wifi.config.get\"}}");
@@ -1537,7 +2363,7 @@ void WebInterfaceModule::startServer_()
         }
 
         char wifiJson[320] = {0};
-        if (!cfgStore_->toJsonModule("wifi", wifiJson, sizeof(wifiJson), nullptr)) {
+        if (!cfgStore_->toJsonModule("wifi", wifiJson, sizeof(wifiJson), nullptr, false)) {
             request->send(500, "application/json",
                           "{\"ok\":false,\"err\":{\"code\":\"Failed\",\"where\":\"wifi.config.get\"}}");
             return;
@@ -1579,6 +2405,7 @@ void WebInterfaceModule::startServer_()
     });
 
     server_.on("/api/wifi/config", HTTP_POST, [this](AsyncWebServerRequest* request) {
+        HttpLatencyScope latency(request, "/api/wifi/config");
         if (!cfgStore_) {
             request->send(503, "application/json",
                           "{\"ok\":false,\"err\":{\"code\":\"NotReady\",\"where\":\"wifi.config.set\"}}");
@@ -1623,10 +2450,61 @@ void WebInterfaceModule::startServer_()
             netAccessSvc_->notifyWifiConfigChanged(netAccessSvc_->ctx);
         }
 
-        request->send(200, "application/json", "{\"ok\":true}");
+        bool flowSyncAttempted = false;
+        bool flowSyncOk = false;
+        char flowSyncErr[96] = {0};
+        if (!flowCfgSvc_ && services_) {
+            flowCfgSvc_ = services_->get<FlowCfgRemoteService>("flowcfg");
+        }
+        if (flowCfgSvc_ && flowCfgSvc_->applyPatchJson) {
+            flowSyncAttempted = true;
+
+            StaticJsonDocument<320> flowPatchDoc;
+            JsonObject flowRoot = flowPatchDoc.to<JsonObject>();
+            JsonObject flowWifi = flowRoot.createNestedObject("wifi");
+            flowWifi["enabled"] = enabled;
+            flowWifi["ssid"] = ssid.c_str();
+            flowWifi["pass"] = pass.c_str();
+
+            char flowPatchJson[320] = {0};
+            const size_t flowPatchLen = serializeJson(flowPatchDoc, flowPatchJson, sizeof(flowPatchJson));
+            if (flowPatchLen > 0 && flowPatchLen < sizeof(flowPatchJson)) {
+                char flowAck[Limits::Mqtt::Buffers::Ack] = {0};
+                flowSyncOk = flowCfgSvc_->applyPatchJson(flowCfgSvc_->ctx, flowPatchJson, flowAck, sizeof(flowAck));
+                if (!flowSyncOk) {
+                    snprintf(flowSyncErr, sizeof(flowSyncErr), "flowcfg.apply failed");
+                }
+            } else {
+                snprintf(flowSyncErr, sizeof(flowSyncErr), "flowcfg.patch serialize failed");
+            }
+        } else {
+            snprintf(flowSyncErr, sizeof(flowSyncErr), "flowcfg service unavailable");
+        }
+
+        if (flowSyncAttempted && flowSyncOk) {
+            LOGI("WiFi config synced to Flow.IO");
+        } else {
+            LOGW("WiFi config sync to Flow.IO skipped/failed attempted=%d err=%s",
+                 (int)flowSyncAttempted,
+                 flowSyncErr[0] ? flowSyncErr : "none");
+        }
+
+        char out[256] = {0};
+        const int n = snprintf(out,
+                               sizeof(out),
+                               "{\"ok\":true,\"flowio_sync\":{\"attempted\":%s,\"ok\":%s,\"err\":\"%s\"}}",
+                               flowSyncAttempted ? "true" : "false",
+                               flowSyncOk ? "true" : "false",
+                               flowSyncErr);
+        if (n <= 0 || (size_t)n >= sizeof(out)) {
+            request->send(200, "application/json", "{\"ok\":true}");
+            return;
+        }
+        request->send(200, "application/json", out);
     });
 
     server_.on("/api/wifi/scan", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        HttpLatencyScope latency(request, "/api/wifi/scan");
         if (!wifiSvc_ && services_) {
             wifiSvc_ = services_->get<WifiService>("wifi");
         }
@@ -1646,6 +2524,7 @@ void WebInterfaceModule::startServer_()
     });
 
     server_.on("/api/wifi/scan", HTTP_POST, [this](AsyncWebServerRequest* request) {
+        HttpLatencyScope latency(request, "/api/wifi/scan");
         if (!wifiSvc_ && services_) {
             wifiSvc_ = services_->get<WifiService>("wifi");
         }
@@ -1676,7 +2555,174 @@ void WebInterfaceModule::startServer_()
         request->send(202, "application/json", "{\"ok\":true,\"accepted\":true}");
     });
 
+    server_.on("/api/flow/status", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        HttpLatencyScope latency(request,
+                                 "/api/flow/status",
+                                 kHttpLatencyFlowCfgInfoMs,
+                                 kHttpLatencyFlowCfgWarnMs);
+        if (!flowCfgSvc_ && services_) {
+            flowCfgSvc_ = services_->get<FlowCfgRemoteService>("flowcfg");
+        }
+        if (!flowCfgSvc_ || !flowCfgSvc_->runtimeStatusJson) {
+            request->send(503, "application/json",
+                          "{\"ok\":false,\"err\":{\"code\":\"NotReady\",\"where\":\"flow.status\"}}");
+            return;
+        }
+
+        char out[Limits::Mqtt::Buffers::StateCfg] = {0};
+        if (!flowCfgSvc_->runtimeStatusJson(flowCfgSvc_->ctx, out, sizeof(out))) {
+            if (out[0] != '\0') {
+                request->send(500, "application/json", out);
+            } else {
+                request->send(500, "application/json",
+                              "{\"ok\":false,\"err\":{\"code\":\"Failed\",\"where\":\"flow.status\"}}");
+            }
+            return;
+        }
+        request->send(200, "application/json", out);
+    });
+
+    server_.on("/api/flowcfg/modules", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        HttpLatencyScope latency(request,
+                                 "/api/flowcfg/modules",
+                                 kHttpLatencyFlowCfgInfoMs,
+                                 kHttpLatencyFlowCfgWarnMs);
+        if (!flowCfgSvc_ && services_) {
+            flowCfgSvc_ = services_->get<FlowCfgRemoteService>("flowcfg");
+        }
+        if (!flowCfgSvc_ || !flowCfgSvc_->listModulesJson) {
+            request->send(503, "application/json",
+                          "{\"ok\":false,\"err\":{\"code\":\"NotReady\",\"where\":\"flowcfg.modules\"}}");
+            return;
+        }
+
+        char out[Limits::Mqtt::Buffers::Ack] = {0};
+        if (!flowCfgSvc_->listModulesJson(flowCfgSvc_->ctx, out, sizeof(out))) {
+            if (out[0] != '\0') {
+                LOGW("flowcfg.modules failed details=%s", out);
+                request->send(500, "application/json", out);
+            } else {
+                request->send(500, "application/json",
+                              "{\"ok\":false,\"err\":{\"code\":\"Failed\",\"where\":\"flowcfg.modules\"}}");
+            }
+            return;
+        }
+        request->send(200, "application/json", out);
+    });
+
+    server_.on("/api/flowcfg/children", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        HttpLatencyScope latency(request,
+                                 "/api/flowcfg/children",
+                                 kHttpLatencyFlowCfgInfoMs,
+                                 kHttpLatencyFlowCfgWarnMs);
+        if (!flowCfgSvc_ && services_) {
+            flowCfgSvc_ = services_->get<FlowCfgRemoteService>("flowcfg");
+        }
+        if (!flowCfgSvc_ || !flowCfgSvc_->listChildrenJson) {
+            request->send(503, "application/json",
+                          "{\"ok\":false,\"err\":{\"code\":\"NotReady\",\"where\":\"flowcfg.children\"}}");
+            return;
+        }
+
+        const String prefix = request->hasParam("prefix") ? request->getParam("prefix")->value() : "";
+        char out[Limits::Mqtt::Buffers::Ack] = {0};
+        if (!flowCfgSvc_->listChildrenJson(flowCfgSvc_->ctx, prefix.c_str(), out, sizeof(out))) {
+            if (out[0] != '\0') {
+                LOGW("flowcfg.children failed prefix=%s details=%s", prefix.c_str(), out);
+                request->send(500, "application/json", out);
+            } else {
+                request->send(500, "application/json",
+                              "{\"ok\":false,\"err\":{\"code\":\"Failed\",\"where\":\"flowcfg.children\"}}");
+            }
+            return;
+        }
+        request->send(200, "application/json", out);
+    });
+
+    server_.on("/api/flowcfg/module", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        HttpLatencyScope latency(request,
+                                 "/api/flowcfg/module",
+                                 kHttpLatencyFlowCfgInfoMs,
+                                 kHttpLatencyFlowCfgWarnMs);
+        if (!flowCfgSvc_ && services_) {
+            flowCfgSvc_ = services_->get<FlowCfgRemoteService>("flowcfg");
+        }
+        if (!flowCfgSvc_ || !flowCfgSvc_->getModuleJson) {
+            request->send(503, "application/json",
+                          "{\"ok\":false,\"err\":{\"code\":\"NotReady\",\"where\":\"flowcfg.module\"}}");
+            return;
+        }
+        if (!request->hasParam("name")) {
+            request->send(400, "application/json",
+                          "{\"ok\":false,\"err\":{\"code\":\"InvalidArg\",\"where\":\"flowcfg.module.name\"}}");
+            return;
+        }
+
+        String moduleStr = request->getParam("name")->value();
+        if (moduleStr.length() == 0) {
+            request->send(400, "application/json",
+                          "{\"ok\":false,\"err\":{\"code\":\"InvalidArg\",\"where\":\"flowcfg.module.name\"}}");
+            return;
+        }
+
+        char moduleName[64] = {0};
+        snprintf(moduleName, sizeof(moduleName), "%s", moduleStr.c_str());
+        sanitizeJsonString_(moduleName);
+
+        bool truncated = false;
+        char moduleJson[Limits::Mqtt::Buffers::StateCfg] = {0};
+        if (!flowCfgSvc_->getModuleJson(flowCfgSvc_->ctx, moduleStr.c_str(), moduleJson, sizeof(moduleJson), &truncated)) {
+            request->send(500, "application/json",
+                          "{\"ok\":false,\"err\":{\"code\":\"Failed\",\"where\":\"flowcfg.module.get\"}}");
+            return;
+        }
+
+        char out[Limits::Mqtt::Buffers::StateCfg + 128] = {0};
+        const int n = snprintf(out,
+                               sizeof(out),
+                               "{\"ok\":true,\"module\":\"%s\",\"truncated\":%s,\"data\":%s}",
+                               moduleName,
+                               truncated ? "true" : "false",
+                               moduleJson);
+        if (n <= 0 || (size_t)n >= sizeof(out)) {
+            request->send(500, "application/json",
+                          "{\"ok\":false,\"err\":{\"code\":\"Failed\",\"where\":\"flowcfg.module.pack\"}}");
+            return;
+        }
+        request->send(200, "application/json", out);
+    });
+
+    server_.on("/api/flowcfg/apply", HTTP_POST, [this](AsyncWebServerRequest* request) {
+        HttpLatencyScope latency(request,
+                                 "/api/flowcfg/apply",
+                                 kHttpLatencyFlowCfgInfoMs,
+                                 kHttpLatencyFlowCfgWarnMs);
+        if (!flowCfgSvc_ && services_) {
+            flowCfgSvc_ = services_->get<FlowCfgRemoteService>("flowcfg");
+        }
+        if (!flowCfgSvc_ || !flowCfgSvc_->applyPatchJson) {
+            request->send(503, "application/json",
+                          "{\"ok\":false,\"err\":{\"code\":\"NotReady\",\"where\":\"flowcfg.apply\"}}");
+            return;
+        }
+        if (!request->hasParam("patch", true)) {
+            request->send(400, "application/json",
+                          "{\"ok\":false,\"err\":{\"code\":\"InvalidArg\",\"where\":\"flowcfg.apply.patch\"}}");
+            return;
+        }
+
+        String patchStr = request->getParam("patch", true)->value();
+        char ack[Limits::Mqtt::Buffers::Ack] = {0};
+        if (!flowCfgSvc_->applyPatchJson(flowCfgSvc_->ctx, patchStr.c_str(), ack, sizeof(ack))) {
+            request->send(500, "application/json",
+                          "{\"ok\":false,\"err\":{\"code\":\"Failed\",\"where\":\"flowcfg.apply.exec\"}}");
+            return;
+        }
+        request->send(200, "application/json", ack);
+    });
+
     server_.on("/api/system/reboot", HTTP_POST, [this](AsyncWebServerRequest* request) {
+        HttpLatencyScope latency(request, "/api/system/reboot");
         if (!cmdSvc_ && services_) {
             cmdSvc_ = services_->get<CommandService>("cmd");
         }
@@ -1700,6 +2746,7 @@ void WebInterfaceModule::startServer_()
     });
 
     server_.on("/api/system/factory-reset", HTTP_POST, [this](AsyncWebServerRequest* request) {
+        HttpLatencyScope latency(request, "/api/system/factory-reset");
         if (!cmdSvc_ && services_) {
             cmdSvc_ = services_->get<CommandService>("cmd");
         }
@@ -1724,10 +2771,17 @@ void WebInterfaceModule::startServer_()
     });
 
     server_.on("/fwupdate/flowio", HTTP_POST, [this](AsyncWebServerRequest* request) {
+        HttpLatencyScope latency(request, "/fwupdate/flowio");
         handleUpdateRequest_(request, FirmwareUpdateTarget::FlowIO);
     });
 
+    server_.on("/fwupdate/supervisor", HTTP_POST, [this](AsyncWebServerRequest* request) {
+        HttpLatencyScope latency(request, "/fwupdate/supervisor");
+        handleUpdateRequest_(request, FirmwareUpdateTarget::Supervisor);
+    });
+
     server_.on("/fwupdate/nextion", HTTP_POST, [this](AsyncWebServerRequest* request) {
+        HttpLatencyScope latency(request, "/fwupdate/nextion");
         handleUpdateRequest_(request, FirmwareUpdateTarget::Nextion);
     });
 

@@ -8,7 +8,7 @@
 #include "Core/ErrorCodes.h"
 #include "Core/SystemLimits.h"
 #include "Core/Services/Services.h"
-#include <AsyncMqttClient.h>
+#include <mqtt_client.h>
 
 /** @brief MQTT configuration values. */
 struct MQTTConfig {
@@ -85,7 +85,10 @@ private:
     MQTTState state = MQTTState::WaitingNetwork;
     uint32_t stateTs = 0;
 
-    AsyncMqttClient client;
+    esp_mqtt_client_handle_t client_ = nullptr;
+    bool clientStarted_ = false;
+    bool clientConfigDirty_ = true;
+    bool suppressDisconnectEvent_ = false;
 
     const WifiService* wifiSvc = nullptr;
     const CommandService* cmdSvc = nullptr;
@@ -104,11 +107,11 @@ private:
     char topicCfgAck[Limits::Mqtt::Buffers::Topic] = {0};
     char topicRtAlarmsMeta[Limits::Mqtt::Buffers::Topic] = {0};
     char topicRtAlarmsPack[Limits::Mqtt::Buffers::Topic] = {0};
+    char brokerUri_[Limits::Mqtt::Buffers::DynamicTopic] = {0};
     RuntimePublisher publishers[Limits::Mqtt::Capacity::MaxPublishers] = {};
     uint8_t publisherCount = 0;
     const char* cfgModules[Limits::Mqtt::Capacity::CfgTopicMax] = {nullptr};
     uint8_t cfgModuleCount = 0;
-    char topicCfgBlocks[Limits::Mqtt::Capacity::CfgTopicMax][Limits::Mqtt::Buffers::Topic] = {{0}};
 
     const char* sensorsTopic = nullptr;
     bool (*sensorsBuild)(MQTTModule* self, char* out, size_t outLen) = nullptr;
@@ -166,16 +169,24 @@ private:
     bool publishConfigModuleAt(size_t idx, bool retained);
     bool publishConfigBlocksFromPatch(const char* patchJson, bool retained);
     void publishTimeSchedulerSlots(bool retained, const char* rootTopic);
+    bool buildCfgTopic_(const char* module, char* out, size_t outLen) const;
     void enqueueCfgBranch_(uint16_t branchId);
     uint8_t takePendingCfgBranches_(uint16_t* out, uint8_t maxItems);
     void processPendingCfgBranches_();
     void beginConfigRamp_(uint32_t nowMs);
     void runConfigRamp_(uint32_t nowMs);
 
-    void onConnect(bool sessionPresent);
-    void onDisconnect(AsyncMqttClientDisconnectReason reason);
-    void onMessage(char* topic, char* payload, AsyncMqttClientMessageProperties properties,
-                   size_t len, size_t index, size_t total);
+    void onConnect_(bool sessionPresent);
+    void onDisconnect_();
+    void onMessage_(const char* topic, size_t topicLen,
+                    const char* payload, size_t len, size_t index, size_t total);
+    bool ensureClient_();
+    void stopClient_(bool intentional);
+    void destroyClient_();
+    static void mqttEventHandlerStatic_(void* handler_args,
+                                        esp_event_base_t base,
+                                        int32_t event_id,
+                                        void* event_data);
 
     static void onEventStatic(const Event& e, void* user);
     void onEvent(const Event& e);
@@ -208,6 +219,9 @@ private:
     bool alarmsMetaPending_ = false;
     bool alarmsFullSyncPending_ = false;
     bool alarmsPackPending_ = false;
+    uint32_t lastLowHeapWarnMs_ = 0;
+    uint32_t lowHeapSinceMs_ = 0;
+    uint32_t lastOutboxWarnMs_ = 0;
 
     uint32_t rxDropCount_ = 0;
     uint32_t parseFailCount_ = 0;

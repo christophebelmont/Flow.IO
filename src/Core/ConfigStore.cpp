@@ -284,7 +284,11 @@ void ConfigStore::toJson(char* out, size_t outLen) const
     }
 }
 
-bool ConfigStore::toJsonModule(const char* module, char* out, size_t outLen, bool* truncated) const
+bool ConfigStore::toJsonModule(const char* module,
+                               char* out,
+                               size_t outLen,
+                               bool* truncated,
+                               bool maskSecrets) const
 {
     if (!out || outLen == 0) return false;
     if (!module || module[0] == '\0') {
@@ -338,7 +342,7 @@ bool ConfigStore::toJsonModule(const char* module, char* out, size_t outLen, boo
                 n = snprintf(out + pos, outLen - pos, "%.6f", *(double*)m.valuePtr);
                 break;
             case ConfigType::CharArray:
-                if (isMaskedKey(m.name)) {
+                if (maskSecrets && isMaskedKey(m.name)) {
                     n = snprintf(out + pos, outLen - pos, "\"***\"");
                 } else {
                     n = snprintf(out + pos, outLen - pos, "\"%s\"", (const char*)m.valuePtr);

@@ -328,7 +328,7 @@ private:
     uint32_t analogCalcLogLastMs_[3]{0, 0, 0};
     int32_t haPrecisionLast_[ANALOG_CFG_SLOTS]{0, 0, 0, 0, 0, 0};
     bool haPrecisionLastInit_ = false;
-    char haValueTpl_[ANALOG_CFG_SLOTS][64]{};
+    char haValueTpl_[ANALOG_CFG_SLOTS][128]{};
     char haSwitchStateSuffix_[FLOW_POOL_IO_BINDING_COUNT][24]{};
     char haSwitchPayloadOn_[FLOW_POOL_IO_BINDING_COUNT][Limits::IoHaSwitchPayloadBuf]{};
     char haSwitchPayloadOff_[FLOW_POOL_IO_BINDING_COUNT][Limits::IoHaSwitchPayloadBuf]{};

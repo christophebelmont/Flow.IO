@@ -189,9 +189,9 @@ private:
                                           &phAutoMode_, ConfigPersistence::Persistent, 0};
     ConfigVariable<bool,0> orpAutoModeVar_{NVS_KEY(NvsKeys::PoolLogic::OrpAutoMode), "orp_auto_mode", "poollogic", ConfigType::Bool,
                                            &orpAutoMode_, ConfigPersistence::Persistent, 0};
-    ConfigVariable<bool,0> electrolyseModeVar_{NVS_KEY(NvsKeys::PoolLogic::ElectrolyseMode), "electrolys_mode", "poollogic", ConfigType::Bool,
+    ConfigVariable<bool,0> electrolyseModeVar_{NVS_KEY(NvsKeys::PoolLogic::ElectrolyseMode), "elec_mode", "poollogic", ConfigType::Bool,
                                                &electrolyseMode_, ConfigPersistence::Persistent, 0};
-    ConfigVariable<bool,0> electroRunModeVar_{NVS_KEY(NvsKeys::PoolLogic::ElectroRunMode), "electro_run_md", "poollogic", ConfigType::Bool,
+    ConfigVariable<bool,0> electroRunModeVar_{NVS_KEY(NvsKeys::PoolLogic::ElectroRunMode), "elec_run", "poollogic", ConfigType::Bool,
                                               &electroRunMode_, ConfigPersistence::Persistent, 0};
 
     ConfigVariable<float,0> tempLowVar_{NVS_KEY(NvsKeys::PoolLogic::TempLow), "wat_temp_lo_th", "poollogic", ConfigType::Float,
@@ -257,7 +257,7 @@ private:
 
     ConfigVariable<uint8_t,0> psiDelayVar_{NVS_KEY(NvsKeys::PoolLogic::PsiDelay), "psi_start_dly_s", "poollogic", ConfigType::UInt8,
                                            &psiStartupDelaySec_, ConfigPersistence::Persistent, 0};
-    ConfigVariable<uint8_t,0> delayPidsVar_{NVS_KEY(NvsKeys::PoolLogic::DelayPids), "delay_pids_min", "poollogic", ConfigType::UInt8,
+    ConfigVariable<uint8_t,0> delayPidsVar_{NVS_KEY(NvsKeys::PoolLogic::DelayPids), "dly_pid_min", "poollogic", ConfigType::UInt8,
                                             &delayPidsMin_, ConfigPersistence::Persistent, 0};
     ConfigVariable<uint8_t,0> delayElectroVar_{NVS_KEY(NvsKeys::PoolLogic::DelayElectro), "dly_electro_min", "poollogic", ConfigType::UInt8,
                                                &delayElectroMin_, ConfigPersistence::Persistent, 0};
@@ -268,13 +268,13 @@ private:
     ConfigVariable<uint8_t,0> fillingMinOnVar_{NVS_KEY(NvsKeys::PoolLogic::FillingMinOn), "fill_min_on_s", "poollogic", ConfigType::UInt8,
                                                &fillingMinOnSec_, ConfigPersistence::Persistent, 0};
 
-    ConfigVariable<uint8_t,0> filtrationDeviceVar_{NVS_KEY(NvsKeys::PoolLogic::FiltrationSlot), "filtration_slot", "poollogic", ConfigType::UInt8,
+    ConfigVariable<uint8_t,0> filtrationDeviceVar_{NVS_KEY(NvsKeys::PoolLogic::FiltrationSlot), "filtr_slot", "poollogic", ConfigType::UInt8,
                                                    &filtrationDeviceSlot_, ConfigPersistence::Persistent, 0};
     ConfigVariable<uint8_t,0> swgDeviceVar_{NVS_KEY(NvsKeys::PoolLogic::SwgSlot), "swg_slot", "poollogic", ConfigType::UInt8,
                                             &swgDeviceSlot_, ConfigPersistence::Persistent, 0};
     ConfigVariable<uint8_t,0> robotDeviceVar_{NVS_KEY(NvsKeys::PoolLogic::RobotSlot), "robot_slot", "poollogic", ConfigType::UInt8,
                                               &robotDeviceSlot_, ConfigPersistence::Persistent, 0};
-    ConfigVariable<uint8_t,0> fillingDeviceVar_{NVS_KEY(NvsKeys::PoolLogic::FillingSlot), "filling_slot", "poollogic", ConfigType::UInt8,
+    ConfigVariable<uint8_t,0> fillingDeviceVar_{NVS_KEY(NvsKeys::PoolLogic::FillingSlot), "fill_slot", "poollogic", ConfigType::UInt8,
                                                 &fillingDeviceSlot_, ConfigPersistence::Persistent, 0};
 
     static void onEventStatic_(const Event& e, void* user);

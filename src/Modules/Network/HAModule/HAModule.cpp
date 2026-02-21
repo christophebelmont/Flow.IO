@@ -7,6 +7,7 @@
 #include "Modules/Network/HAModule/HARuntime.h"
 #include "Core/MqttTopics.h"
 #include "Core/SystemLimits.h"
+#include <esp_heap_caps.h>
 #include <esp_system.h>
 #include <ctype.h>
 #include <stdarg.h>
@@ -312,11 +313,27 @@ bool HAModule::publishDiscovery(const char* component, const char* objectId, con
 {
     if (!component || !objectId || !payload || !mqttSvc || !mqttSvc->publish) return false;
 
+    const uint32_t freeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    const uint32_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    if (freeHeap < MIN_FREE_HEAP_FOR_PUBLISH || largest < MIN_LARGEST_BLOCK_FOR_PUBLISH) {
+        const uint32_t now = millis();
+        if ((now - lastLowHeapLogMs_) >= 2000U) {
+            lastLowHeapLogMs_ = now;
+            LOGW("Skip HA discovery publish (low heap free=%lu largest=%lu need_free=%lu need_largest=%lu)",
+                 (unsigned long)freeHeap,
+                 (unsigned long)largest,
+                 (unsigned long)MIN_FREE_HEAP_FOR_PUBLISH,
+                 (unsigned long)MIN_LARGEST_BLOCK_FOR_PUBLISH);
+        }
+        return false;
+    }
+
     if (!formatChecked(topicBuf, sizeof(topicBuf), "%s/%s/%s/%s/config", cfgData.discoveryPrefix, component, nodeTopicId, objectId)) {
         LOGW("HA discovery topic truncated component=%s object=%s", component, objectId);
         return false;
     }
-    return mqttSvc->publish(mqttSvc->ctx, topicBuf, payload, 1, true);
+    // QoS0 lowers transient heap pressure while keeping retained discovery on broker.
+    return mqttSvc->publish(mqttSvc->ctx, topicBuf, payload, 0, true);
 }
 
 bool HAModule::publishSensor(const char* objectId, const char* name,
@@ -692,12 +709,16 @@ void HAModule::tryPublishAutoconfig()
     if (publishAutoconfig()) {
         published = true;
         refreshRequested = false;
+        retryAfterMs_ = 0;
         setHaAutoconfigPublished(*dsSvc->store, true);
         LOGI("Home Assistant auto-discovery published (sensor=%u switch=%u number=%u button=%u)",
              (unsigned)sensorCount_, (unsigned)switchCount_, (unsigned)numberCount_, (unsigned)buttonCount_);
     } else {
         setHaAutoconfigPublished(*dsSvc->store, false);
-        LOGW("Home Assistant auto-discovery publish failed");
+        retryAfterMs_ = millis() + RETRY_DELAY_MS;
+        autoconfigPending = true;
+        LOGW("Home Assistant auto-discovery publish failed (retry in %lu ms)",
+             (unsigned long)RETRY_DELAY_MS);
     }
 }
 
@@ -751,9 +772,13 @@ void HAModule::requestAutoconfigRefresh()
 void HAModule::loop()
 {
     if (!autoconfigPending) {
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(250));
     }
     if (!autoconfigPending) return;
+    const uint32_t now = millis();
+    if (retryAfterMs_ != 0 && (int32_t)(now - retryAfterMs_) < 0) {
+        return;
+    }
     autoconfigPending = false;
     tryPublishAutoconfig();
 }

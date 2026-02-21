@@ -19,6 +19,7 @@ enum class ConfigModuleId : uint8_t {
     TimeScheduler,
     SystemMonitor,
     Io,
+    I2cCfg,
     PoolLogic,
     PoolDevice,
     Alarms

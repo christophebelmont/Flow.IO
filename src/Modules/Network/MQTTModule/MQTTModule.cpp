@@ -9,8 +9,8 @@
 #include "Core/SystemLimits.h"
 #include "Core/SystemStats.h"
 #include <ArduinoJson.h>
-#include <WiFi.h>
 #include <esp_system.h>
+#include <esp_heap_caps.h>
 #include <initializer_list>
 #include "Core/EventBus/EventPayloads.h"
 #define LOG_TAG "MqttModu"
@@ -94,26 +94,112 @@ void MQTTModule::buildTopics() {
     snprintf(topicCfgAck, sizeof(topicCfgAck), "%s/%s/%s", cfgData.baseTopic, deviceId, MqttTopics::SuffixCfgAck);
     snprintf(topicRtAlarmsMeta, sizeof(topicRtAlarmsMeta), "%s/%s/rt/alarms/m", cfgData.baseTopic, deviceId);
     snprintf(topicRtAlarmsPack, sizeof(topicRtAlarmsPack), "%s/%s/rt/alarms/p", cfgData.baseTopic, deviceId);
-    for (size_t i = 0; i < cfgModuleCount; ++i) {
-        snprintf(topicCfgBlocks[i], sizeof(topicCfgBlocks[i]),
-                 "%s/%s/cfg/%s", cfgData.baseTopic, deviceId, cfgModules[i]);
+}
+
+bool MQTTModule::ensureClient_()
+{
+    if (client_ && !clientConfigDirty_) return true;
+
+    destroyClient_();
+
+    const int uriLen = snprintf(brokerUri_, sizeof(brokerUri_), "mqtt://%s:%ld", cfgData.host, (long)cfgData.port);
+    if (!(uriLen > 0 && (size_t)uriLen < sizeof(brokerUri_))) {
+        LOGE("MQTT broker URI overflow");
+        return false;
     }
+
+    esp_mqtt_client_config_t cfg = {};
+#if defined(ESP_IDF_VERSION_MAJOR) && (ESP_IDF_VERSION_MAJOR >= 5)
+    cfg.broker.address.uri = brokerUri_;
+    cfg.credentials.client_id = deviceId;
+    if (cfgData.user[0] != '\0') {
+        cfg.credentials.username = cfgData.user;
+        cfg.credentials.authentication.password = cfgData.pass;
+    }
+    cfg.session.last_will.topic = topicStatus;
+    cfg.session.last_will.msg = "{\"online\":false}";
+    cfg.session.last_will.qos = 1;
+    cfg.session.last_will.retain = 1;
+    cfg.network.disable_auto_reconnect = true;
+#else
+    cfg.uri = brokerUri_;
+    cfg.client_id = deviceId;
+    if (cfgData.user[0] != '\0') {
+        cfg.username = cfgData.user;
+        cfg.password = cfgData.pass;
+    }
+    cfg.lwt_topic = topicStatus;
+    cfg.lwt_msg = "{\"online\":false}";
+    cfg.lwt_qos = 1;
+    cfg.lwt_retain = 1;
+    cfg.disable_auto_reconnect = true;
+    cfg.user_context = this;
+#endif
+
+    client_ = esp_mqtt_client_init(&cfg);
+    if (!client_) {
+        LOGE("esp_mqtt_client_init failed");
+        return false;
+    }
+
+    if (esp_mqtt_client_register_event(client_, MQTT_EVENT_ANY, &MQTTModule::mqttEventHandlerStatic_, this) != ESP_OK) {
+        LOGE("esp_mqtt_client_register_event failed");
+        destroyClient_();
+        return false;
+    }
+
+    clientConfigDirty_ = false;
+    return true;
+}
+
+void MQTTModule::stopClient_(bool intentional)
+{
+    if (!client_) return;
+    if (intentional) suppressDisconnectEvent_ = true;
+    (void)esp_mqtt_client_stop(client_);
+    clientStarted_ = false;
+}
+
+void MQTTModule::destroyClient_()
+{
+    if (!client_) return;
+    (void)esp_mqtt_client_stop(client_);
+    (void)esp_mqtt_client_destroy(client_);
+    client_ = nullptr;
+    clientStarted_ = false;
 }
 
 void MQTTModule::connectMqtt() {
     buildTopics();
-    client.setServer(cfgData.host, (uint16_t)cfgData.port);
-    if (cfgData.user[0] != '\0') client.setCredentials(cfgData.user, cfgData.pass);
-    client.setWill(topicStatus, 1, true, "{\"online\":false}");
-    client.connect();
+    suppressDisconnectEvent_ = false;
+    if (!ensureClient_()) {
+        setState(MQTTState::ErrorWait);
+        return;
+    }
+
+    esp_err_t err = ESP_FAIL;
+    if (!clientStarted_) {
+        err = esp_mqtt_client_start(client_);
+        if (err == ESP_OK) clientStarted_ = true;
+    } else {
+        err = esp_mqtt_client_reconnect(client_);
+    }
+
+    if (err != ESP_OK) {
+        LOGW("MQTT connect request failed err=%d", (int)err);
+        setState(MQTTState::ErrorWait);
+        return;
+    }
+
     setState(MQTTState::Connecting);
     LOGI("Connecting to %s:%ld", cfgData.host, cfgData.port);
 }
 
-void MQTTModule::onConnect(bool) {
+void MQTTModule::onConnect_(bool) {
+    suppressDisconnectEvent_ = false;
     LOGI("Connected subscribe %s", topicCmd);
-    client.subscribe(topicCmd, 0);
-    client.subscribe(topicCfgSet, 1);
+    (void)esp_mqtt_client_subscribe(client_, topicCmd, 0);
+    (void)esp_mqtt_client_subscribe(client_, topicCfgSet, 1);
 
     _retryCount = 0;
     _retryDelayMs = Limits::Mqtt::Backoff::MinMs;
@@ -136,7 +222,11 @@ void MQTTModule::onConnect(bool) {
     alarmsPackPending_ = true;
 }
 
-void MQTTModule::onDisconnect(AsyncMqttClientDisconnectReason) {
+void MQTTModule::onDisconnect_() {
+    if (suppressDisconnectEvent_) {
+        suppressDisconnectEvent_ = false;
+        return;
+    }
     LOGW("Disconnected");
     cfgRampActive_ = false;
     cfgRampRestartRequested_ = false;
@@ -144,21 +234,20 @@ void MQTTModule::onDisconnect(AsyncMqttClientDisconnectReason) {
     setState(MQTTState::ErrorWait);
 }
 
-void MQTTModule::onMessage(char* topic, char* payload, AsyncMqttClientMessageProperties,
-                           size_t len, size_t, size_t total) {
+void MQTTModule::onMessage_(const char* topic, size_t topicLen,
+                            const char* payload, size_t len, size_t index, size_t total) {
     if (!rxQ) return;
     if (!topic || !payload) {
         countRxDrop_();
         return;
     }
-    if (len != total) {
+    if (index != 0 || len != total) {
         countRxDrop_();
         return;
     }
 
     const size_t topicCap = sizeof(RxMsg{}.topic);
     const size_t payloadCap = sizeof(RxMsg{}.payload);
-    size_t topicLen = topic ? strlen(topic) : 0U;
     if (topicLen >= topicCap || len >= payloadCap) {
         countOversizeDrop_();
         return;
@@ -177,6 +266,47 @@ void MQTTModule::onMessage(char* topic, char* payload, AsyncMqttClientMessagePro
     }
 }
 
+void MQTTModule::mqttEventHandlerStatic_(void* handler_args,
+                                         esp_event_base_t,
+                                         int32_t event_id,
+                                         void* event_data)
+{
+    MQTTModule* self = static_cast<MQTTModule*>(handler_args);
+    if (!self || !event_data) return;
+    esp_mqtt_event_handle_t ev = static_cast<esp_mqtt_event_handle_t>(event_data);
+
+    switch ((esp_mqtt_event_id_t)event_id) {
+        case MQTT_EVENT_CONNECTED:
+            self->onConnect_(ev->session_present != 0);
+            break;
+        case MQTT_EVENT_DISCONNECTED:
+            self->onDisconnect_();
+            break;
+        case MQTT_EVENT_DATA:
+            self->onMessage_(ev->topic,
+                             (size_t)ev->topic_len,
+                             ev->data,
+                             (size_t)ev->data_len,
+                             (size_t)ev->current_data_offset,
+                             (size_t)ev->total_data_len);
+            break;
+        case MQTT_EVENT_ERROR:
+            if (ev->error_handle) {
+                LOGW("MQTT error type=%d tls_last=%d tls_stack=%d conn_refused=%d sock_errno=%d",
+                     (int)ev->error_handle->error_type,
+                     (int)ev->error_handle->esp_tls_last_esp_err,
+                     (int)ev->error_handle->esp_tls_stack_err,
+                     (int)ev->error_handle->connect_return_code,
+                     (int)ev->error_handle->esp_transport_sock_errno);
+            } else {
+                LOGW("MQTT error event without details");
+            }
+            break;
+        default:
+            break;
+    }
+}
+
 void MQTTModule::refreshConfigModules()
 {
     if (cfgSvc && cfgSvc->listModules) {
@@ -186,10 +316,6 @@ void MQTTModule::refreshConfigModules()
         }
     } else {
         cfgModuleCount = 0;
-    }
-    for (size_t i = 0; i < cfgModuleCount; ++i) {
-        snprintf(topicCfgBlocks[i], sizeof(topicCfgBlocks[i]),
-                 "%s/%s/cfg/%s", cfgData.baseTopic, deviceId, cfgModules[i]);
     }
 }
 
@@ -298,8 +424,13 @@ bool MQTTModule::publishConfigModuleAt(size_t idx, bool retained)
     if (idx >= cfgModuleCount) return false;
     if (!cfgModules[idx] || cfgModules[idx][0] == '\0') return false;
 
+    char moduleTopic[Limits::Mqtt::Buffers::DynamicTopic] = {0};
+    if (!buildCfgTopic_(cfgModules[idx], moduleTopic, sizeof(moduleTopic))) {
+        return false;
+    }
+
     if (strcmp(cfgModules[idx], "time/scheduler") == 0) {
-        publishTimeSchedulerSlots(retained, topicCfgBlocks[idx]);
+        publishTimeSchedulerSlots(retained, moduleTopic);
         return true;
     }
 
@@ -311,15 +442,17 @@ bool MQTTModule::publishConfigModuleAt(size_t idx, bool retained)
         if (!writeErrorJson(stateCfgBuf, sizeof(stateCfgBuf), ErrorCode::CfgTruncated, "cfg")) {
             snprintf(stateCfgBuf, sizeof(stateCfgBuf), "{\"ok\":false}");
         }
-        if (!publish(topicCfgBlocks[idx], stateCfgBuf, 1, retained)) {
-            LOGW("cfg/%s publish failed (truncated payload)", cfgModules[idx]);
+        if (!publish(moduleTopic, stateCfgBuf, 1, retained)) {
+            if (lowHeapSinceMs_ != 0U) LOGD("cfg/%s publish deferred (truncated payload)", cfgModules[idx]);
+            else LOGW("cfg/%s publish failed (truncated payload)", cfgModules[idx]);
             return false;
         }
         return true;
     }
     if (!any) return false;
-    if (!publish(topicCfgBlocks[idx], stateCfgBuf, 1, retained)) {
-        LOGW("cfg/%s publish failed", cfgModules[idx]);
+    if (!publish(moduleTopic, stateCfgBuf, 1, retained)) {
+        if (lowHeapSinceMs_ != 0U) LOGD("cfg/%s publish deferred", cfgModules[idx]);
+        else LOGW("cfg/%s publish failed", cfgModules[idx]);
         return false;
     }
     return true;
@@ -353,9 +486,7 @@ bool MQTTModule::publishConfigModuleByName_(const char* module, bool retained)
     if (!cfgSvc || !cfgSvc->toJsonModule) return false;
 
     char moduleTopic[Limits::Mqtt::Buffers::DynamicTopic] = {0};
-    const int tw = snprintf(moduleTopic, sizeof(moduleTopic), "%s/%s/cfg/%s", cfgData.baseTopic, deviceId, module);
-    if (!(tw > 0 && (size_t)tw < sizeof(moduleTopic))) {
-        LOGW("cfg publish: topic truncated for module=%s", module);
+    if (!buildCfgTopic_(module, moduleTopic, sizeof(moduleTopic))) {
         return false;
     }
 
@@ -372,7 +503,8 @@ bool MQTTModule::publishConfigModuleByName_(const char* module, bool retained)
             snprintf(stateCfgBuf, sizeof(stateCfgBuf), "{\"ok\":false}");
         }
         if (!publish(moduleTopic, stateCfgBuf, 1, retained)) {
-            LOGW("cfg/%s publish failed (truncated payload)", module);
+            if (lowHeapSinceMs_ != 0U) LOGD("cfg/%s publish deferred (truncated payload)", module);
+            else LOGW("cfg/%s publish failed (truncated payload)", module);
             return false;
         }
         return true;
@@ -380,7 +512,19 @@ bool MQTTModule::publishConfigModuleByName_(const char* module, bool retained)
     if (!any) return false;
 
     if (!publish(moduleTopic, stateCfgBuf, 1, retained)) {
-        LOGW("cfg/%s publish failed", module);
+        if (lowHeapSinceMs_ != 0U) LOGD("cfg/%s publish deferred", module);
+        else LOGW("cfg/%s publish failed", module);
+        return false;
+    }
+    return true;
+}
+
+bool MQTTModule::buildCfgTopic_(const char* module, char* out, size_t outLen) const
+{
+    if (!module || module[0] == '\0' || !out || outLen == 0) return false;
+    const int tw = snprintf(out, outLen, "%s/%s/cfg/%s", cfgData.baseTopic, deviceId, module);
+    if (!(tw > 0 && (size_t)tw < outLen)) {
+        LOGW("cfg publish: topic truncated for module=%s", module);
         return false;
     }
     return true;
@@ -392,7 +536,8 @@ void MQTTModule::publishTimeSchedulerSlots(bool retained, const char* rootTopic)
 
     // Root topic stays small and indicates that details are split by slot.
     if (!publish(rootTopic, "{\"mode\":\"per_slot\",\"slots\":16}", 1, retained)) {
-        LOGW("cfg/time/scheduler root publish failed");
+        if (lowHeapSinceMs_ != 0U) LOGD("cfg/time/scheduler root publish deferred (mqtt pressure)");
+        else LOGW("cfg/time/scheduler root publish failed");
     }
 
     if (!timeSchedSvc || !timeSchedSvc->getSlot) {
@@ -410,7 +555,7 @@ void MQTTModule::publishTimeSchedulerSlots(bool retained, const char* rootTopic)
                      "{\"slot\":%u,\"used\":false}",
                      (unsigned)slot);
             if (!publish(slotTopic, stateCfgBuf, 1, retained)) {
-                LOGW("cfg/time/scheduler slot%u publish failed (unused)", (unsigned)slot);
+                LOGD("cfg/time/scheduler slot%u publish deferred (unused)", (unsigned)slot);
             }
             continue;
         }
@@ -437,7 +582,8 @@ void MQTTModule::publishTimeSchedulerSlots(bool retained, const char* rootTopic)
                  (unsigned)def.endMinute,
                  (unsigned long long)def.endEpochSec);
         if (!publish(slotTopic, stateCfgBuf, 1, retained)) {
-            LOGW("cfg/time/scheduler slot%u publish failed", (unsigned)slot);
+            if (lowHeapSinceMs_ != 0U) LOGD("cfg/time/scheduler slot%u publish deferred", (unsigned)slot);
+            else LOGW("cfg/time/scheduler slot%u publish failed", (unsigned)slot);
         }
     }
 }
@@ -446,12 +592,69 @@ bool MQTTModule::publish(const char* topic, const char* payload, int qos, bool r
 {
     if (!topic || !payload) return false;
     if (state != MQTTState::Connected) return false;
-    const uint16_t packetId = client.publish(topic, qos, retain, payload);
-    if (packetId == 0U) {
+    if (!client_) return false;
+
+    constexpr uint32_t kMinFreeHeapForPublish = 8192U;
+    constexpr uint32_t kMinLargestBlockForPublish = 4096U;
+    const uint32_t freeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    const uint32_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    if (freeHeap < kMinFreeHeapForPublish || largest < kMinLargestBlockForPublish) {
+        const uint32_t now = millis();
+        if (lowHeapSinceMs_ == 0U) lowHeapSinceMs_ = now;
+        const uint32_t lowForMs = now - lowHeapSinceMs_;
+        if (lowForMs >= 10000U) {
+            if ((now - lastLowHeapWarnMs_) >= 10000U) {
+                lastLowHeapWarnMs_ = now;
+                LOGW("skip mqtt publish (low heap sustained %lums free=%lu largest=%lu need_free=%lu need_largest=%lu topic=%s)",
+                     (unsigned long)lowForMs,
+                     (unsigned long)freeHeap,
+                     (unsigned long)largest,
+                     (unsigned long)kMinFreeHeapForPublish,
+                     (unsigned long)kMinLargestBlockForPublish,
+                     topic);
+            }
+        } else {
+            if ((now - lastLowHeapWarnMs_) >= 5000U) {
+                lastLowHeapWarnMs_ = now;
+                LOGD("skip mqtt publish (transient low heap free=%lu largest=%lu topic=%s)",
+                     (unsigned long)freeHeap,
+                     (unsigned long)largest,
+                     topic);
+            }
+        }
+        return false;
+    }
+    lowHeapSinceMs_ = 0U;
+
+    // Guard against QoS outbox buildup (retained cfg/* bursts, link hiccups),
+    // which can fragment heap and starve other modules.
+    if (qos > 0) {
+        constexpr int kMaxOutboxBytes = 12 * 1024;
+        const int outboxBytes = esp_mqtt_client_get_outbox_size(client_);
+        if (outboxBytes >= kMaxOutboxBytes) {
+            const uint32_t now = millis();
+            if ((now - lastOutboxWarnMs_) >= 2000U) {
+                lastOutboxWarnMs_ = now;
+                LOGW("skip qos%d publish (outbox=%dB limit=%dB topic=%s)",
+                     qos, outboxBytes, kMaxOutboxBytes, topic);
+            }
+            return false;
+        }
+    }
+
+    const int packetId = esp_mqtt_client_publish(client_, topic, payload, 0, qos, retain ? 1 : 0);
+    if (packetId < 0) {
         LOGW("mqtt publish rejected topic=%s qos=%d retain=%d", topic, qos, retain ? 1 : 0);
         return false;
     }
-    LOGI("MQTT TX t=%s r=%d %d %s", topic, retain ? 1 : 0, (unsigned)packetId, payload);
+    if (qos > 0) {
+        const size_t payloadLen = strlen(payload);
+        LOGD("MQTT TX ok id=%d qos=%d retain=%d len=%u",
+             packetId,
+             qos,
+             retain ? 1 : 0,
+             (unsigned)payloadLen);
+    }
     return true;
 }
 
@@ -760,14 +963,10 @@ void MQTTModule::init(ConfigStore& cfg, ServiceRegistry& services) {
 
     makeDeviceId(deviceId, sizeof(deviceId));
     buildTopics();
+    clientConfigDirty_ = true;
+    suppressDisconnectEvent_ = false;
 
     rxQ = xQueueCreate(Limits::Mqtt::Capacity::RxQueueLen, sizeof(RxMsg));
-
-    client.onConnect([this](bool sp){ this->onConnect(sp); });
-    client.onDisconnect([this](AsyncMqttClientDisconnectReason r){ this->onDisconnect(r); });
-    client.onMessage([this](char* t, char* p, AsyncMqttClientMessageProperties pr, size_t l, size_t i, size_t tot){
-        this->onMessage(t, p, pr, l, i, tot);
-    });
 
     refreshConfigModules();
 
@@ -787,7 +986,7 @@ void MQTTModule::init(ConfigStore& cfg, ServiceRegistry& services) {
 void MQTTModule::loop() {
     if (!cfgData.enabled) {
         if (state != MQTTState::Disabled) {
-            client.disconnect();
+            stopClient_(true);
             setState(MQTTState::Disabled);
         }
         vTaskDelay(pdMS_TO_TICKS(Limits::Mqtt::Timing::DisabledDelayMs));
@@ -804,7 +1003,7 @@ void MQTTModule::loop() {
     case MQTTState::Connecting:
         if (millis() - stateTs > Limits::Mqtt::Timing::ConnectTimeoutMs) {
             LOGW("Connect timeout");
-            client.disconnect();
+            stopClient_(true);
             setState(MQTTState::ErrorWait);
         }
         break;
@@ -951,7 +1150,7 @@ void MQTTModule::onEvent(const Event& e)
             if (state != MQTTState::Connected) setState(MQTTState::WaitingNetwork);
         } else {
             LOGI("DataStore networkReady=false -> disconnect and wait");
-            client.disconnect();
+            stopClient_(true);
             setState(MQTTState::WaitingNetwork);
         }
         return;
@@ -976,7 +1175,8 @@ void MQTTModule::onEvent(const Event& e)
 
         if (isMqttConnKey(key)) {
             LOGI("MQTT config changed (%s) -> reconnect", key);
-            client.disconnect();
+            clientConfigDirty_ = true;
+            stopClient_(true);
             _netReadyTs = millis();
             setState(MQTTState::WaitingNetwork);
         }

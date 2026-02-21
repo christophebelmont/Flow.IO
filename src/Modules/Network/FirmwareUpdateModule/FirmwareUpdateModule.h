@@ -58,6 +58,7 @@ private:
     struct ConfigData {
         char updateHost[64] = "";
         char flowioPath[64] = "/build/FlowIO/firmware.bin";
+        char supervisorPath[64] = "/build/Supervisor/firmware.bin";
         char nextionPath[64] = "/build/Nextion.tft";
     } cfgData_{};
 
@@ -68,6 +69,10 @@ private:
     ConfigVariable<char, 2> flowioPathVar_{
         NVS_KEY("up_flow_path"), "flowio_path", "fwupdate",
         ConfigType::CharArray, cfgData_.flowioPath, ConfigPersistence::Persistent, sizeof(cfgData_.flowioPath)
+    };
+    ConfigVariable<char, 2> supervisorPathVar_{
+        NVS_KEY("up_sup_path"), "supervisor_path", "fwupdate",
+        ConfigType::CharArray, cfgData_.supervisorPath, ConfigPersistence::Persistent, sizeof(cfgData_.supervisorPath)
     };
     ConfigVariable<char, 2> nextionPathVar_{
         NVS_KEY("up_nx_path"), "nextion_path", "fwupdate",
@@ -98,12 +103,14 @@ private:
     static bool svcSetConfig_(void* ctx,
                               const char* updateHost,
                               const char* flowioPath,
+                              const char* supervisorPath,
                               const char* nextionPath,
                               char* errOut,
                               size_t errOutLen);
 
     static bool cmdStatus_(void* userCtx, const CommandRequest& req, char* reply, size_t replyLen);
     static bool cmdFlowIo_(void* userCtx, const CommandRequest& req, char* reply, size_t replyLen);
+    static bool cmdSupervisor_(void* userCtx, const CommandRequest& req, char* reply, size_t replyLen);
     static bool cmdNextion_(void* userCtx, const CommandRequest& req, char* reply, size_t replyLen);
 
     bool startUpdate_(FirmwareUpdateTarget target, const char* url, char* errOut, size_t errOutLen);
@@ -111,11 +118,13 @@ private:
     bool configJson_(char* out, size_t outLen) const;
     bool setConfig_(const char* updateHost,
                     const char* flowioPath,
+                    const char* supervisorPath,
                     const char* nextionPath,
                     char* errOut,
                     size_t errOutLen);
     bool runJob_(const UpdateJob& job);
     bool runFlowIoUpdate_(const char* url, char* errOut, size_t errOutLen);
+    bool runSupervisorUpdate_(const char* url, char* errOut, size_t errOutLen);
     bool runNextionUpdate_(const char* url, char* errOut, size_t errOutLen);
     bool resolveUrl_(FirmwareUpdateTarget target,
                      const char* explicitUrl,

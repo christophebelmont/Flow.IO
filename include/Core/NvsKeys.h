@@ -165,6 +165,24 @@ constexpr char IO_TREN[] = "io_tren"; // IO module persisted key for field `io_t
 constexpr char IO_TRMS[] = "io_trms"; // IO module persisted key for field `io_trms`.
 }  // namespace Io
 
+namespace I2cCfg {
+constexpr char ClientEnabled[] = "ic_cli_en"; // I2C cfg client enabled.
+constexpr char ClientUseIoBus[] = "ic_cli_iob"; // I2C cfg client uses IO I2C pin mapping.
+constexpr char ClientBus[] = "ic_cli_bus"; // I2C cfg client bus index (0/1).
+constexpr char ClientSda[] = "ic_cli_sda"; // I2C cfg client SDA pin.
+constexpr char ClientScl[] = "ic_cli_scl"; // I2C cfg client SCL pin.
+constexpr char ClientFreq[] = "ic_cli_frq"; // I2C cfg client bus frequency.
+constexpr char ClientAddr[] = "ic_cli_adr"; // I2C cfg client target slave address.
+
+constexpr char ServerEnabled[] = "ic_srv_en"; // I2C cfg server enabled.
+constexpr char ServerUseIoBus[] = "ic_srv_iob"; // I2C cfg server uses IO I2C pin mapping.
+constexpr char ServerBus[] = "ic_srv_bus"; // I2C cfg server bus index (0/1).
+constexpr char ServerSda[] = "ic_srv_sda"; // I2C cfg server SDA pin.
+constexpr char ServerScl[] = "ic_srv_scl"; // I2C cfg server SCL pin.
+constexpr char ServerFreq[] = "ic_srv_frq"; // I2C cfg server bus frequency.
+constexpr char ServerAddr[] = "ic_srv_adr"; // I2C cfg server own slave address.
+}  // namespace I2cCfg
+
 namespace PoolLogic {
 constexpr char Enabled[] = "pl_en"; // Pool logic module persisted key for field `pl_en`.
 constexpr char AutoMode[] = "pl_auto"; // Pool logic module persisted key for field `pl_auto`.

@@ -8,6 +8,7 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
+#include <Update.h>
 #include <string.h>
 
 #include "Core/ErrorCodes.h"
@@ -77,6 +78,7 @@ const char* FirmwareUpdateModule::targetStr_(FirmwareUpdateTarget t)
     switch (t) {
         case FirmwareUpdateTarget::FlowIO: return "flowio";
         case FirmwareUpdateTarget::Nextion: return "nextion";
+        case FirmwareUpdateTarget::Supervisor: return "supervisor";
         default: return "unknown";
     }
 }
@@ -143,7 +145,20 @@ bool FirmwareUpdateModule::resolveUrl_(FirmwareUpdateTarget target,
         return false;
     }
 
-    const char* path = (target == FirmwareUpdateTarget::FlowIO) ? cfgData_.flowioPath : cfgData_.nextionPath;
+    const char* path = nullptr;
+    switch (target) {
+        case FirmwareUpdateTarget::FlowIO:
+            path = cfgData_.flowioPath;
+            break;
+        case FirmwareUpdateTarget::Supervisor:
+            path = cfgData_.supervisorPath;
+            break;
+        case FirmwareUpdateTarget::Nextion:
+            path = cfgData_.nextionPath;
+            break;
+        default:
+            break;
+    }
     if (!path || path[0] == '\0') {
         writeSimpleError_(errOut, errOutLen, "path empty");
         return false;
@@ -226,13 +241,14 @@ bool FirmwareUpdateModule::svcConfigJson_(void* ctx, char* out, size_t outLen)
 bool FirmwareUpdateModule::svcSetConfig_(void* ctx,
                                          const char* updateHost,
                                          const char* flowioPath,
+                                         const char* supervisorPath,
                                          const char* nextionPath,
                                          char* errOut,
                                          size_t errOutLen)
 {
     FirmwareUpdateModule* self = static_cast<FirmwareUpdateModule*>(ctx);
     if (!self) return false;
-    return self->setConfig_(updateHost, flowioPath, nextionPath, errOut, errOutLen);
+    return self->setConfig_(updateHost, flowioPath, supervisorPath, nextionPath, errOut, errOutLen);
 }
 
 bool FirmwareUpdateModule::statusJson_(char* out, size_t outLen)
@@ -270,25 +286,31 @@ bool FirmwareUpdateModule::configJson_(char* out, size_t outLen) const
 
     char host[sizeof(cfgData_.updateHost)] = {0};
     char flowPath[sizeof(cfgData_.flowioPath)] = {0};
+    char supPath[sizeof(cfgData_.supervisorPath)] = {0};
     char nxPath[sizeof(cfgData_.nextionPath)] = {0};
     snprintf(host, sizeof(host), "%s", cfgData_.updateHost);
     snprintf(flowPath, sizeof(flowPath), "%s", cfgData_.flowioPath);
+    snprintf(supPath, sizeof(supPath), "%s", cfgData_.supervisorPath);
     snprintf(nxPath, sizeof(nxPath), "%s", cfgData_.nextionPath);
     sanitizeJsonString_(host);
     sanitizeJsonString_(flowPath);
+    sanitizeJsonString_(supPath);
     sanitizeJsonString_(nxPath);
 
     const int n = snprintf(out,
                            outLen,
-                           "{\"ok\":true,\"update_host\":\"%s\",\"flowio_path\":\"%s\",\"nextion_path\":\"%s\"}",
+                           "{\"ok\":true,\"update_host\":\"%s\",\"flowio_path\":\"%s\","
+                           "\"supervisor_path\":\"%s\",\"nextion_path\":\"%s\"}",
                            host,
                            flowPath,
+                           supPath,
                            nxPath);
     return n > 0 && (size_t)n < outLen;
 }
 
 bool FirmwareUpdateModule::setConfig_(const char* updateHost,
                                       const char* flowioPath,
+                                      const char* supervisorPath,
                                       const char* nextionPath,
                                       char* errOut,
                                       size_t errOutLen)
@@ -318,6 +340,12 @@ bool FirmwareUpdateModule::setConfig_(const char* updateHost,
     if (flowioPath) {
         if (!cfgStore_->set(flowioPathVar_, flowioPath)) {
             writeSimpleError_(errOut, errOutLen, "set flowio_path failed");
+            return false;
+        }
+    }
+    if (supervisorPath) {
+        if (!cfgStore_->set(supervisorPathVar_, supervisorPath)) {
+            writeSimpleError_(errOut, errOutLen, "set supervisor_path failed");
             return false;
         }
     }
@@ -430,6 +458,116 @@ bool FirmwareUpdateModule::runFlowIoUpdate_(const char* url, char* errOut, size_
     return true;
 }
 
+bool FirmwareUpdateModule::runSupervisorUpdate_(const char* url, char* errOut, size_t errOutLen)
+{
+    setStatus_(UpdateState::Downloading, FirmwareUpdateTarget::Supervisor, 0, "downloading");
+
+    HTTPClient http;
+    http.setReuse(false);
+    http.setConnectTimeout(15000);
+    http.setTimeout(60000);
+    if (!http.begin(url)) {
+        writeSimpleError_(errOut, errOutLen, "http begin failed");
+        return false;
+    }
+
+    const int code = http.GET();
+    const int32_t contentLength = http.getSize();
+    if (code != HTTP_CODE_OK) {
+        char msg[96] = {0};
+        snprintf(msg, sizeof(msg), "http %d: %s", code, http.errorToString(code).c_str());
+        writeSimpleError_(errOut, errOutLen, msg);
+        http.end();
+        return false;
+    }
+
+    setStatus_(UpdateState::Flashing, FirmwareUpdateTarget::Supervisor, 0, "flashing");
+    portENTER_CRITICAL(&lock_);
+    activeTotalBytes_ = (contentLength > 0) ? (uint32_t)contentLength : 0U;
+    activeSentBytes_ = 0;
+    portEXIT_CRITICAL(&lock_);
+
+    attachWebInterfaceSvcIfNeeded_();
+    if (webInterfaceSvc_ && webInterfaceSvc_->setPaused) {
+        webInterfaceSvc_->setPaused(webInterfaceSvc_->ctx, true);
+    }
+
+    char failMsg[128] = {0};
+    const size_t beginSize = (contentLength > 0) ? (size_t)contentLength : (size_t)UPDATE_SIZE_UNKNOWN;
+    if (!Update.begin(beginSize, U_FLASH)) {
+        snprintf(failMsg, sizeof(failMsg), "ota begin failed (%u)", (unsigned)Update.getError());
+    } else {
+        WiFiClient* stream = http.getStreamPtr();
+        int32_t remaining = contentLength;
+        uint8_t buf[1024];
+        uint32_t lastReadMs = millis();
+
+        while (http.connected() && (contentLength <= 0 || remaining > 0)) {
+            const size_t avail = stream ? stream->available() : 0;
+            if (avail == 0U) {
+                if (contentLength <= 0 && stream && !stream->connected()) {
+                    break;
+                }
+                if ((millis() - lastReadMs) > 15000U) {
+                    snprintf(failMsg, sizeof(failMsg), "ota stream timeout");
+                    break;
+                }
+                delay(1);
+                continue;
+            }
+
+            const size_t toRead = (avail > sizeof(buf)) ? sizeof(buf) : avail;
+            const int rd = stream->readBytes((char*)buf, toRead);
+            if (rd <= 0) {
+                delay(1);
+                continue;
+            }
+            lastReadMs = millis();
+
+            const size_t wr = Update.write(buf, (size_t)rd);
+            if (wr != (size_t)rd) {
+                snprintf(failMsg, sizeof(failMsg), "ota write failed (%u)", (unsigned)Update.getError());
+                break;
+            }
+
+            onProgressChunk_((uint32_t)wr);
+
+            if (contentLength > 0) {
+                remaining -= rd;
+                if (remaining <= 0) {
+                    break;
+                }
+            }
+        }
+
+        if (failMsg[0] == '\0' && contentLength > 0 && remaining > 0) {
+            snprintf(failMsg, sizeof(failMsg), "incomplete download");
+        }
+        if (failMsg[0] == '\0' && !Update.end()) {
+            snprintf(failMsg, sizeof(failMsg), "ota end failed (%u)", (unsigned)Update.getError());
+        }
+        if (failMsg[0] == '\0' && !Update.isFinished()) {
+            snprintf(failMsg, sizeof(failMsg), "ota not finished");
+        }
+    }
+
+    if (webInterfaceSvc_ && webInterfaceSvc_->setPaused) {
+        webInterfaceSvc_->setPaused(webInterfaceSvc_->ctx, false);
+    }
+
+    http.end();
+
+    if (failMsg[0] != '\0') {
+        writeSimpleError_(errOut, errOutLen, failMsg);
+        return false;
+    }
+
+    setStatus_(UpdateState::Done, FirmwareUpdateTarget::Supervisor, 100, "supervisor update complete; rebooting");
+    delay(700);
+    ESP.restart();
+    return true;
+}
+
 bool FirmwareUpdateModule::runNextionUpdate_(const char* url, char* errOut, size_t errOutLen)
 {
     setStatus_(UpdateState::Downloading, FirmwareUpdateTarget::Nextion, 0, "downloading");
@@ -511,10 +649,20 @@ bool FirmwareUpdateModule::runJob_(const UpdateJob& job)
 
     char err[128] = {0};
     bool ok = false;
-    if (job.target == FirmwareUpdateTarget::FlowIO) {
-        ok = runFlowIoUpdate_(job.url, err, sizeof(err));
-    } else {
-        ok = runNextionUpdate_(job.url, err, sizeof(err));
+    switch (job.target) {
+        case FirmwareUpdateTarget::FlowIO:
+            ok = runFlowIoUpdate_(job.url, err, sizeof(err));
+            break;
+        case FirmwareUpdateTarget::Supervisor:
+            ok = runSupervisorUpdate_(job.url, err, sizeof(err));
+            break;
+        case FirmwareUpdateTarget::Nextion:
+            ok = runNextionUpdate_(job.url, err, sizeof(err));
+            break;
+        default:
+            snprintf(err, sizeof(err), "unsupported target");
+            ok = false;
+            break;
     }
 
     if (!ok) {
@@ -559,6 +707,25 @@ bool FirmwareUpdateModule::cmdFlowIo_(void* userCtx, const CommandRequest& req, 
     return true;
 }
 
+bool FirmwareUpdateModule::cmdSupervisor_(void* userCtx, const CommandRequest& req, char* reply, size_t replyLen)
+{
+    FirmwareUpdateModule* self = static_cast<FirmwareUpdateModule*>(userCtx);
+    if (!self) return false;
+
+    char url[kUrlLen] = {0};
+    const char* explicitUrl = self->parseUrlArg_(req, url, sizeof(url)) ? url : nullptr;
+    char err[120] = {0};
+    if (!self->startUpdate_(FirmwareUpdateTarget::Supervisor, explicitUrl, err, sizeof(err))) {
+        if (!writeErrorJson(reply, replyLen, ErrorCode::Failed, "fw.update.supervisor")) {
+            snprintf(reply, replyLen, "{\"ok\":false}");
+        }
+        return false;
+    }
+
+    snprintf(reply, replyLen, "{\"ok\":true,\"queued\":true,\"target\":\"supervisor\"}");
+    return true;
+}
+
 bool FirmwareUpdateModule::cmdNextion_(void* userCtx, const CommandRequest& req, char* reply, size_t replyLen)
 {
     FirmwareUpdateModule* self = static_cast<FirmwareUpdateModule*>(userCtx);
@@ -589,6 +756,7 @@ void FirmwareUpdateModule::init(ConfigStore& cfg, ServiceRegistry& services)
 
     cfg.registerVar(updateHostVar_);
     cfg.registerVar(flowioPathVar_);
+    cfg.registerVar(supervisorPathVar_);
     cfg.registerVar(nextionPathVar_);
 
     static FirmwareUpdateService svc{
@@ -604,6 +772,7 @@ void FirmwareUpdateModule::init(ConfigStore& cfg, ServiceRegistry& services)
     if (cmdSvc_ && cmdSvc_->registerHandler) {
         cmdSvc_->registerHandler(cmdSvc_->ctx, "fw.update.status", &FirmwareUpdateModule::cmdStatus_, this);
         cmdSvc_->registerHandler(cmdSvc_->ctx, "fw.update.flowio", &FirmwareUpdateModule::cmdFlowIo_, this);
+        cmdSvc_->registerHandler(cmdSvc_->ctx, "fw.update.supervisor", &FirmwareUpdateModule::cmdSupervisor_, this);
         cmdSvc_->registerHandler(cmdSvc_->ctx, "fw.update.nextion", &FirmwareUpdateModule::cmdNextion_, this);
     }
 

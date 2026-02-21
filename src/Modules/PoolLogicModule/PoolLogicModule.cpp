@@ -79,61 +79,124 @@ static void writeCmdError_(char* reply, size_t replyLen, const char* where, Erro
 void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
 {
     constexpr uint8_t kCfgModuleId = (uint8_t)ConfigModuleId::PoolLogic;
-    constexpr uint16_t kCfgBranchId = (uint16_t)ConfigBranchId::PoolLogic;
+    constexpr uint16_t kCfgBranchMode = (uint16_t)ConfigBranchId::PoolLogicMode;
+    constexpr uint16_t kCfgBranchFiltration = (uint16_t)ConfigBranchId::PoolLogicFiltration;
+    constexpr uint16_t kCfgBranchSensors = (uint16_t)ConfigBranchId::PoolLogicSensors;
+    constexpr uint16_t kCfgBranchPid = (uint16_t)ConfigBranchId::PoolLogicPid;
+    constexpr uint16_t kCfgBranchDelay = (uint16_t)ConfigBranchId::PoolLogicDelay;
+    constexpr uint16_t kCfgBranchDevice = (uint16_t)ConfigBranchId::PoolLogicDevice;
+    static constexpr const char* kCfgModuleMode = "poollogic/mode";
+    static constexpr const char* kCfgModuleFiltration = "poollogic/filtration";
+    static constexpr const char* kCfgModuleSensors = "poollogic/sensors";
+    static constexpr const char* kCfgModulePid = "poollogic/pid";
+    static constexpr const char* kCfgModuleDelay = "poollogic/delay";
+    static constexpr const char* kCfgModuleDevice = "poollogic/device";
     cfgStore_ = &cfg;
 
-    cfg.registerVar(enabledVar_, kCfgModuleId, kCfgBranchId);
+    enabledVar_.moduleName = kCfgModuleMode;
+    autoModeVar_.moduleName = kCfgModuleMode;
+    winterModeVar_.moduleName = kCfgModuleMode;
+    phAutoModeVar_.moduleName = kCfgModuleMode;
+    orpAutoModeVar_.moduleName = kCfgModuleMode;
+    electrolyseModeVar_.moduleName = kCfgModuleMode;
+    electroRunModeVar_.moduleName = kCfgModuleMode;
 
-    cfg.registerVar(autoModeVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(winterModeVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(phAutoModeVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(orpAutoModeVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(electrolyseModeVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(electroRunModeVar_, kCfgModuleId, kCfgBranchId);
+    tempLowVar_.moduleName = kCfgModuleFiltration;
+    tempSetpointVar_.moduleName = kCfgModuleFiltration;
+    startMinVar_.moduleName = kCfgModuleFiltration;
+    stopMaxVar_.moduleName = kCfgModuleFiltration;
+    calcStartVar_.moduleName = kCfgModuleFiltration;
+    calcStopVar_.moduleName = kCfgModuleFiltration;
 
-    cfg.registerVar(tempLowVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(tempSetpointVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(startMinVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(stopMaxVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(calcStartVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(calcStopVar_, kCfgModuleId, kCfgBranchId);
+    phIdVar_.moduleName = kCfgModuleSensors;
+    orpIdVar_.moduleName = kCfgModuleSensors;
+    psiIdVar_.moduleName = kCfgModuleSensors;
+    waterTempIdVar_.moduleName = kCfgModuleSensors;
+    airTempIdVar_.moduleName = kCfgModuleSensors;
+    levelIdVar_.moduleName = kCfgModuleSensors;
 
-    cfg.registerVar(phIdVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(orpIdVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(psiIdVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(waterTempIdVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(airTempIdVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(levelIdVar_, kCfgModuleId, kCfgBranchId);
+    psiLowVar_.moduleName = kCfgModulePid;
+    psiHighVar_.moduleName = kCfgModulePid;
+    winterStartVar_.moduleName = kCfgModulePid;
+    freezeHoldVar_.moduleName = kCfgModulePid;
+    secureElectroVar_.moduleName = kCfgModulePid;
+    phSetpointVar_.moduleName = kCfgModulePid;
+    orpSetpointVar_.moduleName = kCfgModulePid;
+    phKpVar_.moduleName = kCfgModulePid;
+    phKiVar_.moduleName = kCfgModulePid;
+    phKdVar_.moduleName = kCfgModulePid;
+    orpKpVar_.moduleName = kCfgModulePid;
+    orpKiVar_.moduleName = kCfgModulePid;
+    orpKdVar_.moduleName = kCfgModulePid;
+    phWindowMsVar_.moduleName = kCfgModulePid;
+    orpWindowMsVar_.moduleName = kCfgModulePid;
+    pidMinOnMsVar_.moduleName = kCfgModulePid;
+    pidSampleMsVar_.moduleName = kCfgModulePid;
 
-    cfg.registerVar(psiLowVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(psiHighVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(winterStartVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(freezeHoldVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(secureElectroVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(phSetpointVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(orpSetpointVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(phKpVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(phKiVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(phKdVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(orpKpVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(orpKiVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(orpKdVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(phWindowMsVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(orpWindowMsVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(pidMinOnMsVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(pidSampleMsVar_, kCfgModuleId, kCfgBranchId);
+    psiDelayVar_.moduleName = kCfgModuleDelay;
+    delayPidsVar_.moduleName = kCfgModuleDelay;
+    delayElectroVar_.moduleName = kCfgModuleDelay;
+    robotDelayVar_.moduleName = kCfgModuleDelay;
+    robotDurationVar_.moduleName = kCfgModuleDelay;
+    fillingMinOnVar_.moduleName = kCfgModuleDelay;
 
-    cfg.registerVar(psiDelayVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(delayPidsVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(delayElectroVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(robotDelayVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(robotDurationVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(fillingMinOnVar_, kCfgModuleId, kCfgBranchId);
+    filtrationDeviceVar_.moduleName = kCfgModuleDevice;
+    swgDeviceVar_.moduleName = kCfgModuleDevice;
+    robotDeviceVar_.moduleName = kCfgModuleDevice;
+    fillingDeviceVar_.moduleName = kCfgModuleDevice;
 
-    cfg.registerVar(filtrationDeviceVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(swgDeviceVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(robotDeviceVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(fillingDeviceVar_, kCfgModuleId, kCfgBranchId);
+    cfg.registerVar(enabledVar_, kCfgModuleId, kCfgBranchMode);
+
+    cfg.registerVar(autoModeVar_, kCfgModuleId, kCfgBranchMode);
+    cfg.registerVar(winterModeVar_, kCfgModuleId, kCfgBranchMode);
+    cfg.registerVar(phAutoModeVar_, kCfgModuleId, kCfgBranchMode);
+    cfg.registerVar(orpAutoModeVar_, kCfgModuleId, kCfgBranchMode);
+    cfg.registerVar(electrolyseModeVar_, kCfgModuleId, kCfgBranchMode);
+    cfg.registerVar(electroRunModeVar_, kCfgModuleId, kCfgBranchMode);
+
+    cfg.registerVar(tempLowVar_, kCfgModuleId, kCfgBranchFiltration);
+    cfg.registerVar(tempSetpointVar_, kCfgModuleId, kCfgBranchFiltration);
+    cfg.registerVar(startMinVar_, kCfgModuleId, kCfgBranchFiltration);
+    cfg.registerVar(stopMaxVar_, kCfgModuleId, kCfgBranchFiltration);
+    cfg.registerVar(calcStartVar_, kCfgModuleId, kCfgBranchFiltration);
+    cfg.registerVar(calcStopVar_, kCfgModuleId, kCfgBranchFiltration);
+
+    cfg.registerVar(phIdVar_, kCfgModuleId, kCfgBranchSensors);
+    cfg.registerVar(orpIdVar_, kCfgModuleId, kCfgBranchSensors);
+    cfg.registerVar(psiIdVar_, kCfgModuleId, kCfgBranchSensors);
+    cfg.registerVar(waterTempIdVar_, kCfgModuleId, kCfgBranchSensors);
+    cfg.registerVar(airTempIdVar_, kCfgModuleId, kCfgBranchSensors);
+    cfg.registerVar(levelIdVar_, kCfgModuleId, kCfgBranchSensors);
+
+    cfg.registerVar(psiLowVar_, kCfgModuleId, kCfgBranchPid);
+    cfg.registerVar(psiHighVar_, kCfgModuleId, kCfgBranchPid);
+    cfg.registerVar(winterStartVar_, kCfgModuleId, kCfgBranchPid);
+    cfg.registerVar(freezeHoldVar_, kCfgModuleId, kCfgBranchPid);
+    cfg.registerVar(secureElectroVar_, kCfgModuleId, kCfgBranchPid);
+    cfg.registerVar(phSetpointVar_, kCfgModuleId, kCfgBranchPid);
+    cfg.registerVar(orpSetpointVar_, kCfgModuleId, kCfgBranchPid);
+    cfg.registerVar(phKpVar_, kCfgModuleId, kCfgBranchPid);
+    cfg.registerVar(phKiVar_, kCfgModuleId, kCfgBranchPid);
+    cfg.registerVar(phKdVar_, kCfgModuleId, kCfgBranchPid);
+    cfg.registerVar(orpKpVar_, kCfgModuleId, kCfgBranchPid);
+    cfg.registerVar(orpKiVar_, kCfgModuleId, kCfgBranchPid);
+    cfg.registerVar(orpKdVar_, kCfgModuleId, kCfgBranchPid);
+    cfg.registerVar(phWindowMsVar_, kCfgModuleId, kCfgBranchPid);
+    cfg.registerVar(orpWindowMsVar_, kCfgModuleId, kCfgBranchPid);
+    cfg.registerVar(pidMinOnMsVar_, kCfgModuleId, kCfgBranchPid);
+    cfg.registerVar(pidSampleMsVar_, kCfgModuleId, kCfgBranchPid);
+
+    cfg.registerVar(psiDelayVar_, kCfgModuleId, kCfgBranchDelay);
+    cfg.registerVar(delayPidsVar_, kCfgModuleId, kCfgBranchDelay);
+    cfg.registerVar(delayElectroVar_, kCfgModuleId, kCfgBranchDelay);
+    cfg.registerVar(robotDelayVar_, kCfgModuleId, kCfgBranchDelay);
+    cfg.registerVar(robotDurationVar_, kCfgModuleId, kCfgBranchDelay);
+    cfg.registerVar(fillingMinOnVar_, kCfgModuleId, kCfgBranchDelay);
+
+    cfg.registerVar(filtrationDeviceVar_, kCfgModuleId, kCfgBranchDevice);
+    cfg.registerVar(swgDeviceVar_, kCfgModuleId, kCfgBranchDevice);
+    cfg.registerVar(robotDeviceVar_, kCfgModuleId, kCfgBranchDevice);
+    cfg.registerVar(fillingDeviceVar_, kCfgModuleId, kCfgBranchDevice);
 
     logHub_ = services.get<LogHubService>("loghub");
     const EventBusService* ebSvc = services.get<EventBusService>("eventbus");
@@ -155,11 +218,11 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
             "poollogic",
             "pool_auto_mode",
             "Pool Auto-regulation",
-            "cfg/poollogic",
+            "cfg/poollogic/mode",
             "{% if value_json.auto_mode %}ON{% else %}OFF{% endif %}",
             MqttTopics::SuffixCfgSet,
-            "{\\\"poollogic\\\":{\\\"auto_mode\\\":true}}",
-            "{\\\"poollogic\\\":{\\\"auto_mode\\\":false}}",
+            "{\\\"poollogic/mode\\\":{\\\"auto_mode\\\":true}}",
+            "{\\\"poollogic/mode\\\":{\\\"auto_mode\\\":false}}",
             "mdi:calendar-clock",
             "config"
         };
@@ -167,11 +230,11 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
             "poollogic",
             "pool_winter_mode",
             "Winter Mode",
-            "cfg/poollogic",
+            "cfg/poollogic/mode",
             "{% if value_json.winter_mode %}ON{% else %}OFF{% endif %}",
             MqttTopics::SuffixCfgSet,
-            "{\\\"poollogic\\\":{\\\"winter_mode\\\":true}}",
-            "{\\\"poollogic\\\":{\\\"winter_mode\\\":false}}",
+            "{\\\"poollogic/mode\\\":{\\\"winter_mode\\\":true}}",
+            "{\\\"poollogic/mode\\\":{\\\"winter_mode\\\":false}}",
             "mdi:snowflake",
             "config"
         };
@@ -179,11 +242,11 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
             "poollogic",
             "pool_ph_auto_mode",
             "pH Auto-regulation",
-            "cfg/poollogic",
+            "cfg/poollogic/mode",
             "{% if value_json.ph_auto_mode %}ON{% else %}OFF{% endif %}",
             MqttTopics::SuffixCfgSet,
-            "{\\\"poollogic\\\":{\\\"ph_auto_mode\\\":true}}",
-            "{\\\"poollogic\\\":{\\\"ph_auto_mode\\\":false}}",
+            "{\\\"poollogic/mode\\\":{\\\"ph_auto_mode\\\":true}}",
+            "{\\\"poollogic/mode\\\":{\\\"ph_auto_mode\\\":false}}",
             "mdi:beaker-check-outline",
             "config"
         };
@@ -191,11 +254,11 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
             "poollogic",
             "pool_orp_auto_mode",
             "Orp Auto-regulation",
-            "cfg/poollogic",
+            "cfg/poollogic/mode",
             "{% if value_json.orp_auto_mode %}ON{% else %}OFF{% endif %}",
             MqttTopics::SuffixCfgSet,
-            "{\\\"poollogic\\\":{\\\"orp_auto_mode\\\":true}}",
-            "{\\\"poollogic\\\":{\\\"orp_auto_mode\\\":false}}",
+            "{\\\"poollogic/mode\\\":{\\\"orp_auto_mode\\\":true}}",
+            "{\\\"poollogic/mode\\\":{\\\"orp_auto_mode\\\":false}}",
             "mdi:water-check-outline",
             "config"
         };
@@ -209,7 +272,7 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
             "poollogic",
             "calculated_filtration_start",
             "Calculated Filtration Start",
-            "cfg/poollogic",
+            "cfg/poollogic/filtration",
             "{{ value_json.filtr_start_clc | int(0) }}",
             nullptr,
             "mdi:clock-start",
@@ -219,7 +282,7 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
             "poollogic",
             "calculated_filtration_stop",
             "Calculated Filtration Stop",
-            "cfg/poollogic",
+            "cfg/poollogic/filtration",
             "{{ value_json.filtr_stop_clc | int(0) }}",
             nullptr,
             "mdi:clock-end",
@@ -233,10 +296,10 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
             "poollogic",
             "delay_pids_min",
             "Delay PIDs",
-            "cfg/poollogic",
-            "{{ value_json.delay_pids_min | int(0) }}",
+            "cfg/poollogic/delay",
+            "{{ value_json.dly_pid_min | int(0) }}",
             MqttTopics::SuffixCfgSet,
-            "{\\\"poollogic\\\":{\\\"delay_pids_min\\\":{{ value | int(0) }}}}",
+            "{\\\"poollogic/delay\\\":{\\\"dly_pid_min\\\":{{ value | int(0) }}}}",
             0.0f,
             180.0f,
             1.0f,
@@ -249,10 +312,10 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
             "poollogic",
             "ph_setpoint",
             "pH Setpoint",
-            "cfg/poollogic",
+            "cfg/poollogic/pid",
             "{{ value_json.ph_setpoint | float(0) }}",
             MqttTopics::SuffixCfgSet,
-            "{\\\"poollogic\\\":{\\\"ph_setpoint\\\":{{ value | float(0) }}}}",
+            "{\\\"poollogic/pid\\\":{\\\"ph_setpoint\\\":{{ value | float(0) }}}}",
             6.0f,
             8.0f,
             0.01f,
@@ -265,10 +328,10 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
             "poollogic",
             "orp_setpoint",
             "Orp Setpoint",
-            "cfg/poollogic",
+            "cfg/poollogic/pid",
             "{{ value_json.orp_setpoint | float(0) }}",
             MqttTopics::SuffixCfgSet,
-            "{\\\"poollogic\\\":{\\\"orp_setpoint\\\":{{ value | float(0) }}}}",
+            "{\\\"poollogic/pid\\\":{\\\"orp_setpoint\\\":{{ value | float(0) }}}}",
             300.0f,
             900.0f,
             1.0f,
@@ -281,10 +344,10 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
             "poollogic",
             "ph_pid_window_min",
             "pH PID Window Size",
-            "cfg/poollogic",
+            "cfg/poollogic/pid",
             "{{ ((value_json.ph_window_ms | float(0)) / 60000) | round(0) | int(0) }}",
             MqttTopics::SuffixCfgSet,
-            "{\\\"poollogic\\\":{\\\"ph_window_ms\\\":{{ (value | float(0) * 60000) | round(0) | int(0) }}}}",
+            "{\\\"poollogic/pid\\\":{\\\"ph_window_ms\\\":{{ (value | float(0) * 60000) | round(0) | int(0) }}}}",
             1.0f,
             180.0f,
             1.0f,
@@ -297,10 +360,10 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
             "poollogic",
             "orp_pid_window_min",
             "Orp PID Window Size",
-            "cfg/poollogic",
+            "cfg/poollogic/pid",
             "{{ ((value_json.orp_window_ms | float(0)) / 60000) | round(0) | int(0) }}",
             MqttTopics::SuffixCfgSet,
-            "{\\\"poollogic\\\":{\\\"orp_window_ms\\\":{{ (value | float(0) * 60000) | round(0) | int(0) }}}}",
+            "{\\\"poollogic/pid\\\":{\\\"orp_window_ms\\\":{{ (value | float(0) * 60000) | round(0) | int(0) }}}}",
             1.0f,
             180.0f,
             1.0f,
@@ -313,10 +376,10 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
             "poollogic",
             "psi_low_threshold",
             "PSI Low Threshold",
-            "cfg/poollogic",
+            "cfg/poollogic/pid",
             "{{ value_json.psi_low_th | float(0) }}",
             MqttTopics::SuffixCfgSet,
-            "{\\\"poollogic\\\":{\\\"psi_low_th\\\":{{ value | float(0) }}}}",
+            "{\\\"poollogic/pid\\\":{\\\"psi_low_th\\\":{{ value | float(0) }}}}",
             0.0f,
             5.0f,
             0.01f,
@@ -329,10 +392,10 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
             "poollogic",
             "psi_high_threshold",
             "PSI High Threshold",
-            "cfg/poollogic",
+            "cfg/poollogic/pid",
             "{{ value_json.psi_high_th | float(0) }}",
             MqttTopics::SuffixCfgSet,
-            "{\\\"poollogic\\\":{\\\"psi_high_th\\\":{{ value | float(0) }}}}",
+            "{\\\"poollogic/pid\\\":{\\\"psi_high_th\\\":{{ value | float(0) }}}}",
             0.0f,
             5.0f,
             0.01f,

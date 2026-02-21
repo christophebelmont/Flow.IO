@@ -12,9 +12,11 @@
 /** @brief WiFi configuration values. */
 struct WifiConfig {
     bool enabled = true;
-    char ssid[32] = "";
-    char pass[64] = "";
-    char mdns[32] = "flowio";
+    // IEEE 802.11 SSID supports up to 32 bytes (+ '\0').
+    char ssid[33] = "";
+    // WPA/WPA2 supports 8..63 chars passphrase or 64-char hex PSK (+ '\0').
+    char pass[65] = "";
+    char mdns[33] = "flowio";
 };
 
 /**
@@ -28,6 +30,8 @@ public:
     const char* taskName() const override { return "wifi"; }
     /** @brief Pin network module on core 0. */
     BaseType_t taskCore() const override { return 0; }
+    /** @brief Give extra headroom to WiFi stack/callback activity. */
+    uint16_t taskStackSize() const override { return 4096; }
 
     /** @brief Depends on log hub and datastore. */
     uint8_t dependencyCount() const override { return 2; }
@@ -39,6 +43,8 @@ public:
 
     /** @brief Initialize WiFi config/services. */
     void init(ConfigStore& cfg, ServiceRegistry& services) override;
+    /** @brief Apply loaded persistent config. */
+    void onConfigLoaded(ConfigStore& cfg, ServiceRegistry& services) override;
     /** @brief WiFi task loop. */
     void loop() override;
 
@@ -60,6 +66,12 @@ private:
     DataStore* dataStore = nullptr;
     bool gotIpSent = false;
     bool mdnsStarted = false;
+    uint32_t connectAttempt_ = 0;
+    bool reconnectKickSent_ = false;
+    wl_status_t lastConnectStatus_ = WL_IDLE_STATUS;
+    uint8_t lastDisconnectReason_ = 0;
+    uint32_t lastConnectingLogMs_ = 0;
+    wifi_event_id_t wifiEventHandlerId_ = 0;
     uint32_t lastEmptySsidLogMs = 0;
     char mdnsApplied[sizeof(cfgData.mdns)] = {0};
     volatile bool scanRequested_ = false;
@@ -115,8 +127,14 @@ private:
     static bool svcRequestReconnect(void* ctx);
     static bool svcRequestScan(void* ctx, bool force);
     static bool svcScanStatusJson(void* ctx, char* out, size_t outLen);
+    static bool cmdDumpCfg_(void* userCtx, const CommandRequest& req, char* reply, size_t replyLen);
 
     void setState(WifiState s);
+    static void onWifiEventSys_(arduino_event_t* event);
+    static const char* stateName_(WifiState s);
+    static const char* wlStatusName_(wl_status_t st);
+    void logConfigSummary_() const;
+    bool startConnectFallback_();
     void startConnect();
     void stopMdns_();
     void syncMdns_();

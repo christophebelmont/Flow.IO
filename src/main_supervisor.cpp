@@ -25,6 +25,7 @@
 #include "Modules/Network/WifiModule/WifiModule.h"
 #include "Modules/Network/WifiProvisioningModule/WifiProvisioningModule.h"
 #include "Modules/Network/TimeModule/TimeModule.h"
+#include "Modules/Network/I2CCfgClientModule/I2CCfgClientModule.h"
 #include "Modules/Network/WebInterfaceModule/WebInterfaceModule.h"
 #include "Modules/Network/FirmwareUpdateModule/FirmwareUpdateModule.h"
 #include "Modules/System/SystemModule/SystemModule.h"
@@ -57,6 +58,7 @@ static LogAlarmSinkModule logAlarmSinkModule;
 static WifiModule wifiModule;
 static WifiProvisioningModule wifiProvisioningModule;
 static TimeModule timeModule;
+static I2CCfgClientModule i2cCfgClientModule;
 static WebInterfaceModule webInterfaceModule;
 static FirmwareUpdateModule firmwareUpdateModule;
 static SystemModule systemModule;
@@ -126,6 +128,7 @@ void setup()
     moduleManager.add(&wifiModule);
     moduleManager.add(&wifiProvisioningModule);
     moduleManager.add(&timeModule);
+    moduleManager.add(&i2cCfgClientModule);
     moduleManager.add(&webInterfaceModule);
     moduleManager.add(&firmwareUpdateModule);
     moduleManager.add(&systemModule);
