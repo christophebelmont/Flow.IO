@@ -31,7 +31,8 @@ enum Op : uint8_t {
     OpGetRuntimeStatusChunk = 0x23,
     OpPatchBegin = 0x30,
     OpPatchWrite = 0x31,
-    OpPatchCommit = 0x32
+    OpPatchCommit = 0x32,
+    OpSystemAction = 0x40
 };
 
 enum Status : uint8_t {

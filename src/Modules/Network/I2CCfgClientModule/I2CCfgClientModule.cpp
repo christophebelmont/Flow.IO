@@ -49,6 +49,7 @@ const char* opName(uint8_t op)
         case I2cCfgProtocol::OpPatchBegin: return "patch_begin";
         case I2cCfgProtocol::OpPatchWrite: return "patch_write";
         case I2cCfgProtocol::OpPatchCommit: return "patch_commit";
+        case I2cCfgProtocol::OpSystemAction: return "system_action";
         default: return "unknown";
     }
 }
@@ -83,7 +84,12 @@ void I2CCfgClientModule::init(ConfigStore& cfg, ServiceRegistry& services)
 
     logHub_ = services.get<LogHubService>("loghub");
     cfgSvc_ = services.get<ConfigStoreService>("config");
+    cmdSvc_ = services.get<CommandService>("cmd");
     (void)services.add("flowcfg", &svc_);
+    if (cmdSvc_ && cmdSvc_->registerHandler) {
+        (void)cmdSvc_->registerHandler(cmdSvc_->ctx, "flow.system.reboot", &I2CCfgClientModule::cmdFlowReboot_, this);
+        (void)cmdSvc_->registerHandler(cmdSvc_->ctx, "flow.system.factory_reset", &I2CCfgClientModule::cmdFlowFactoryReset_, this);
+    }
     LOGI("I2C cfg client config/service registered");
     (void)logHub_;
 }
@@ -772,6 +778,49 @@ bool I2CCfgClientModule::runtimeStatusJson_(char* out, size_t outLen)
         LOGW("runtimeStatus truncated bytes=%u", (unsigned)written);
     }
     return true;
+}
+
+bool I2CCfgClientModule::executeSystemActionJson_(uint8_t action, char* out, size_t outLen)
+{
+    if (!out || outLen == 0) return false;
+    if (!ensureReady_()) {
+        (void)writeErrorJson(out, outLen, ErrorCode::NotReady, "flow.system");
+        return false;
+    }
+
+    uint8_t status = 0;
+    uint8_t resp[96] = {0};
+    size_t respLen = 0;
+    const uint8_t req[1] = {action};
+    const bool ok = transact_(I2cCfgProtocol::OpSystemAction, req, sizeof(req), status, resp, sizeof(resp), respLen);
+    if (!ok || status != I2cCfgProtocol::StatusOk) {
+        (void)writeErrorJson(out, outLen, ErrorCode::Failed, "flow.system");
+        return false;
+    }
+
+    if (respLen == 0) {
+        (void)writeOkJson(out, outLen, "flow.system");
+        return true;
+    }
+
+    const size_t n = (respLen < (outLen - 1)) ? respLen : (outLen - 1);
+    memcpy(out, resp, n);
+    out[n] = '\0';
+    return true;
+}
+
+bool I2CCfgClientModule::cmdFlowReboot_(void* userCtx, const CommandRequest&, char* reply, size_t replyLen)
+{
+    I2CCfgClientModule* self = static_cast<I2CCfgClientModule*>(userCtx);
+    if (!self) return false;
+    return self->executeSystemActionJson_(1, reply, replyLen);
+}
+
+bool I2CCfgClientModule::cmdFlowFactoryReset_(void* userCtx, const CommandRequest&, char* reply, size_t replyLen)
+{
+    I2CCfgClientModule* self = static_cast<I2CCfgClientModule*>(userCtx);
+    if (!self) return false;
+    return self->executeSystemActionJson_(2, reply, replyLen);
 }
 
 bool I2CCfgClientModule::svcIsReady_(void* ctx)

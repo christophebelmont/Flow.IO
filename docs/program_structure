@@ -1,0 +1,85 @@
+flowchart TB
+  %% ===== Layer 0 : Hardware =====
+  subgraph L0[Socle Hardware (ESP32 + I/O)]
+    HW1[GPIO DO: Pump(32), Heater(25), Light(26), Aux1(13), Aux2(33), Aux3(27), Aux4(23), Aux5(12)]
+    HW2[GPIO DI: FlowSwitch(34)]
+    HW3[I2C: SDA(21) / SCL(22)]
+    HW4[1-Wire: BusA(19) / BusB(18)]
+    HW5[UART0 (USB/Serial) + UART2 RX(16)/TX(17)]
+    HW6[WiFi/Radio ESP32]
+    HW7[Flash NVS (Preferences)]
+  end
+
+  %% ===== Layer 1 : HAL / Drivers =====
+  subgraph L1[Drivers / HAL (bas niveau)]
+    D1[GpioDriver\n(pinMode/digitalWrite/...)]
+    D2[I2CBus\n(Wire.begin + mutex)]
+    D3[OneWireBus\n(DallasTemperature/OneWire)]
+    D4[ADS1115 Driver]
+    D5[PCF8574 Driver]
+    D6[DS18B20 Driver]
+    D7[Arduino WiFi + esp_wifi APIs]
+    D8[Serial (Log/HMI)]
+    D9[FreeRTOS Tasks/Queues/Semaphores]
+  end
+
+  %% ===== Layer 2 : Core runtime =====
+  subgraph L2[Core Runtime (infrastructure)]
+    C1[Module / ModulePassive\n(lifecycle)]
+    C2[ModuleManager\n(init topo + start)]
+    C3[ServiceRegistry\n(add/get)]
+    C4[ConfigStore\n(JSON<->NVS)]
+    C5[DataStore\n(keys + publish)]
+    C6[EventBus\n(events + payloads)]
+    C7[Logging Core\n(LogHub + sinks)]
+    C8[CommandRegistry\n(cmd -> handlers)]
+    C9[RuntimeSnapshotProvider\n(status/metrics)]
+  end
+
+  %% ===== Layer 3 : Modules (services) =====
+  subgraph L3[Modules (couches d’abstraction applicatives)]
+    MStores[Stores\n- ConfigStoreModule -> service "config"\n- DataStoreModule -> service "datastore"]
+    MLogs[Logs\n- LogHubModule -> "loghub", "logsinks"\n- LogSerialSinkModule\n- LogDispatcherModule\n- LogAlarmSinkModule]
+    MEB[EventBusModule -> service "eventbus"]
+    MCmd[CommandModule -> service "cmd"]
+    MAlarm[AlarmModule -> service "alarms"]
+    MWiFi[WifiModule -> service "wifi"]
+    MTime[TimeModule -> services "time" + "time.scheduler"]
+    MMqtt[MQTTModule -> service "mqtt"]
+    MHA[HAModule -> service "ha"]
+    MWeb[WebInterfaceModule -> service "webinterface"\n(Supervisor)]
+    MFW[FirmwareUpdateModule -> service "fwupdate"\n(Supervisor)]
+    MProv[WifiProvisioningModule -> service "network_access"\n(Supervisor)]
+    MIO[IOModule -> service "io"]
+    MPoolDev[PoolDeviceModule -> service "pooldev"]
+    MPoolLogic[PoolLogicModule]
+    MSys[SystemModule]
+    MSysMon[SystemMonitorModule]
+    MHMI[HMIModule -> service "hmi"]
+  end
+
+  %% ===== Layer 4 : Applications =====
+  subgraph L4[Applications (2 firmwares)]
+    AFlow[Flow.IO firmware\n(main_flowio.cpp)]
+    ASup[Supervisor firmware\n(main_supervisor.cpp)]
+  end
+
+  %% Wiring between layers
+  L0 --> L1 --> L2 --> L3 --> L4
+
+  %% Key service wiring (conceptual)
+  AFlow --> MWiFi
+  AFlow --> MTime
+  AFlow --> MMqtt
+  AFlow --> MHA
+  AFlow --> MIO
+  AFlow --> MPoolDev
+  AFlow --> MPoolLogic
+
+  ASup --> MWiFi
+  ASup --> MProv
+  ASup --> MWeb
+  ASup --> MFW
+  ASup --> MMqtt
+  ASup --> MTime
+  ASup --> MHA

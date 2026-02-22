@@ -19,10 +19,11 @@ class I2CCfgClientModule : public ModulePassive {
 public:
     const char* moduleId() const override { return "i2ccfg.client"; }
 
-    uint8_t dependencyCount() const override { return 2; }
+    uint8_t dependencyCount() const override { return 3; }
     const char* dependency(uint8_t i) const override {
         if (i == 0) return "loghub";
         if (i == 1) return "config";
+        if (i == 2) return "cmd";
         return nullptr;
     }
 
@@ -71,6 +72,7 @@ private:
 
     const LogHubService* logHub_ = nullptr;
     const ConfigStoreService* cfgSvc_ = nullptr;
+    const CommandService* cmdSvc_ = nullptr;
     I2cLink link_{};
     bool ready_ = false;
     uint8_t seq_ = 1;
@@ -93,6 +95,7 @@ private:
     bool getModuleJson_(const char* module, char* out, size_t outLen, bool* truncated);
     bool runtimeStatusJson_(char* out, size_t outLen);
     bool applyPatchJson_(const char* patch, char* out, size_t outLen);
+    bool executeSystemActionJson_(uint8_t action, char* out, size_t outLen);
     bool resolveIoPins_(int32_t& sdaOut, int32_t& sclOut) const;
     bool pingFlow_(uint8_t& statusOut);
 
@@ -110,4 +113,6 @@ private:
     static bool svcGetModuleJson_(void* ctx, const char* module, char* out, size_t outLen, bool* truncated);
     static bool svcRuntimeStatusJson_(void* ctx, char* out, size_t outLen);
     static bool svcApplyPatchJson_(void* ctx, const char* patch, char* out, size_t outLen);
+    static bool cmdFlowReboot_(void* userCtx, const CommandRequest&, char* reply, size_t replyLen);
+    static bool cmdFlowFactoryReset_(void* userCtx, const CommandRequest&, char* reply, size_t replyLen);
 };

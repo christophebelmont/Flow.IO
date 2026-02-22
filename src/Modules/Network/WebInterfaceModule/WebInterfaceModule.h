@@ -74,6 +74,7 @@ private:
     ConfigStore* cfgStore_ = nullptr;
     EventBus* eventBus_ = nullptr;
     bool started_ = false;
+    bool spiffsReady_ = false;
     volatile bool netReady_ = false;
     volatile bool uartPaused_ = false;
     const FirmwareUpdateService* fwUpdateSvc_ = nullptr;

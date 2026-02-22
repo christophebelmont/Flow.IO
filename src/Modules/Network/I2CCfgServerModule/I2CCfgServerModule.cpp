@@ -119,6 +119,7 @@ void I2CCfgServerModule::init(ConfigStore& cfg, ServiceRegistry& services)
 
     logHub_ = services.get<LogHubService>("loghub");
     cfgSvc_ = services.get<ConfigStoreService>("config");
+    cmdSvc_ = services.get<CommandService>("cmd");
     const DataStoreService* dsSvc = services.get<DataStoreService>("datastore");
     dataStore_ = dsSvc ? dsSvc->store : nullptr;
     cfgStore_ = &cfg;
@@ -170,6 +171,7 @@ void I2CCfgServerModule::startLink_()
     }
     link_.setSlaveCallbacks(onReceiveStatic_, onRequestStatic_, this);
     started_ = true;
+    ensureActionTask_();
     LOGI("I2C cfg server started app_role=server i2c_role=slave addr=0x%02X bus=%u sda=%ld scl=%ld freq=%ld use_io_bus=%s",
          (unsigned)cfgData_.address,
          (unsigned)bus,
@@ -258,6 +260,78 @@ bool I2CCfgServerModule::buildRuntimeStatusJson_(bool& truncatedOut)
         truncatedOut = true;
     }
     return true;
+}
+
+void I2CCfgServerModule::ensureActionTask_()
+{
+    if (actionTask_) return;
+    const BaseType_t ok = xTaskCreatePinnedToCore(
+        &I2CCfgServerModule::actionTaskStatic_,
+        "I2CfgAct",
+        3072,
+        this,
+        1,
+        &actionTask_,
+        0);
+    if (ok != pdPASS) {
+        actionTask_ = nullptr;
+        LOGW("Failed to start system action task");
+    }
+}
+
+void I2CCfgServerModule::queueSystemAction_(PendingSystemAction action)
+{
+    if (action == PendingSystemAction::None) return;
+    portENTER_CRITICAL(&actionMux_);
+    pendingAction_ = (uint8_t)action;
+    portEXIT_CRITICAL(&actionMux_);
+    ensureActionTask_();
+}
+
+I2CCfgServerModule::PendingSystemAction I2CCfgServerModule::takePendingSystemAction_()
+{
+    portENTER_CRITICAL(&actionMux_);
+    const uint8_t raw = pendingAction_;
+    pendingAction_ = (uint8_t)PendingSystemAction::None;
+    portEXIT_CRITICAL(&actionMux_);
+    return (PendingSystemAction)raw;
+}
+
+void I2CCfgServerModule::actionTaskStatic_(void* ctx)
+{
+    I2CCfgServerModule* self = static_cast<I2CCfgServerModule*>(ctx);
+    if (!self) {
+        vTaskDelete(nullptr);
+        return;
+    }
+    self->actionLoop_();
+}
+
+void I2CCfgServerModule::actionLoop_()
+{
+    while (true) {
+        const PendingSystemAction action = takePendingSystemAction_();
+        if (action == PendingSystemAction::None) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+        if (!cmdSvc_ || !cmdSvc_->execute) {
+            LOGW("system action ignored (cmd service unavailable)");
+            continue;
+        }
+
+        const char* cmd = nullptr;
+        if (action == PendingSystemAction::Reboot) {
+            cmd = "system.reboot";
+        } else if (action == PendingSystemAction::FactoryReset) {
+            cmd = "system.factory_reset";
+        }
+        if (!cmd) continue;
+
+        char reply[128] = {0};
+        const bool ok = cmdSvc_->execute(cmdSvc_->ctx, cmd, "{}", nullptr, reply, sizeof(reply));
+        LOGI("executed queued action cmd=%s ok=%d reply=%s", cmd, (int)ok, reply[0] ? reply : "{}");
+    }
 }
 
 bool I2CCfgServerModule::resolveIoPins_(int32_t& sdaOut, int32_t& sclOut) const
@@ -454,7 +528,7 @@ void I2CCfgServerModule::handleRequest_(uint8_t op, uint8_t seq, const uint8_t* 
             if (!duplicate) ++childCount;
         }
 
-        const uint8_t out[2] = {childCount, hasExact ? 1U : 0U};
+        const uint8_t out[2] = {childCount, (uint8_t)(hasExact ? 1U : 0U)};
         buildResponse_(op, seq, I2cCfgProtocol::StatusOk, out, sizeof(out));
         return;
     }
@@ -691,6 +765,35 @@ void I2CCfgServerModule::handleRequest_(uint8_t op, uint8_t seq, const uint8_t* 
         const size_t n = strnlen(ack, sizeof(ack));
         buildResponse_(op, seq, ok ? I2cCfgProtocol::StatusOk : I2cCfgProtocol::StatusFailed, (const uint8_t*)ack, n);
         resetPatchState_();
+        return;
+    }
+
+    if (op == I2cCfgProtocol::OpSystemAction) {
+        if (payloadLen < 1) {
+            buildResponse_(op, seq, I2cCfgProtocol::StatusBadRequest, nullptr, 0);
+            return;
+        }
+        PendingSystemAction action = PendingSystemAction::None;
+        const uint8_t actionId = payload[0];
+        if (actionId == 1) {
+            action = PendingSystemAction::Reboot;
+        } else if (actionId == 2) {
+            action = PendingSystemAction::FactoryReset;
+        } else {
+            buildResponse_(op, seq, I2cCfgProtocol::StatusBadRequest, nullptr, 0);
+            return;
+        }
+
+        const char* actionTxt = (action == PendingSystemAction::Reboot) ? "reboot" : "factory_reset";
+        char ack[80] = {0};
+        const int n = snprintf(ack,
+                               sizeof(ack),
+                               "{\"ok\":true,\"queued\":true,\"action\":\"%s\"}",
+                               actionTxt);
+        const size_t ackLen = (n > 0 && (size_t)n < sizeof(ack)) ? (size_t)n : 0;
+        buildResponse_(op, seq, I2cCfgProtocol::StatusOk, (const uint8_t*)ack, ackLen);
+        queueSystemAction_(action);
+        LOGW("queued remote system action=%s via I2C", actionTxt);
         return;
     }
 

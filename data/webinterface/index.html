@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Superviseur Flow.IO</title>
+  <link rel="icon" type="image/png" href="/assets/favicon.png" />
+    <link rel="stylesheet" href="/webinterface/app.css" />
+</head>
+<body>
+  <div id="overlay" class="overlay"></div>
+  <div class="app">
+    <aside id="drawer" class="drawer">
+      <div class="drawer-header">
+        <button id="menuToggle" class="menu-btn" data-menu-toggle aria-label="Toggle menu">=</button>
+        <div class="drawer-user">Superviseur</div>
+      </div>
+      <nav class="menu-group">
+        <button class="menu-item active" data-page="page-status"><span class="ico"><img class="ico-svg" src="/assets/icon-status.svg" alt="" /></span><span class="label">Statut</span></button>
+        <button class="menu-item" data-page="page-terminal"><span class="ico"><img class="ico-svg" src="/assets/icon-journaux.svg" alt="" /></span><span class="label">Journaux</span></button>
+        <button class="menu-item" data-page="page-upgrade"><span class="ico"><img class="ico-svg" src="/assets/icon-upgrade.svg" alt="" /></span><span class="label">Mise à jour Firmware</span></button>
+        <button class="menu-item" data-page="page-config"><span class="ico"><img class="ico-svg" src="/assets/icon-connections.svg" alt="" /></span><span class="label">Connexions</span></button>
+        <button class="menu-item" data-page="page-system"><span class="ico"><img class="ico-svg" src="/assets/icon-system.svg" alt="" /></span><span class="label">Système</span></button>
+        <button class="menu-item" data-page="page-control"><span class="ico"><img class="ico-svg" src="/assets/icon-config.svg?v=2" alt="" /></span><span class="label">Configuration</span></button>
+      </nav>
+      <div class="drawer-footer">
+        <span class="app-icon-shell"><img class="app-icon" src="/assets/flowio-logo-v2.png" alt="Flow.IO" /></span>
+      </div>
+    </aside>
+
+    <main class="content">
+      <div class="mobile-topbar">
+        <button class="menu-btn" data-menu-toggle aria-label="Open menu">=</button>
+        <div class="mobile-title">Superviseur</div>
+      </div>
+      <section id="page-status" class="page active">
+        <div class="topbar">
+          <h1>Statut Flow.IO</h1>
+          <button id="flowStatusRefresh" class="btn-tonal">Rafraîchir</button>
+        </div>
+        <div class="card">
+          <div id="flowStatusChip" class="status-chip">en attente...</div>
+          <div id="flowStatusGrid" class="status-grid"></div>
+          <pre id="flowStatusRaw" class="status-raw">Aucune donnée.</pre>
+        </div>
+      </section>
+
+      <section id="page-terminal" class="page">
+        <div class="topbar">
+          <h1>Journaux</h1>
+          <div class="topbar-actions">
+            <span id="wsStatus" class="status-chip">connexion...</span>
+            <label class="autoscroll-chip" for="toggleAutoscroll" title="Défilement automatique des journaux">
+              <span class="autoscroll-label">Scroll</span>
+              <span class="md3-switch md3-switch-compact">
+                <input id="toggleAutoscroll" type="checkbox" checked aria-label="Activer le défilement automatique des journaux" />
+                <span class="md3-track"></span>
+                <span class="md3-thumb"></span>
+              </span>
+            </label>
+          </div>
+        </div>
+        <div class="card">
+          <div id="term" class="terminal"></div>
+          <div class="term-toolbar">
+            <input id="line" placeholder="Envoyer une ligne vers l'UART" />
+            <button id="send" class="btn-tonal">Envoyer</button>
+            <button id="clear">Effacer</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="page-upgrade" class="page">
+        <div class="topbar">
+          <h1>Mise à jour Firmware</h1>
+          <span id="upStatusChip" class="status-chip">inactif</span>
+        </div>
+        <div class="card">
+          <div class="form-grid">
+            <div class="field full">
+              <label for="updateHost">Serveur HTTP (nom d'hôte ou IP, protocole optionnel)</label>
+              <input id="updateHost" placeholder="ex. 192.168.1.20 ou http://192.168.1.20" />
+            </div>
+            <div class="field full">
+              <label for="flowPath">Chemin image Flow.IO</label>
+              <div class="field-inline-action">
+                <input id="flowPath" placeholder="/build/FlowIO.bin" />
+                <button id="upFlow" class="btn-primary">Mettre à jour Flow.IO</button>
+              </div>
+            </div>
+            <div class="field full">
+              <label for="nextionPath">Chemin image Nextion</label>
+              <div class="field-inline-action">
+                <input id="nextionPath" placeholder="/build/Nextion.tft" />
+                <button id="upNextion" class="btn-primary">Mettre à jour Nextion</button>
+              </div>
+            </div>
+            <div class="field full">
+              <label for="supervisorPath">Chemin image Supervisor</label>
+              <div class="field-inline-action">
+                <input id="supervisorPath" placeholder="/build/Supervisor/firmware.bin" />
+                <button id="upSupervisor" class="btn-primary">Mettre à jour Supervisor</button>
+              </div>
+            </div>
+          </div>
+          <div class="upgrade-progress" aria-label="Progression mise à jour firmware">
+            <div id="upgradeProgressBar" class="upgrade-progress-bar"></div>
+          </div>
+          <div id="upgradeStatusText" class="upgrade-status">Aucune opération en cours.</div>
+          <div class="btn-row upgrade-secondary-actions">
+            <button id="saveCfg" class="btn-tonal">Enregistrer la configuration</button>
+            <button id="refreshState" class="btn-tonal">Rafraîchir l'état</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="page-config" class="page">
+        <div class="topbar">
+          <h1>Connexions</h1>
+          <span class="status-chip">WiFi + MQTT</span>
+        </div>
+        <div class="card">
+          <div class="config-section">
+            <h2>WiFi</h2>
+            <div class="form-grid">
+              <div class="field">
+                <label for="wifiEnabled">Activer WiFi</label>
+                <div class="field-switch">
+                  <label class="md3-switch">
+                    <input id="wifiEnabled" type="checkbox" checked />
+                    <span class="md3-track"></span>
+                    <span class="md3-thumb"></span>
+                  </label>
+                </div>
+              </div>
+              <div class="field">
+                <label for="wifiSsid">SSID</label>
+                <input id="wifiSsid" placeholder="Nom du réseau WiFi" />
+              </div>
+              <div class="field full">
+                <label for="wifiSsidList">Réseaux détectés</label>
+                <select id="wifiSsidList">
+                  <option value="">Scan requis...</option>
+                </select>
+              </div>
+              <div class="field full">
+                <label for="wifiPass">Mot de passe</label>
+                <div class="password-wrap">
+                  <input id="wifiPass" type="password" placeholder="Mot de passe WiFi" />
+                  <button id="toggleWifiPass" class="password-toggle" type="button" aria-label="Afficher le mot de passe WiFi" aria-pressed="false"></button>
+                </div>
+              </div>
+            </div>
+            <div class="btn-row">
+              <button id="scanWifi" class="btn-tonal">Scanner les réseaux</button>
+              <button id="applyWifiCfg" class="btn-primary">Appliquer WiFi</button>
+            </div>
+            <div id="wifiConfigStatus" class="config-status">Configuration WiFi prête.</div>
+          </div>
+
+          <div class="config-section">
+            <h2>MQTT</h2>
+            <div class="form-grid">
+              <div class="field full">
+                <label for="mqttServer">Serveur MQTT</label>
+                <input id="mqttServer" placeholder="ex. 192.168.1.20" />
+              </div>
+              <div class="field">
+                <label for="mqttPort">Port</label>
+                <input id="mqttPort" type="number" min="1" max="65535" placeholder="1883" />
+              </div>
+              <div class="field">
+                <label for="mqttUser">Identifiant</label>
+                <input id="mqttUser" placeholder="identifiant" />
+              </div>
+              <div class="field full">
+                <label for="mqttPass">Mot de passe</label>
+                <div class="password-wrap">
+                  <input id="mqttPass" type="password" placeholder="mot de passe" />
+                  <button id="toggleMqttPass" class="password-toggle" type="button" aria-label="Afficher le mot de passe MQTT" aria-pressed="false"></button>
+                </div>
+              </div>
+            </div>
+            <div class="btn-row">
+              <button id="applyMqttCfg" class="btn-primary">Appliquer MQTT</button>
+            </div>
+            <div id="mqttConfigStatus" class="config-status">Configuration MQTT prête.</div>
+          </div>
+        </div>
+      </section>
+
+      <section id="page-system" class="page">
+        <div class="topbar">
+          <h1>Système</h1>
+          <span class="status-chip">administrateur</span>
+        </div>
+        <div class="system-groups">
+          <div>
+            <h2 class="system-group-title">Superviseur</h2>
+            <div class="system-actions">
+              <div class="system-action">
+                <h3>Redémarrer le Superviseur</h3>
+                <p>Redémarre uniquement le Superviseur pour relancer les services sans modifier la configuration.</p>
+                <button id="rebootSupervisor" class="btn-tonal">Redémarrer le Superviseur</button>
+              </div>
+            </div>
+          </div>
+          <div>
+            <h2 class="system-group-title">Flow.IO</h2>
+            <div class="system-actions">
+              <div class="system-action">
+                <h3>Redémarrage de Flow.IO</h3>
+                <p>Demande à Flow.IO de redémarrer proprement via le lien I2C.</p>
+                <button id="rebootFlow" class="btn-tonal">Redémarrer Flow.IO</button>
+              </div>
+              <div class="system-action">
+                <h3>Réinitialisation Usine</h3>
+                <p>Efface la configuration de Flow.IO puis redémarre l’équipement.</p>
+                <button id="flowFactoryReset" class="btn-primary">Réinitialisation Usine Flow.IO</button>
+              </div>
+            </div>
+          </div>
+          <div id="systemStatusText" class="config-status">Aucune action système en cours.</div>
+        </div>
+      </section>
+
+      <section id="page-control" class="page">
+        <div class="topbar">
+          <h1 id="flowCfgTitle" class="control-title-breadcrumb">cfg</h1>
+          <button id="flowCfgRefresh" class="btn-tonal">Rafraîchir</button>
+        </div>
+        <div class="card control-card">
+          <div class="control-shell">
+            <div class="control-section-title">Sections</div>
+            <div id="flowCfgSections" class="control-sections"></div>
+            <div class="control-divider"></div>
+            <div class="control-section-title">Variables</div>
+            <div id="flowCfgFields" class="control-fields"></div>
+            <div id="flowCfgStatus" class="config-status">Configuration distante prête.</div>
+            <div class="control-actions">
+              <button id="flowCfgApply" class="btn-primary">Appliquer</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+    <script src="/webinterface/app.js"></script>
+</body>
+</html>

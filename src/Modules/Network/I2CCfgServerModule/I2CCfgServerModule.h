@@ -19,11 +19,12 @@ class I2CCfgServerModule : public ModulePassive {
 public:
     const char* moduleId() const override { return "i2ccfg.server"; }
 
-    uint8_t dependencyCount() const override { return 3; }
+    uint8_t dependencyCount() const override { return 4; }
     const char* dependency(uint8_t i) const override {
         if (i == 0) return "loghub";
         if (i == 1) return "config";
         if (i == 2) return "datastore";
+        if (i == 3) return "cmd";
         return nullptr;
     }
 
@@ -72,10 +73,20 @@ private:
 
     const LogHubService* logHub_ = nullptr;
     const ConfigStoreService* cfgSvc_ = nullptr;
+    const CommandService* cmdSvc_ = nullptr;
     DataStore* dataStore_ = nullptr;
     ConfigStore* cfgStore_ = nullptr;
     I2cLink link_{};
     bool started_ = false;
+    TaskHandle_t actionTask_ = nullptr;
+
+    enum class PendingSystemAction : uint8_t {
+        None = 0,
+        Reboot = 1,
+        FactoryReset = 2
+    };
+    volatile uint8_t pendingAction_ = 0;
+    portMUX_TYPE actionMux_ = portMUX_INITIALIZER_UNLOCKED;
 
     static constexpr size_t kModuleJsonBufSize = Limits::JsonCfgBuf;
     static constexpr size_t kStatusJsonBufSize = 640;
@@ -110,6 +121,11 @@ private:
     void startLink_();
     void resetPatchState_();
     bool buildRuntimeStatusJson_(bool& truncatedOut);
+    void ensureActionTask_();
+    void queueSystemAction_(PendingSystemAction action);
+    PendingSystemAction takePendingSystemAction_();
+    void actionLoop_();
+    static void actionTaskStatic_(void* ctx);
     bool resolveIoPins_(int32_t& sdaOut, int32_t& sclOut) const;
     void buildResponse_(uint8_t op, uint8_t seq, uint8_t status, const uint8_t* payload, size_t payloadLen);
     void handleRequest_(uint8_t op, uint8_t seq, const uint8_t* payload, size_t payloadLen);
