@@ -8,6 +8,7 @@
 #include "Core/Services/Services.h"
 
 #include <DNSServer.h>
+#include <WiFi.h>
 
 class WifiProvisioningModule : public Module {
 public:
@@ -37,6 +38,10 @@ private:
     static constexpr uint32_t kConnectTimeoutMs = 25000U;
     static constexpr uint32_t kConfigPollMs = 1000U;
     static constexpr uint16_t kDnsPort = 53;
+    static constexpr uint32_t kApClientPollMs = 1000U;
+    static constexpr uint32_t kApClientGraceMs = 120000U;
+    static constexpr uint32_t kStaProbeIntervalMs = 30000U;
+    static constexpr uint32_t kStaProbeWindowMs = 6000U;
 
     ConfigStore* cfgStore_ = nullptr;
     const WifiService* wifiSvc_ = nullptr;
@@ -47,8 +52,14 @@ private:
     bool wifiEnabled_ = true;
     bool configDirty_ = false;
     bool portalLatched_ = false;
+    bool staProbeActive_ = false;
+    uint8_t apClientCount_ = 0;
+    uint32_t lastApClientSeenMs_ = 0;
+    uint32_t lastApClientPollMs_ = 0;
+    uint32_t lastStaProbeStartMs_ = 0;
     uint32_t bootMs_ = 0;
     uint32_t lastCfgPollMs_ = 0;
+    wifi_event_id_t wifiEventHandlerId_ = 0;
     char apSsid_[40] = {0};
     char apPass_[32] = {0};
 
@@ -58,9 +69,15 @@ private:
     static bool svcNotifyWifiConfigChanged_(void* ctx);
 
     void buildApCredentials_();
+    void handleStaProbePolicy_(uint32_t nowMs);
+    void refreshApClientState_(uint32_t nowMs, bool fromEvent);
+    void startStaProbe_(uint32_t nowMs);
+    void stopStaProbe_(const char* reason);
     void refreshWifiConfig_();
     PortalReason evaluatePortalReason_() const;
     void ensurePortalStarted_();
+    static void onWifiEventSys_(arduino_event_t* event);
+    void onWifiEvent_(arduino_event_t* event);
     bool startCaptivePortal_(PortalReason reason);
     void stopCaptivePortal_();
     bool isStaConnected_() const;

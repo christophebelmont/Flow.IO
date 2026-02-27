@@ -494,19 +494,57 @@
       min-width: 0;
       flex: 1 1 auto;
     }
+    .control-title-root-btn {
+      width: 28px;
+      height: 28px;
+      border: 0;
+      border-radius: 8px;
+      padding: 0;
+      margin: 0;
+      background: transparent;
+      color: #AFC3D2;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      flex: 0 0 auto;
+    }
+    .control-title-root-btn svg {
+      width: 20px;
+      height: 20px;
+      display: block;
+    }
+    .control-title-root-btn:hover {
+      color: #FFFFFF;
+      background: rgba(175,195,210,0.18);
+    }
+    .control-title-root-btn.active {
+      color: #FFFFFF;
+      cursor: default;
+    }
+    .control-crumb {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 0;
+      min-width: 0;
+      border: 1px solid rgba(175, 195, 210, 0.32);
+      border-radius: 12px;
+      background: rgba(8, 22, 41, 0.34);
+    }
     .control-title-crumb-btn {
       border: 0;
       background: transparent;
       color: #AFC3D2;
-      font-size: 20px;
+      font-size: 18px;
       font-weight: 700;
-      padding: 0;
+      padding: 8px 10px 8px 12px;
       margin: 0;
       cursor: pointer;
       line-height: 1.1;
-      text-decoration: underline;
-      text-underline-offset: 3px;
+      text-decoration: none;
       white-space: nowrap;
+      border-radius: 11px 0 0 11px;
     }
     .control-title-crumb-btn:hover {
       color: #FFFFFF;
@@ -516,11 +554,83 @@
       text-decoration: none;
       cursor: default;
     }
+    .control-crumb-toggle {
+      border: 0;
+      background: transparent;
+      color: #AFC3D2;
+      width: 28px;
+      height: 32px;
+      border-left: 1px solid rgba(175, 195, 210, 0.24);
+      border-radius: 0 11px 11px 0;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+    }
+    .control-crumb-toggle:hover {
+      color: #FFFFFF;
+      background: rgba(175, 195, 210, 0.14);
+    }
+    .control-crumb-arrows {
+      display: inline-block;
+      width: 11px;
+      height: 14px;
+    }
+    .control-crumb-menu {
+      position: absolute;
+      top: calc(100% - 1px);
+      left: -1px;
+      min-width: 180px;
+      max-width: 320px;
+      max-height: 260px;
+      overflow: auto;
+      border-radius: 0 12px 12px 12px;
+      background: rgba(8, 22, 41, 0.92);
+      border: 1px solid rgba(175, 195, 210, 0.32);
+      border-top: 0;
+      box-shadow: 0 12px 24px rgba(7, 21, 38, 0.25);
+      padding: 8px;
+      z-index: 8;
+      display: none;
+    }
+    .control-crumb.open .control-crumb-menu {
+      display: block;
+    }
+    .control-crumb.open {
+      border-bottom-left-radius: 0;
+      border-bottom-right-radius: 0;
+      background: rgba(8, 22, 41, 0.92);
+    }
+    .control-crumb-menu-item {
+      width: 100%;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: #D3E1EE;
+      font-size: 14px;
+      font-weight: 500;
+      line-height: 1.2;
+      text-align: left;
+      padding: 8px 10px;
+      cursor: pointer;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .control-crumb-menu-item:hover {
+      background: rgba(175, 195, 210, 0.2);
+      color: #FFFFFF;
+    }
+    .control-crumb-menu-item.active {
+      background: rgba(0, 194, 209, 0.22);
+      color: #7EEAF1;
+    }
     .control-title-sep {
       color: #AFC3D2;
       user-select: none;
       line-height: 1.1;
-      font-size: 20px;
+      font-size: 19px;
       font-weight: 700;
     }
     .control-fields {

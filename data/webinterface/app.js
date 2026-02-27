@@ -584,8 +584,24 @@
 
     function flowCfgTitreDepuisChemin(pathValue) {
       const cleanPath = nettoyerNomFlowCfg(pathValue);
-      if (!cleanPath) return 'cfg';
-      return 'cfg > ' + cleanPath.split('/').join(' > ');
+      if (!cleanPath) return 'Configuration';
+      return 'Configuration > ' + cleanPath.split('/').join(' > ');
+    }
+
+    function flowCfgCachedChildren(prefix) {
+      const p = nettoyerNomFlowCfg(prefix);
+      const key = flowCfgCacheKey(p);
+      const node = flowCfgChildrenCache[key];
+      if (!node || !Array.isArray(node.children)) return [];
+      return node.children.slice();
+    }
+
+    function closeFlowCfgCrumbMenus(except) {
+      const wrappers = flowCfgTitle.querySelectorAll('.control-crumb.open');
+      wrappers.forEach((wrapper) => {
+        if (except && wrapper === except) return;
+        wrapper.classList.remove('open');
+      });
     }
 
     function renderFlowCfgTitle(pathValue) {
@@ -594,31 +610,99 @@
       flowCfgTitle.innerHTML = '';
       flowCfgTitle.setAttribute('aria-label', flowCfgTitreDepuisChemin(cleanPath));
 
-      const items = ['cfg'].concat(segs);
-      for (let i = 0; i < items.length; ++i) {
+      const rootBtn = document.createElement('button');
+      rootBtn.type = 'button';
+      rootBtn.className = 'control-title-root-btn' + (segs.length === 0 ? ' active' : '');
+      rootBtn.setAttribute('aria-label', 'Racine configuration');
+      rootBtn.innerHTML =
+        '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.3 7.3 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.58.23-1.13.54-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96c.5.4 1.05.71 1.63.94l.36 2.54a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.54c.58-.23 1.13-.54 1.63-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7Z"/></svg>';
+      if (segs.length === 0) {
+        rootBtn.disabled = true;
+      } else {
+        rootBtn.addEventListener('click', async () => {
+          closeFlowCfgCrumbMenus();
+          flowCfgPath = [];
+          await renderFlowCfgNavigator(false);
+        });
+      }
+      flowCfgTitle.appendChild(rootBtn);
+
+      if (segs.length === 0) {
+        return;
+      }
+
+      const rootSep = document.createElement('span');
+      rootSep.className = 'control-title-sep';
+      rootSep.textContent = '/';
+      flowCfgTitle.appendChild(rootSep);
+
+      for (let i = 0; i < segs.length; ++i) {
         if (i > 0) {
           const sep = document.createElement('span');
           sep.className = 'control-title-sep';
-          sep.textContent = '>';
+          sep.textContent = '/';
           flowCfgTitle.appendChild(sep);
         }
 
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'control-title-crumb-btn';
-        btn.textContent = items[i];
+        const crumb = document.createElement('span');
+        crumb.className = 'control-crumb';
+        const depth = i + 1;
+        const isActive = depth === segs.length;
 
-        const depth = i; // 0 => root(cfg), 1 => first segment, ...
-        if (depth === segs.length) {
-          btn.classList.add('active');
-          btn.disabled = true;
+        const labelBtn = document.createElement('button');
+        labelBtn.type = 'button';
+        labelBtn.className = 'control-title-crumb-btn' + (isActive ? ' active' : '');
+        labelBtn.textContent = segs[i];
+        if (isActive) {
+          labelBtn.disabled = true;
         } else {
-          btn.addEventListener('click', async () => {
-            flowCfgPath = depth === 0 ? [] : segs.slice(0, depth);
+          labelBtn.addEventListener('click', async () => {
+            closeFlowCfgCrumbMenus();
+            flowCfgPath = segs.slice(0, depth);
             await renderFlowCfgNavigator(false);
           });
         }
-        flowCfgTitle.appendChild(btn);
+        crumb.appendChild(labelBtn);
+
+        const parentPrefix = i === 0 ? '' : segs.slice(0, i).join('/');
+        const siblings = flowCfgCachedChildren(parentPrefix);
+        const menuChoices = siblings.length > 0 ? siblings : [segs[i]];
+
+        const toggleBtn = document.createElement('button');
+        toggleBtn.type = 'button';
+        toggleBtn.className = 'control-crumb-toggle';
+        toggleBtn.setAttribute('aria-label', 'Choisir une branche au niveau ' + (i + 1));
+        toggleBtn.innerHTML =
+          '<svg class="control-crumb-arrows" viewBox="0 0 12 16" aria-hidden="true">' +
+          '<path fill="currentColor" d="M6 2.2 9.4 6H2.6L6 2.2Z"/>' +
+          '<path fill="currentColor" d="M6 13.8 2.6 10h6.8L6 13.8Z"/>' +
+          '</svg>';
+        toggleBtn.addEventListener('click', (event) => {
+          event.stopPropagation();
+          const willOpen = !crumb.classList.contains('open');
+          closeFlowCfgCrumbMenus(crumb);
+          crumb.classList.toggle('open', willOpen);
+        });
+        crumb.appendChild(toggleBtn);
+
+        const menu = document.createElement('div');
+        menu.className = 'control-crumb-menu';
+        const sortedChoices = Array.from(new Set(menuChoices)).sort((a, b) => a.localeCompare(b));
+        for (const choice of sortedChoices) {
+          const item = document.createElement('button');
+          item.type = 'button';
+          item.className = 'control-crumb-menu-item' + (choice === segs[i] ? ' active' : '');
+          item.textContent = choice;
+          item.addEventListener('click', async (event) => {
+            event.stopPropagation();
+            closeFlowCfgCrumbMenus();
+            flowCfgPath = segs.slice(0, i).concat([choice]);
+            await renderFlowCfgNavigator(false);
+          });
+          menu.appendChild(item);
+        }
+        crumb.appendChild(menu);
+        flowCfgTitle.appendChild(crumb);
       }
     }
 
@@ -972,6 +1056,17 @@
     });
     flowCfgApplyBtn.addEventListener('click', async () => {
       await appliquerFlowCfg();
+    });
+
+    document.addEventListener('click', (event) => {
+      if (!flowCfgTitle.contains(event.target)) {
+        closeFlowCfgCrumbMenus();
+      }
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        closeFlowCfgCrumbMenus();
+      }
     });
 
     loadUpgradeConfig();

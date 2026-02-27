@@ -16,7 +16,13 @@ struct WifiConfig {
     char ssid[33] = "";
     // WPA/WPA2 supports 8..63 chars passphrase or 64-char hex PSK (+ '\0').
     char pass[65] = "";
+#if defined(FLOW_PROFILE_SUPERVISOR)
     char mdns[33] = "flowio";
+#elif defined(FLOW_PROFILE_FLOWIO)
+    char mdns[33] = "flowio-core";
+#else
+    char mdns[33] = "flowio";
+#endif
 };
 
 /**
@@ -31,7 +37,13 @@ public:
     /** @brief Pin network module on core 0. */
     BaseType_t taskCore() const override { return 0; }
     /** @brief Give extra headroom to WiFi stack/callback activity. */
-    uint16_t taskStackSize() const override { return 2816; }
+    uint16_t taskStackSize() const override {
+#if defined(FLOW_PROFILE_SUPERVISOR)
+        return 4096;
+#else
+        return 2816;
+#endif
+    }
 
     /** @brief Depends on log hub and datastore. */
     uint8_t dependencyCount() const override { return 2; }
@@ -140,6 +152,7 @@ private:
     void startConnect();
     void stopMdns_();
     void syncMdns_();
+    void applyProfileMdnsHost_();
     bool requestScan_(bool force);
     void processScan_();
     bool buildScanStatusJson_(char* out, size_t outLen);

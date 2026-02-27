@@ -20,6 +20,17 @@ const char* espErrName_(esp_err_t err)
     const char* n = esp_err_to_name(err);
     return n ? n : "?";
 }
+
+const char* profileMdnsHost_()
+{
+#if defined(FLOW_PROFILE_SUPERVISOR)
+    return "flowio";
+#elif defined(FLOW_PROFILE_FLOWIO)
+    return "flowio-core";
+#else
+    return "flowio";
+#endif
+}
 }
 
 WifiState WifiModule::svcState(void* ctx) {
@@ -609,6 +620,7 @@ void WifiModule::init(ConfigStore& cfg,
 
 void WifiModule::onConfigLoaded(ConfigStore&, ServiceRegistry&)
 {
+    applyProfileMdnsHost_();
     logConfigSummary_();
     if (!cfgData.enabled) {
         LOGW("WiFi disabled in config, disconnecting STA");
@@ -617,6 +629,16 @@ void WifiModule::onConfigLoaded(ConfigStore&, ServiceRegistry&)
         return;
     }
     setState(WifiState::Idle);
+}
+
+void WifiModule::applyProfileMdnsHost_()
+{
+    const char* forcedHost = profileMdnsHost_();
+    if (!forcedHost || forcedHost[0] == '\0') return;
+    if (strncmp(cfgData.mdns, forcedHost, sizeof(cfgData.mdns)) == 0) return;
+
+    snprintf(cfgData.mdns, sizeof(cfgData.mdns), "%s", forcedHost);
+    LOGI("mDNS host forced by profile: %s", cfgData.mdns);
 }
 
 void WifiModule::stopMdns_()

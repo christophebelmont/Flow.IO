@@ -13,6 +13,7 @@
 
 namespace {
 constexpr const char* kDefaultApPass = "flowio1234";
+WifiProvisioningModule* gWifiProvisioningInstance = nullptr;
 }
 
 void WifiProvisioningModule::init(ConfigStore& cfg, ServiceRegistry& services)
@@ -32,6 +33,13 @@ void WifiProvisioningModule::init(ConfigStore& cfg, ServiceRegistry& services)
     };
     netSvc.ctx = this;
     services.add("network_access", &netSvc);
+
+    gWifiProvisioningInstance = this;
+    if (wifiEventHandlerId_ != 0U) {
+        WiFi.removeEvent(wifiEventHandlerId_);
+        wifiEventHandlerId_ = 0U;
+    }
+    wifiEventHandlerId_ = WiFi.onEvent(WifiProvisioningModule::onWifiEventSys_);
 
     LOGI("Provisioning overlay initialized (timeout=%lu ms, AP SSID=%s)",
          (unsigned long)kConnectTimeoutMs,
@@ -69,6 +77,7 @@ void WifiProvisioningModule::loop()
     ensurePortalStarted_();
 
     if (apActive_) {
+        handleStaProbePolicy_(now);
         dns_.processNextRequest();
     }
 
@@ -198,6 +207,9 @@ bool WifiProvisioningModule::startCaptivePortal_(PortalReason reason)
     const IPAddress apIp = WiFi.softAPIP();
     dns_.start(kDnsPort, "*", apIp);
     apActive_ = true;
+    staProbeActive_ = false;
+    lastStaProbeStartMs_ = millis();
+    refreshApClientState_(lastStaProbeStartMs_, false);
 
     const char* reasonTxt = (reason == PortalReason::MissingCredentials) ? "missing credentials" : "connect timeout";
     LOGW("Provisioning AP started (%s) SSID=%s IP=%u.%u.%u.%u",
@@ -211,10 +223,131 @@ void WifiProvisioningModule::stopCaptivePortal_()
 {
     if (!apActive_) return;
 
+    stopStaProbe_("sta connected");
+    if (wifiSvc_ && wifiSvc_->setStaRetryEnabled) {
+        (void)wifiSvc_->setStaRetryEnabled(wifiSvc_->ctx, true);
+    }
     dns_.stop();
     WiFi.softAPdisconnect(true);
     apActive_ = false;
+    apClientCount_ = 0;
+    lastApClientSeenMs_ = 0;
+    lastApClientPollMs_ = 0;
     LOGI("Provisioning AP stopped (STA connected)");
+}
+
+void WifiProvisioningModule::onWifiEventSys_(arduino_event_t* event)
+{
+    if (!event) return;
+    WifiProvisioningModule* self = gWifiProvisioningInstance;
+    if (!self) return;
+    self->onWifiEvent_(event);
+}
+
+void WifiProvisioningModule::onWifiEvent_(arduino_event_t* event)
+{
+    if (!event) return;
+    switch (event->event_id) {
+    case ARDUINO_EVENT_WIFI_AP_STACONNECTED:
+    case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED:
+        refreshApClientState_(millis(), true);
+        break;
+    default:
+        break;
+    }
+}
+
+void WifiProvisioningModule::refreshApClientState_(uint32_t nowMs, bool fromEvent)
+{
+    if (!apActive_) {
+        apClientCount_ = 0;
+        return;
+    }
+
+    const uint8_t count = WiFi.softAPgetStationNum();
+    if (count > 0) {
+        lastApClientSeenMs_ = nowMs;
+    }
+    if (count != apClientCount_) {
+        apClientCount_ = count;
+        if (fromEvent) {
+            LOGI("AP clients changed (event) count=%u", (unsigned)apClientCount_);
+        } else {
+            LOGI("AP clients changed (poll) count=%u", (unsigned)apClientCount_);
+        }
+    }
+}
+
+void WifiProvisioningModule::startStaProbe_(uint32_t nowMs)
+{
+    if (staProbeActive_) return;
+    if (!wifiEnabled_ || !wifiConfigured_) return;
+
+    staProbeActive_ = true;
+    lastStaProbeStartMs_ = nowMs;
+    if (wifiSvc_ && wifiSvc_->setStaRetryEnabled) {
+        (void)wifiSvc_->setStaRetryEnabled(wifiSvc_->ctx, true);
+    }
+    if (wifiSvc_ && wifiSvc_->requestReconnect) {
+        (void)wifiSvc_->requestReconnect(wifiSvc_->ctx);
+    }
+    LOGI("STA probe started window_ms=%lu ap_clients=%u",
+         (unsigned long)kStaProbeWindowMs,
+         (unsigned)apClientCount_);
+}
+
+void WifiProvisioningModule::stopStaProbe_(const char* reason)
+{
+    if (!staProbeActive_) return;
+    staProbeActive_ = false;
+
+    if (!isStaConnected_()) {
+        if (wifiSvc_ && wifiSvc_->setStaRetryEnabled) {
+            (void)wifiSvc_->setStaRetryEnabled(wifiSvc_->ctx, false);
+        }
+        if (apActive_ && WiFi.getMode() != WIFI_MODE_AP) {
+            (void)WiFi.mode(WIFI_MODE_AP);
+        }
+    }
+
+    LOGI("STA probe stopped reason=%s", reason ? reason : "unknown");
+}
+
+void WifiProvisioningModule::handleStaProbePolicy_(uint32_t nowMs)
+{
+    if (!apActive_) return;
+
+    if ((nowMs - lastApClientPollMs_) >= kApClientPollMs) {
+        lastApClientPollMs_ = nowMs;
+        refreshApClientState_(nowMs, false);
+    }
+
+    const bool clientConnected = (apClientCount_ > 0U);
+    const bool clientSeenRecently = (lastApClientSeenMs_ != 0U) &&
+                                    ((nowMs - lastApClientSeenMs_) < kApClientGraceMs);
+    const bool holdApOnly = clientConnected || clientSeenRecently || !wifiEnabled_ || !wifiConfigured_;
+
+    if (staProbeActive_) {
+        if (holdApOnly) {
+            stopStaProbe_(clientConnected ? "ap client connected" : "ap client grace");
+            return;
+        }
+        if ((nowMs - lastStaProbeStartMs_) >= kStaProbeWindowMs) {
+            stopStaProbe_("window elapsed");
+        }
+        return;
+    }
+
+    if (holdApOnly) {
+        if (wifiSvc_ && wifiSvc_->setStaRetryEnabled) {
+            (void)wifiSvc_->setStaRetryEnabled(wifiSvc_->ctx, false);
+        }
+        return;
+    }
+
+    if ((nowMs - lastStaProbeStartMs_) >= kStaProbeIntervalMs) {
+        startStaProbe_(nowMs);
+    }
 }
 
 bool WifiProvisioningModule::isStaConnected_() const
