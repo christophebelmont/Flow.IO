@@ -16,6 +16,10 @@
 #define LOG_TAG "MqttModu"
 #include "Core/ModuleLog.h"
 
+// Toggle all MQTT debug logs from one place (set true for diagnostics).
+static constexpr bool kMqttDebugLogsEnabled = false;
+#define MQTT_DLOG(...) do { if (kMqttDebugLogsEnabled) LOGD(__VA_ARGS__); } while (0)
+
 static uint32_t clampU32(uint32_t v, uint32_t minV, uint32_t maxV) {
     if (v < minV) return minV;
     if (v > maxV) return maxV;
@@ -51,6 +55,18 @@ static bool isMqttConnKey(const char* key)
         NvsKeys::Mqtt::User,
         NvsKeys::Mqtt::Pass
     });
+}
+
+static const char* wifiStateName_(WifiState s)
+{
+    switch (s) {
+        case WifiState::Disabled: return "Disabled";
+        case WifiState::Idle: return "Idle";
+        case WifiState::Connecting: return "Connecting";
+        case WifiState::Connected: return "Connected";
+        case WifiState::ErrorWait: return "ErrorWait";
+        default: return "Unknown";
+    }
 }
 
 bool MQTTModule::svcPublish(void* ctx, const char* topic, const char* payload, int qos, bool retain)
@@ -205,7 +221,10 @@ void MQTTModule::onConnect_(bool) {
     _retryDelayMs = Limits::Mqtt::Backoff::MinMs;
     setState(MQTTState::Connected);
 
-    (void)publish(topicStatus, "{\"online\":true}", 1, true);
+    statusOnlinePending_ = true;
+    statusOnlineDeadlineMs_ = millis() + 20000U;
+    statusOnlineNextTryMs_ = millis();
+    MQTT_DLOG("status publish deferred until startup bursts complete");
 
     if (sensorsTopic && sensorsBuild) {
         sensorsPending = true;
@@ -222,19 +241,61 @@ void MQTTModule::onConnect_(bool) {
     alarmsPackPending_ = true;
     alarmsRetryBackoffMs_ = 0;
     alarmsRetryNextMs_ = 0;
+    schedCfgActive_ = false;
+    schedCfgRootPending_ = false;
+    schedCfgSlotCursor_ = 0;
+    schedCfgNextMs_ = 0;
+    schedCfgRetryBackoffMs_ = 0;
 }
 
-void MQTTModule::onDisconnect_() {
+void MQTTModule::onDisconnect_(const esp_mqtt_error_codes_t* err) {
     if (suppressDisconnectEvent_) {
+        MQTT_DLOG("Disconnected (suppressed)");
         suppressDisconnectEvent_ = false;
         return;
     }
-    LOGW("Disconnected");
+    const bool wifiConnected = (wifiSvc && wifiSvc->isConnected) ? wifiSvc->isConnected(wifiSvc->ctx) : false;
+    const WifiState wifiState = (wifiSvc && wifiSvc->state) ? wifiSvc->state(wifiSvc->ctx) : WifiState::Disabled;
+    const uint32_t freeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    const uint32_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    const int outboxBytes = client_ ? esp_mqtt_client_get_outbox_size(client_) : -1;
+
+    if (err) {
+        LOGW("Disconnected netReady=%d wifi_connected=%d wifi_state=%s free=%lu largest=%lu outbox=%d "
+             "err_type=%d tls_last=%d tls_stack=%d conn_refused=%d sock_errno=%d",
+             _netReady ? 1 : 0,
+             wifiConnected ? 1 : 0,
+             wifiStateName_(wifiState),
+             (unsigned long)freeHeap,
+             (unsigned long)largest,
+             outboxBytes,
+             (int)err->error_type,
+             (int)err->esp_tls_last_esp_err,
+             (int)err->esp_tls_stack_err,
+             (int)err->connect_return_code,
+             (int)err->esp_transport_sock_errno);
+    } else {
+        LOGW("Disconnected netReady=%d wifi_connected=%d wifi_state=%s free=%lu largest=%lu outbox=%d",
+             _netReady ? 1 : 0,
+             wifiConnected ? 1 : 0,
+             wifiStateName_(wifiState),
+             (unsigned long)freeHeap,
+             (unsigned long)largest,
+             outboxBytes);
+    }
     cfgRampActive_ = false;
     cfgRampRestartRequested_ = false;
     cfgRampIndex_ = 0;
+    schedCfgActive_ = false;
+    schedCfgRootPending_ = false;
+    schedCfgSlotCursor_ = 0;
+    schedCfgNextMs_ = 0;
+    schedCfgRetryBackoffMs_ = 0;
     alarmsRetryBackoffMs_ = 0;
     alarmsRetryNextMs_ = 0;
+    statusOnlinePending_ = false;
+    statusOnlineDeadlineMs_ = 0;
+    statusOnlineNextTryMs_ = 0;
     setState(MQTTState::ErrorWait);
 }
 
@@ -284,7 +345,7 @@ void MQTTModule::mqttEventHandlerStatic_(void* handler_args,
             self->onConnect_(ev->session_present != 0);
             break;
         case MQTT_EVENT_DISCONNECTED:
-            self->onDisconnect_();
+            self->onDisconnect_(ev ? ev->error_handle : nullptr);
             break;
         case MQTT_EVENT_DATA:
             self->onMessage_(ev->topic,
@@ -295,17 +356,37 @@ void MQTTModule::mqttEventHandlerStatic_(void* handler_args,
                              (size_t)ev->total_data_len);
             break;
         case MQTT_EVENT_ERROR:
+            {
+            const bool wifiConnected = (self->wifiSvc && self->wifiSvc->isConnected) ? self->wifiSvc->isConnected(self->wifiSvc->ctx) : false;
+            const WifiState wifiState = (self->wifiSvc && self->wifiSvc->state) ? self->wifiSvc->state(self->wifiSvc->ctx) : WifiState::Disabled;
+            const uint32_t freeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+            const uint32_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+            const int outboxBytes = self->client_ ? esp_mqtt_client_get_outbox_size(self->client_) : -1;
             if (ev->error_handle) {
-                LOGW("MQTT error type=%d tls_last=%d tls_stack=%d conn_refused=%d sock_errno=%d",
+                LOGW("MQTT error netReady=%d wifi_connected=%d wifi_state=%s free=%lu largest=%lu outbox=%d "
+                     "type=%d tls_last=%d tls_stack=%d conn_refused=%d sock_errno=%d",
+                     self->_netReady ? 1 : 0,
+                     wifiConnected ? 1 : 0,
+                     wifiStateName_(wifiState),
+                     (unsigned long)freeHeap,
+                     (unsigned long)largest,
+                     outboxBytes,
                      (int)ev->error_handle->error_type,
                      (int)ev->error_handle->esp_tls_last_esp_err,
                      (int)ev->error_handle->esp_tls_stack_err,
                      (int)ev->error_handle->connect_return_code,
                      (int)ev->error_handle->esp_transport_sock_errno);
             } else {
-                LOGW("MQTT error event without details");
+                LOGW("MQTT error event without details netReady=%d wifi_connected=%d wifi_state=%s free=%lu largest=%lu outbox=%d",
+                     self->_netReady ? 1 : 0,
+                     wifiConnected ? 1 : 0,
+                     wifiStateName_(wifiState),
+                     (unsigned long)freeHeap,
+                     (unsigned long)largest,
+                     outboxBytes);
             }
             break;
+            }
         default:
             break;
     }
@@ -447,7 +528,7 @@ bool MQTTModule::publishConfigModuleAt(size_t idx, bool retained)
             snprintf(stateCfgBuf, sizeof(stateCfgBuf), "{\"ok\":false}");
         }
         if (!publish(moduleTopic, stateCfgBuf, 1, retained)) {
-            if (lowHeapSinceMs_ != 0U) LOGD("cfg/%s publish deferred (truncated payload)", cfgModules[idx]);
+            if (lowHeapSinceMs_ != 0U) MQTT_DLOG("cfg/%s publish deferred (truncated payload)", cfgModules[idx]);
             else LOGW("cfg/%s publish failed (truncated payload)", cfgModules[idx]);
             return false;
         }
@@ -455,7 +536,7 @@ bool MQTTModule::publishConfigModuleAt(size_t idx, bool retained)
     }
     if (!any) return false;
     if (!publish(moduleTopic, stateCfgBuf, 1, retained)) {
-        if (lowHeapSinceMs_ != 0U) LOGD("cfg/%s publish deferred", cfgModules[idx]);
+        if (lowHeapSinceMs_ != 0U) MQTT_DLOG("cfg/%s publish deferred", cfgModules[idx]);
         else LOGW("cfg/%s publish failed", cfgModules[idx]);
         return false;
     }
@@ -507,7 +588,7 @@ bool MQTTModule::publishConfigModuleByName_(const char* module, bool retained)
             snprintf(stateCfgBuf, sizeof(stateCfgBuf), "{\"ok\":false}");
         }
         if (!publish(moduleTopic, stateCfgBuf, 1, retained)) {
-            if (lowHeapSinceMs_ != 0U) LOGD("cfg/%s publish deferred (truncated payload)", module);
+            if (lowHeapSinceMs_ != 0U) MQTT_DLOG("cfg/%s publish deferred (truncated payload)", module);
             else LOGW("cfg/%s publish failed (truncated payload)", module);
             return false;
         }
@@ -516,7 +597,7 @@ bool MQTTModule::publishConfigModuleByName_(const char* module, bool retained)
     if (!any) return false;
 
     if (!publish(moduleTopic, stateCfgBuf, 1, retained)) {
-        if (lowHeapSinceMs_ != 0U) LOGD("cfg/%s publish deferred", module);
+        if (lowHeapSinceMs_ != 0U) MQTT_DLOG("cfg/%s publish deferred", module);
         else LOGW("cfg/%s publish failed", module);
         return false;
     }
@@ -537,33 +618,92 @@ bool MQTTModule::buildCfgTopic_(const char* module, char* out, size_t outLen) co
 void MQTTModule::publishTimeSchedulerSlots(bool retained, const char* rootTopic)
 {
     if (!rootTopic || rootTopic[0] == '\0') return;
+    snprintf(schedCfgRootTopic_, sizeof(schedCfgRootTopic_), "%s", rootTopic);
+    schedCfgRetained_ = retained;
+    schedCfgRootPending_ = true;
+    schedCfgSlotCursor_ = 0;
+    schedCfgNextMs_ = millis();
+    schedCfgRetryBackoffMs_ = 0;
+    schedCfgActive_ = true;
+}
 
-    // Root topic stays small and indicates that details are split by slot.
-    if (!publish(rootTopic, "{\"mode\":\"per_slot\",\"slots\":16}", 1, retained)) {
-        if (lowHeapSinceMs_ != 0U) LOGD("cfg/time/scheduler root publish deferred (mqtt pressure)");
-        else LOGW("cfg/time/scheduler root publish failed");
+void MQTTModule::runTimeSchedulerSlots_(uint32_t nowMs)
+{
+    if (!schedCfgActive_) return;
+    if (state != MQTTState::Connected) {
+        schedCfgActive_ = false;
+        schedCfgRootPending_ = false;
+        schedCfgSlotCursor_ = 0;
+        schedCfgNextMs_ = 0;
+        schedCfgRetryBackoffMs_ = 0;
+        return;
+    }
+    if ((int32_t)(nowMs - schedCfgNextMs_) < 0) return;
+
+    constexpr uint32_t kSlotStepMs = Limits::Mqtt::Timing::CfgRampStepMs;
+    constexpr uint32_t kRetryMinMs = 250U;
+    constexpr uint32_t kRetryMaxMs = 5000U;
+    auto scheduleRetry = [&]() {
+        uint32_t backoff = schedCfgRetryBackoffMs_;
+        if (backoff == 0U) backoff = kRetryMinMs;
+        else if (backoff >= (kRetryMaxMs / 2U)) backoff = kRetryMaxMs;
+        else backoff *= 2U;
+        schedCfgRetryBackoffMs_ = backoff;
+        schedCfgNextMs_ = nowMs + backoff;
+    };
+    auto scheduleNextSlot = [&]() {
+        schedCfgRetryBackoffMs_ = 0;
+        schedCfgNextMs_ = nowMs + kSlotStepMs;
+    };
+
+    if (schedCfgRootPending_) {
+        if (!publish(schedCfgRootTopic_, "{\"mode\":\"per_slot\",\"slots\":16}", 1, schedCfgRetained_)) {
+            if (lowHeapSinceMs_ != 0U) MQTT_DLOG("cfg/time/scheduler root publish deferred (mqtt pressure)");
+            else LOGW("cfg/time/scheduler root publish failed");
+            scheduleRetry();
+            return;
+        }
+        schedCfgRootPending_ = false;
+        scheduleNextSlot();
+        return;
     }
 
     if (!timeSchedSvc || !timeSchedSvc->getSlot) {
         LOGW("time.scheduler service unavailable for cfg publication");
+        schedCfgActive_ = false;
+        return;
+    }
+    if (schedCfgSlotCursor_ >= TIME_SCHED_MAX_SLOTS) {
+        schedCfgActive_ = false;
+        schedCfgNextMs_ = 0;
+        schedCfgRetryBackoffMs_ = 0;
         return;
     }
 
+    const uint8_t slot = schedCfgSlotCursor_;
     char slotTopic[Limits::Mqtt::Buffers::DynamicTopic] = {0};
-    for (uint8_t slot = 0; slot < TIME_SCHED_MAX_SLOTS; ++slot) {
-        snprintf(slotTopic, sizeof(slotTopic), "%s/slot%u", rootTopic, (unsigned)slot);
+    snprintf(slotTopic, sizeof(slotTopic), "%s/slot%u", schedCfgRootTopic_, (unsigned)slot);
 
-        TimeSchedulerSlot def{};
-        if (!timeSchedSvc->getSlot(timeSchedSvc->ctx, slot, &def)) {
+    TimeSchedulerSlot def{};
+    const bool hasSlot = timeSchedSvc->getSlot(timeSchedSvc->ctx, slot, &def);
+    const uint16_t slotBit = (uint16_t)(1U << slot);
+    if (!hasSlot) {
+        const bool known = (schedCfgKnownMask_ & slotBit) != 0U;
+        const bool wasUsed = (schedCfgUsedMask_ & slotBit) != 0U;
+        const bool publishUnused = (!known) || wasUsed;
+        if (publishUnused) {
             snprintf(stateCfgBuf, sizeof(stateCfgBuf),
                      "{\"slot\":%u,\"used\":false}",
                      (unsigned)slot);
-            if (!publish(slotTopic, stateCfgBuf, 1, retained)) {
-                LOGD("cfg/time/scheduler slot%u publish deferred (unused)", (unsigned)slot);
+            if (!publish(slotTopic, stateCfgBuf, 1, schedCfgRetained_)) {
+                MQTT_DLOG("cfg/time/scheduler slot%u publish deferred (unused)", (unsigned)slot);
+                scheduleRetry();
+                return;
             }
-            continue;
         }
-
+        schedCfgKnownMask_ |= slotBit;
+        schedCfgUsedMask_ &= (uint16_t)(~slotBit);
+    } else {
         const char* mode = (def.mode == TimeSchedulerMode::OneShotEpoch) ? "one_shot_epoch" : "recurring_clock";
         snprintf(stateCfgBuf, sizeof(stateCfgBuf),
                  "{\"slot\":%u,\"used\":true,\"event_id\":%u,\"label\":\"%s\",\"enabled\":%s,"
@@ -585,11 +725,24 @@ void MQTTModule::publishTimeSchedulerSlots(bool retained, const char* rootTopic)
                  (unsigned)def.endHour,
                  (unsigned)def.endMinute,
                  (unsigned long long)def.endEpochSec);
-        if (!publish(slotTopic, stateCfgBuf, 1, retained)) {
-            if (lowHeapSinceMs_ != 0U) LOGD("cfg/time/scheduler slot%u publish deferred", (unsigned)slot);
+        if (!publish(slotTopic, stateCfgBuf, 1, schedCfgRetained_)) {
+            if (lowHeapSinceMs_ != 0U) MQTT_DLOG("cfg/time/scheduler slot%u publish deferred", (unsigned)slot);
             else LOGW("cfg/time/scheduler slot%u publish failed", (unsigned)slot);
+            scheduleRetry();
+            return;
         }
+        schedCfgKnownMask_ |= slotBit;
+        schedCfgUsedMask_ |= slotBit;
     }
+
+    ++schedCfgSlotCursor_;
+    if (schedCfgSlotCursor_ >= TIME_SCHED_MAX_SLOTS) {
+        schedCfgActive_ = false;
+        schedCfgNextMs_ = 0;
+        schedCfgRetryBackoffMs_ = 0;
+        return;
+    }
+    scheduleNextSlot();
 }
 
 bool MQTTModule::publish(const char* topic, const char* payload, int qos, bool retain)
@@ -620,10 +773,10 @@ bool MQTTModule::publish(const char* topic, const char* payload, int qos, bool r
         } else {
             if ((now - lastLowHeapWarnMs_) >= 5000U) {
                 lastLowHeapWarnMs_ = now;
-                LOGD("skip mqtt publish (transient low heap free=%lu largest=%lu topic=%s)",
-                     (unsigned long)freeHeap,
-                     (unsigned long)largest,
-                     topic);
+                MQTT_DLOG("skip mqtt publish (transient low heap free=%lu largest=%lu topic=%s)",
+                          (unsigned long)freeHeap,
+                          (unsigned long)largest,
+                          topic);
             }
         }
         return false;
@@ -651,13 +804,27 @@ bool MQTTModule::publish(const char* topic, const char* payload, int qos, bool r
         LOGW("mqtt publish rejected topic=%s qos=%d retain=%d", topic, qos, retain ? 1 : 0);
         return false;
     }
-    if (qos > 0) {
-        const size_t payloadLen = strlen(payload);
-        LOGD("MQTT TX ok id=%d qos=%d retain=%d len=%u",
-             packetId,
-             qos,
-             retain ? 1 : 0,
-             (unsigned)payloadLen);
+    const size_t payloadLen = strlen(payload);
+    const char* logTopic = topic;
+    const size_t baseLen = strnlen(cfgData.baseTopic, sizeof(cfgData.baseTopic));
+    const size_t devLen = strnlen(deviceId, sizeof(deviceId));
+    if (baseLen > 0U && devLen > 0U &&
+        strncmp(topic, cfgData.baseTopic, baseLen) == 0 &&
+        topic[baseLen] == '/' &&
+        strncmp(topic + baseLen + 1U, deviceId, devLen) == 0 &&
+        topic[baseLen + 1U + devLen] == '/') {
+        logTopic = topic + baseLen + 1U + devLen + 1U;
+    }
+
+    // Temporary diagnostics: also log qos0 publishes to trace runtime routing.
+    constexpr bool kLogQos0Tx = true;
+    if (qos > 0 || kLogQos0Tx) {
+        MQTT_DLOG("MQTT TX ok id=%d qos=%d retain=%d len=%u topic=%s",
+                  packetId,
+                  qos,
+                  retain ? 1 : 0,
+                  (unsigned)payloadLen,
+                  logTopic);
     }
     return true;
 }
@@ -756,7 +923,8 @@ void MQTTModule::formatTopic(char* out, size_t outLen, const char* suffix) const
 }
 
 bool MQTTModule::addRuntimePublisher(const char* topic, uint32_t periodMs, int qos, bool retain,
-                                     bool (*build)(MQTTModule* self, char* out, size_t outLen))
+                                     bool (*build)(MQTTModule* self, char* out, size_t outLen),
+                                     bool allowNoPayload)
 {
     if (!topic || !build) return false;
     if (publisherCount >= Limits::Mqtt::Capacity::MaxPublishers) return false;
@@ -766,6 +934,7 @@ bool MQTTModule::addRuntimePublisher(const char* topic, uint32_t periodMs, int q
     p.qos = qos;
     p.retain = retain;
     p.build = build;
+    p.allowNoPayload = allowNoPayload;
     p.lastMs = 0;
     return true;
 }
@@ -946,8 +1115,16 @@ void MQTTModule::init(ConfigStore& cfg, ServiceRegistry& services) {
     alarmsMetaPending_ = false;
     alarmsFullSyncPending_ = false;
     alarmsPackPending_ = false;
+    statusOnlinePending_ = false;
+    statusOnlineDeadlineMs_ = 0;
+    statusOnlineNextTryMs_ = 0;
     alarmsRetryBackoffMs_ = 0;
     alarmsRetryNextMs_ = 0;
+    schedCfgActive_ = false;
+    schedCfgRootPending_ = false;
+    schedCfgSlotCursor_ = 0;
+    schedCfgNextMs_ = 0;
+    schedCfgRetryBackoffMs_ = 0;
     syncRxMetrics_();
 
     mqttSvc.publish = MQTTModule::svcPublish;
@@ -1141,16 +1318,53 @@ void MQTTModule::loop() {
         }
         processPendingCfgBranches_();
         runConfigRamp_(now);
+        runTimeSchedulerSlots_(now);
         for (uint8_t i = 0; i < publisherCount; ++i) {
             RuntimePublisher& p = publishers[i];
             if (!p.topic || !p.build) continue;
             if (p.periodMs == 0) continue;
             if ((uint32_t)(now - p.lastMs) < p.periodMs) continue;
+            p.lastMs = now;
             if (p.build(this, publishBuf, sizeof(publishBuf))) {
                 publish(p.topic, publishBuf, p.qos, p.retain);
-                p.lastMs = now;
-            } else {
+            } else if (!p.allowNoPayload) {
                 LOGW("runtime snapshot build failed topic=%s (buffer=%u)", p.topic, (unsigned)sizeof(publishBuf));
+            }
+        }
+
+        if (statusOnlinePending_ && (int32_t)(now - statusOnlineNextTryMs_) >= 0) {
+            const bool burstDone =
+                !_pendingPublish &&
+                !cfgRampActive_ &&
+                !cfgRampRestartRequested_ &&
+                (pendingCfgBranchCount_ == 0U) &&
+                !schedCfgActive_ &&
+                !schedCfgRootPending_ &&
+                !alarmsMetaPending_ &&
+                !alarmsFullSyncPending_ &&
+                !alarmsPackPending_ &&
+                (pendingAlarmCount_ == 0U);
+            const bool deadlineReached =
+                (statusOnlineDeadlineMs_ != 0U) && ((int32_t)(now - statusOnlineDeadlineMs_) >= 0);
+
+            if (burstDone || deadlineReached) {
+                const bool statusOk = publish(topicStatus, "{\"online\":true}", 1, true);
+                if (statusOk) {
+                    statusOnlinePending_ = false;
+                    statusOnlineDeadlineMs_ = 0;
+                    statusOnlineNextTryMs_ = 0;
+                    MQTT_DLOG("status publish online ok topic=%s deferred=%d", MqttTopics::SuffixStatus, deadlineReached ? 1 : 0);
+                } else {
+                    const uint32_t freeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+                    const uint32_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+                    const int outboxBytes = client_ ? esp_mqtt_client_get_outbox_size(client_) : -1;
+                    LOGW("status publish online failed free=%lu largest=%lu outbox=%d deferred=%d",
+                         (unsigned long)freeHeap,
+                         (unsigned long)largest,
+                         outboxBytes,
+                         deadlineReached ? 1 : 0);
+                    statusOnlineNextTryMs_ = now + 1000U;
+                }
             }
         }
         break;

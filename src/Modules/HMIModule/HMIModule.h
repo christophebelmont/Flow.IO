@@ -16,7 +16,7 @@ public:
     const char* moduleId() const override { return "hmi"; }
     const char* taskName() const override { return "HMI"; }
     BaseType_t taskCore() const override { return 1; }
-    uint16_t taskStackSize() const override { return 6144; }
+    uint16_t taskStackSize() const override { return 4608; }
 
     uint8_t dependencyCount() const override { return 3; }
     const char* dependency(uint8_t i) const override {

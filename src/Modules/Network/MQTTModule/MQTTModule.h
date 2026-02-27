@@ -62,10 +62,12 @@ public:
         bool retain = false;
         uint32_t lastMs = 0;
         bool (*build)(MQTTModule* self, char* out, size_t outLen) = nullptr;
+        bool allowNoPayload = false;
     };
 
     bool addRuntimePublisher(const char* topic, uint32_t periodMs, int qos, bool retain,
-                             bool (*build)(MQTTModule* self, char* out, size_t outLen));
+                             bool (*build)(MQTTModule* self, char* out, size_t outLen),
+                             bool allowNoPayload = false);
     bool publish(const char* topic, const char* payload, int qos = 0, bool retain = false);
     void formatTopic(char* out, size_t outLen, const char* suffix) const;
     bool isConnected() const { return state == MQTTState::Connected; }
@@ -169,6 +171,7 @@ private:
     bool publishConfigModuleAt(size_t idx, bool retained);
     bool publishConfigBlocksFromPatch(const char* patchJson, bool retained);
     void publishTimeSchedulerSlots(bool retained, const char* rootTopic);
+    void runTimeSchedulerSlots_(uint32_t nowMs);
     bool buildCfgTopic_(const char* module, char* out, size_t outLen) const;
     void enqueueCfgBranch_(uint16_t branchId);
     uint8_t takePendingCfgBranches_(uint16_t* out, uint8_t maxItems);
@@ -177,7 +180,7 @@ private:
     void runConfigRamp_(uint32_t nowMs);
 
     void onConnect_(bool sessionPresent);
-    void onDisconnect_();
+    void onDisconnect_(const esp_mqtt_error_codes_t* err);
     void onMessage_(const char* topic, size_t topicLen,
                     const char* payload, size_t len, size_t index, size_t total);
     bool ensureClient_();
@@ -212,6 +215,15 @@ private:
     bool cfgRampRestartRequested_ = false;
     uint8_t cfgRampIndex_ = 0;
     uint32_t cfgRampNextMs_ = 0;
+    bool schedCfgActive_ = false;
+    bool schedCfgRootPending_ = false;
+    bool schedCfgRetained_ = true;
+    char schedCfgRootTopic_[Limits::Mqtt::Buffers::DynamicTopic] = {0};
+    uint8_t schedCfgSlotCursor_ = 0;
+    uint32_t schedCfgNextMs_ = 0;
+    uint32_t schedCfgRetryBackoffMs_ = 0;
+    uint16_t schedCfgKnownMask_ = 0;
+    uint16_t schedCfgUsedMask_ = 0;
     static constexpr uint8_t PendingAlarmIdsMax = Limits::Alarm::MaxAlarms;
     AlarmId pendingAlarmIds_[PendingAlarmIdsMax] = {};
     uint8_t pendingAlarmCount_ = 0;
@@ -219,6 +231,9 @@ private:
     bool alarmsMetaPending_ = false;
     bool alarmsFullSyncPending_ = false;
     bool alarmsPackPending_ = false;
+    bool statusOnlinePending_ = false;
+    uint32_t statusOnlineDeadlineMs_ = 0;
+    uint32_t statusOnlineNextTryMs_ = 0;
     uint32_t alarmsRetryBackoffMs_ = 0;
     uint32_t alarmsRetryNextMs_ = 0;
     uint32_t lastLowHeapWarnMs_ = 0;

@@ -120,6 +120,9 @@ struct RuntimeSnapshotRoute {
     uint32_t lastPublishedTs = 0;
     bool startupForce = false;
     bool startupPublished = false;
+    bool retryPending = false;
+    uint32_t retryBackoffMs = 0;
+    uint32_t retryNextMs = 0;
 };
 static RuntimeSnapshotRoute gRuntimeRoutes[Limits::MaxRuntimeRoutes]{};
 static uint8_t gRuntimeRouteCount = 0;
@@ -207,6 +210,9 @@ static bool registerRuntimeProvider(MQTTModule& mqtt, const IRuntimeSnapshotProv
             (strncmp(suffix, "rt/pdm/state/", 13) == 0);
         route.lastPublishedTs = 0;
         route.startupPublished = false;
+        route.retryPending = false;
+        route.retryBackoffMs = 0;
+        route.retryNextMs = 0;
         mqtt.formatTopic(route.topic, sizeof(route.topic), suffix);
         any = true;
     }
@@ -220,8 +226,9 @@ static bool publishRuntimeStates(MQTTModule* mqtt, char* out, size_t len) {
     gIoDataStore = ds;
 
     RuntimeMuxStats st{};
+    const uint32_t nowMs = millis();
     st.seq = gRuntimeMuxStats.seq + 1;
-    st.tsMs = millis();
+    st.tsMs = nowMs;
     st.routesTotal = gRuntimeRouteCount;
     uint32_t activeDirtyMask = mqtt->activeSensorsDirtyMask();
     if (activeDirtyMask == 0U) activeDirtyMask = (DIRTY_SENSORS | DIRTY_ACTUATORS);
@@ -231,7 +238,8 @@ static bool publishRuntimeStates(MQTTModule* mqtt, char* out, size_t len) {
         RuntimeSnapshotRoute& route = gRuntimeRoutes[i];
         if (!route.provider) continue;
         const bool forceStartupRoute = route.startupForce && !route.startupPublished;
-        if (!forceStartupRoute && (route.dirtyMask & activeDirtyMask) == 0U) {
+        const bool retryDue = route.retryPending && ((int32_t)(nowMs - route.retryNextMs) >= 0);
+        if (!forceStartupRoute && !retryDue && (route.dirtyMask & activeDirtyMask) == 0U) {
             ++st.routesSkippedMask;
             continue;
         }
@@ -241,7 +249,7 @@ static bool publishRuntimeStates(MQTTModule* mqtt, char* out, size_t len) {
             ++st.buildErrors;
             continue;
         }
-        if (!forceStartupRoute && ts <= route.lastPublishedTs) {
+        if (!forceStartupRoute && !retryDue && ts <= route.lastPublishedTs) {
             ++st.routesSkippedNoChange;
             continue;
         }
@@ -249,8 +257,20 @@ static bool publishRuntimeStates(MQTTModule* mqtt, char* out, size_t len) {
         if (mqtt->publish(route.topic, out, 0, false)) {
             route.lastPublishedTs = ts;
             if (route.startupForce) route.startupPublished = true;
+            route.retryPending = false;
+            route.retryBackoffMs = 0;
+            route.retryNextMs = 0;
             ++st.routesPublished;
         } else {
+            constexpr uint32_t kRetryMinMs = 250U;
+            constexpr uint32_t kRetryMaxMs = 5000U;
+            uint32_t backoff = route.retryBackoffMs;
+            if (backoff == 0U) backoff = kRetryMinMs;
+            else if (backoff >= (kRetryMaxMs / 2U)) backoff = kRetryMaxMs;
+            else backoff *= 2U;
+            route.retryPending = true;
+            route.retryBackoffMs = backoff;
+            route.retryNextMs = nowMs + backoff;
             ++st.publishErrors;
         }
     }
@@ -597,7 +617,9 @@ void setup() {
     mqttModule.formatTopic(topicNetworkState, sizeof(topicNetworkState), "rt/network/state");
     mqttModule.formatTopic(topicSystemState, sizeof(topicSystemState), "rt/system/state");
     mqttModule.setSensorsPublisher(topicRuntimeMux, publishRuntimeStates);
-    mqttModule.addRuntimePublisher(topicRuntimeState, 30000, 0, false, buildRuntimeMuxState);
+    // Dedicated retry tick for runtime routes; callback intentionally returns false (no topic payload).
+    mqttModule.addRuntimePublisher(topicRuntimeMux, 10000, 0, false, publishRuntimeStates, true);
+    mqttModule.addRuntimePublisher(topicRuntimeState, 60000, 0, false, buildRuntimeMuxState);
     mqttModule.addRuntimePublisher(topicNetworkState, 60000, 0, false, buildNetworkSnapshot);
     mqttModule.addRuntimePublisher(topicSystemState, 60000, 0, false, buildSystemSnapshot);
     startBootOrchestrator();

@@ -534,12 +534,12 @@ bool PoolLogicModule::buildRuntimeSnapshot(uint8_t idx, char* out, size_t len, u
     if (st.sampleValid) {
         wrote = snprintf(
             out, len,
-            "{\"id\":\"%s\",\"input\":%.3f,\"setpoint\":%.3f,\"error\":%.3f,"
-            "\"enabled\":%s,\"demand\":%s,\"actual\":%s,"
+            "{\"i\":\"%s\",\"in\":%.3f,\"sp\":%.3f,\"er\":%.3f,"
+            "\"en\":%s,\"dm\":%s,\"ac\":%s,"
             "\"kp\":%.6f,\"ki\":%.6f,\"kd\":%.6f,"
-            "\"window_ms\":%ld,\"sample_ms\":%ld,\"min_on_ms\":%ld,"
-            "\"output_on_ms\":%lu,\"window_elapsed_ms\":%lu,\"compute_ts\":%lu,"
-            "\"electrolyse_mode\":%s,\"ts\":%lu}",
+            "\"w\":%ld,\"sm\":%ld,\"mo\":%ld,"
+            "\"on\":%lu,\"we\":%lu,\"ct\":%lu,"
+            "\"em\":%s,\"t\":%lu}",
             isPh ? "ph" : "orp",
             (double)st.sampleInput,
             (double)st.sampleSetpoint,
@@ -562,12 +562,12 @@ bool PoolLogicModule::buildRuntimeSnapshot(uint8_t idx, char* out, size_t len, u
     } else {
         wrote = snprintf(
             out, len,
-            "{\"id\":\"%s\",\"input\":null,\"setpoint\":%.3f,\"error\":null,"
-            "\"enabled\":%s,\"demand\":%s,\"actual\":%s,"
+            "{\"i\":\"%s\",\"in\":null,\"sp\":%.3f,\"er\":null,"
+            "\"en\":%s,\"dm\":%s,\"ac\":%s,"
             "\"kp\":%.6f,\"ki\":%.6f,\"kd\":%.6f,"
-            "\"window_ms\":%ld,\"sample_ms\":%ld,\"min_on_ms\":%ld,"
-            "\"output_on_ms\":%lu,\"window_elapsed_ms\":%lu,\"compute_ts\":0,"
-            "\"electrolyse_mode\":%s,\"ts\":%lu}",
+            "\"w\":%ld,\"sm\":%ld,\"mo\":%ld,"
+            "\"on\":%lu,\"we\":%lu,\"ct\":0,"
+            "\"em\":%s,\"t\":%lu}",
             isPh ? "ph" : "orp",
             (double)(isPh ? phSetpoint_ : orpSetpoint_),
             regulationEnabled ? "true" : "false",
@@ -737,7 +737,7 @@ bool PoolLogicModule::cmdAutoModeSet_(const CommandRequest& req, char* reply, si
     (void)cfgStore_->set(autoModeVar_, requested);
     autoMode_ = requested;
 
-    snprintf(reply, replyLen, "{\"ok\":true,\"auto_mode\":%s}", requested ? "true" : "false");
+    snprintf(reply, replyLen, "{\"ok\":true,\"value\":%s}", requested ? "true" : "false");
     return true;
 }
 

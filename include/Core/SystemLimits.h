@@ -36,7 +36,7 @@ constexpr uint8_t EventQueueLen = 16;
 namespace Mqtt {
 
 /** @brief MQTT module task stack size returned by `MQTTModule::taskStackSize`. */
-constexpr uint16_t TaskStackSize = 6144;
+constexpr uint16_t TaskStackSize = 4608;
 
 /** @brief MQTT static capacities (queues, tables). */
 namespace Capacity {
@@ -96,7 +96,7 @@ constexpr size_t CmdModule = 32;
 /** @brief MQTT timing constants (runtime behavior). */
 namespace Timing {
 /** @brief Delay in ms between each retained `cfg/<module>` publish during startup ramp in `MQTTModule`. */
-constexpr uint32_t CfgRampStepMs = 100;
+constexpr uint32_t CfgRampStepMs = 300;
 /** @brief Startup retry window in ms for forced actuator runtime publishes in `MQTTModule`. */
 constexpr uint32_t StartupActuatorRetryMs = 3000;
 /** @brief Delay in ms while MQTT is disabled in `MQTTModule::loop`. */

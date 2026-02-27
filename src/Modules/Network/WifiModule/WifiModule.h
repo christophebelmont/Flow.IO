@@ -31,7 +31,7 @@ public:
     /** @brief Pin network module on core 0. */
     BaseType_t taskCore() const override { return 0; }
     /** @brief Give extra headroom to WiFi stack/callback activity. */
-    uint16_t taskStackSize() const override { return 4096; }
+    uint16_t taskStackSize() const override { return 3072; }
 
     /** @brief Depends on log hub and datastore. */
     uint8_t dependencyCount() const override { return 2; }
