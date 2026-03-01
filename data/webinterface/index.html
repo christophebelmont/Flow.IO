@@ -10,7 +10,7 @@
 <body>
   <div id="overlay" class="overlay"></div>
   <div class="app">
-    <aside id="drawer" class="drawer">
+    <aside id="drawer" class="drawer collapsed">
       <div class="drawer-header">
         <button id="menuToggle" class="menu-btn" data-menu-toggle aria-label="Toggle menu">=</button>
         <div class="drawer-user">Superviseur</div>
@@ -21,7 +21,8 @@
         <button class="menu-item" data-page="page-upgrade"><span class="ico"><img class="ico-svg" src="/assets/icon-upgrade.svg" alt="" /></span><span class="label">Mise à jour Firmware</span></button>
         <button class="menu-item" data-page="page-config"><span class="ico"><img class="ico-svg" src="/assets/icon-connections.svg" alt="" /></span><span class="label">Réseau</span></button>
         <button class="menu-item" data-page="page-system"><span class="ico"><img class="ico-svg" src="/assets/icon-system.svg" alt="" /></span><span class="label">Système</span></button>
-        <button class="menu-item" data-page="page-control"><span class="ico"><img class="ico-svg" src="/assets/icon-config.svg?v=2" alt="" /></span><span class="label">Configuration</span></button>
+        <button class="menu-item" data-page="page-control"><span class="ico"><img class="ico-svg" src="/assets/icon-config.svg?v=2" alt="" /></span><span class="label">Config Flow.IO</span></button>
+        <button class="menu-item" data-page="page-local-config"><span class="ico"><img class="ico-svg" src="/assets/icon-settings.svg?v=1" alt="" /></span><span class="label">Config Superviseur</span></button>
       </nav>
       <div class="drawer-footer">
         <span class="app-icon-shell"><img class="app-icon" src="/assets/flowio-logo-v2.png" alt="Flow.IO" /></span>
@@ -231,6 +232,36 @@
             <div id="flowCfgStatus" class="config-status">Configuration distante prête.</div>
             <div class="control-actions">
               <button id="flowCfgApply" class="btn-primary">Appliquer</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="page-local-config" class="page">
+        <div class="topbar">
+          <h1>Configuration locale Superviseur</h1>
+          <button id="supCfgRefresh" class="btn-tonal btn-icon-only" aria-label="Rafraîchir la configuration locale" title="Rafraîchir la configuration locale">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path fill="currentColor" d="M12 5a7 7 0 0 1 6.65 4.82.75.75 0 1 0 1.43-.47A8.5 8.5 0 0 0 3.5 12h1.75a.75.75 0 0 0 0-1.5H3.63A8.5 8.5 0 0 0 12 20.5a8.47 8.47 0 0 0 7.86-5.25.75.75 0 1 0-1.39-.56A7 7 0 1 1 12 5Z"/>
+              <path fill="currentColor" d="M18.5 3.25a.75.75 0 0 0-1.5 0V7h-3.75a.75.75 0 0 0 0 1.5h4.5a.75.75 0 0 0 .75-.75v-4.5Z"/>
+            </svg>
+          </button>
+        </div>
+        <div class="card control-card">
+          <div class="control-shell">
+            <div class="control-section-title">Module</div>
+            <div class="form-grid">
+              <div class="field full">
+                <label for="supCfgModuleSelect">Branche de configuration locale</label>
+                <select id="supCfgModuleSelect"></select>
+              </div>
+            </div>
+            <div class="control-divider"></div>
+            <div class="control-section-title">Variables</div>
+            <div id="supCfgFields" class="control-fields"></div>
+            <div id="supCfgStatus" class="config-status">Configuration locale prête.</div>
+            <div class="control-actions">
+              <button id="supCfgApply" class="btn-primary">Appliquer localement</button>
             </div>
           </div>
         </div>

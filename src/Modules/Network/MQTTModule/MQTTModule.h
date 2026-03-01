@@ -127,9 +127,8 @@ private:
         char payload[Limits::Mqtt::Buffers::RxPayload];
     };
     QueueHandle_t rxQ = nullptr;
-    char ackBuf[Limits::Mqtt::Buffers::Ack] = {0};
     char replyBuf[Limits::Mqtt::Buffers::Reply] = {0};
-    char stateCfgBuf[Limits::Mqtt::Buffers::StateCfg] = {0};
+    // Shared scratch buffer for ACK, cfg payload serialization and runtime publishes.
     char publishBuf[Limits::Mqtt::Buffers::Publish] = {0};
     MqttService mqttSvc{ nullptr, nullptr, nullptr, nullptr };
 

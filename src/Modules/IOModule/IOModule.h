@@ -143,6 +143,7 @@ public:
 #endif
 
     void init(ConfigStore& cfg, ServiceRegistry& services) override;
+    void onConfigLoaded(ConfigStore&, ServiceRegistry&) override;
     void loop() override;
 
     void setOneWireBuses(OneWireBus* water, OneWireBus* air);

@@ -28,6 +28,9 @@
       if (pageId === 'page-control') {
         onControlPageShown().catch(() => {});
       }
+      if (pageId === 'page-local-config') {
+        onLocalConfigPageShown().catch(() => {});
+      }
       closeMobileDrawer();
     }
 
@@ -105,6 +108,11 @@
     const flowCfgSections = document.getElementById('flowCfgSections');
     const flowCfgFields = document.getElementById('flowCfgFields');
     const flowCfgStatus = document.getElementById('flowCfgStatus');
+    const supCfgModuleSelect = document.getElementById('supCfgModuleSelect');
+    const supCfgRefreshBtn = document.getElementById('supCfgRefresh');
+    const supCfgApplyBtn = document.getElementById('supCfgApply');
+    const supCfgFields = document.getElementById('supCfgFields');
+    const supCfgStatus = document.getElementById('supCfgStatus');
     let wifiScanPollTimer = null;
     let flowCfgCurrentModule = '';
     let flowCfgCurrentData = {};
@@ -114,6 +122,9 @@
     let flowCfgDocsLoaded = false;
     let wifiConfigLoadedOnce = false;
     let flowCfgLoadedOnce = false;
+    let supCfgLoadedOnce = false;
+    let supCfgCurrentModule = '';
+    let supCfgCurrentData = {};
     let wifiScanAutoRequested = false;
 
     const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -221,6 +232,7 @@
     });
     refreshAutoscrollUi();
     flowCfgApplyBtn.disabled = true;
+    supCfgApplyBtn.disabled = true;
 
     function setUpgradeProgress(value) {
       const p = Math.max(0, Math.min(100, Number(value) || 0));
@@ -335,6 +347,18 @@
         return;
       }
       await chargerFlowCfgModules(false);
+    }
+
+    async function onLocalConfigPageShown() {
+      if (!flowCfgDocsLoaded) {
+        await chargerFlowCfgDocs();
+      }
+      if (!supCfgLoadedOnce) {
+        supCfgLoadedOnce = true;
+        await chargerSupervisorCfgModules(false);
+        return;
+      }
+      await chargerSupervisorCfgModules(true);
     }
 
     function boolFlowStatus(v) {
@@ -818,8 +842,8 @@
       }
     }
 
-    function renderFlowCfgFields(dataObj) {
-      flowCfgFields.innerHTML = '';
+    function renderConfigFields(containerEl, moduleName, dataObj) {
+      containerEl.innerHTML = '';
       const data = (dataObj && typeof dataObj === 'object') ? dataObj : {};
       const keys = Object.keys(data).sort();
       if (keys.length === 0) {
@@ -829,7 +853,7 @@
         label.className = 'control-label';
         label.textContent = 'Aucun champ configurable dans cette branche.';
         row.appendChild(label);
-        flowCfgFields.appendChild(row);
+        containerEl.appendChild(row);
         return;
       }
 
@@ -838,7 +862,7 @@
         const row = document.createElement('div');
         row.className = 'control-row';
 
-        const doc = flowCfgDocFor(flowCfgCurrentModule, key);
+        const doc = flowCfgDocFor(moduleName, key);
         const labelWrap = document.createElement('div');
         labelWrap.className = 'control-label-wrap';
         const label = document.createElement('span');
@@ -899,15 +923,23 @@
           row.appendChild(input);
         }
 
-        flowCfgFields.appendChild(row);
+        containerEl.appendChild(row);
       }
     }
 
-    function buildFlowCfgPatchJson() {
-      if (!flowCfgCurrentModule) throw new Error('branche non sélectionnée');
+    function renderFlowCfgFields(dataObj) {
+      renderConfigFields(flowCfgFields, flowCfgCurrentModule, dataObj);
+    }
+
+    function renderSupervisorCfgFields(dataObj) {
+      renderConfigFields(supCfgFields, supCfgCurrentModule, dataObj);
+    }
+
+    function buildPatchJsonFromFields(fieldsContainer, moduleName) {
+      if (!moduleName) throw new Error('branche non sélectionnée');
       const patch = {};
       const modulePatch = {};
-      const fields = flowCfgFields.querySelectorAll('[data-key]');
+      const fields = fieldsContainer.querySelectorAll('[data-key]');
       fields.forEach((el) => {
         const key = el.dataset.key;
         const kind = el.dataset.kind;
@@ -931,8 +963,16 @@
         if (masked && raw.length === 0) return;
         modulePatch[key] = raw;
       });
-      patch[flowCfgCurrentModule] = modulePatch;
+      patch[moduleName] = modulePatch;
       return JSON.stringify(patch);
+    }
+
+    function buildFlowCfgPatchJson() {
+      return buildPatchJsonFromFields(flowCfgFields, flowCfgCurrentModule);
+    }
+
+    function buildSupervisorCfgPatchJson() {
+      return buildPatchJsonFromFields(supCfgFields, supCfgCurrentModule);
     }
 
     async function chargerFlowCfgModule(moduleName) {
@@ -1014,6 +1054,101 @@
         await chargerFlowCfgModule(flowCfgCurrentModule);
       } catch (err) {
         flowCfgStatus.textContent = 'Application cfg échouée: ' + err;
+      }
+    }
+
+    function resetSupervisorCfgEditor(message) {
+      supCfgCurrentModule = '';
+      supCfgCurrentData = {};
+      supCfgFields.innerHTML = '';
+      supCfgApplyBtn.disabled = true;
+      if (message) {
+        supCfgStatus.textContent = message;
+      }
+    }
+
+    async function chargerSupervisorCfgModule(moduleName) {
+      const m = nettoyerNomFlowCfg(moduleName);
+      if (!m) {
+        resetSupervisorCfgEditor('Aucune branche locale sélectionnée.');
+        return;
+      }
+      try {
+        const res = await fetch('/api/supervisorcfg/module?name=' + encodeURIComponent(m), { cache: 'no-store' });
+        const data = await res.json();
+        if (!res.ok || !data || data.ok !== true || typeof data.data !== 'object') {
+          throw new Error('lecture module impossible');
+        }
+        supCfgCurrentModule = m;
+        supCfgCurrentData = data.data;
+        renderSupervisorCfgFields(supCfgCurrentData);
+        supCfgApplyBtn.disabled = false;
+        supCfgStatus.textContent = data.truncated
+          ? 'Branche locale chargée (tronquée, buffer atteint).'
+          : 'Branche locale chargée.';
+      } catch (err) {
+        resetSupervisorCfgEditor('Chargement branche locale échoué: ' + err);
+      }
+    }
+
+    async function chargerSupervisorCfgModules(keepCurrentSelection) {
+      try {
+        const res = await fetch('/api/supervisorcfg/modules', { cache: 'no-store' });
+        const data = await res.json();
+        if (!res.ok || !data || data.ok !== true || !Array.isArray(data.modules)) {
+          throw new Error('liste modules indisponible');
+        }
+
+        const modules = data.modules
+          .filter((name) => typeof name === 'string' && name.length > 0)
+          .map((name) => nettoyerNomFlowCfg(name))
+          .filter((name) => name.length > 0)
+          .sort((a, b) => a.localeCompare(b));
+
+        supCfgModuleSelect.innerHTML = '';
+        if (modules.length === 0) {
+          const empty = document.createElement('option');
+          empty.value = '';
+          empty.textContent = 'Aucune branche locale';
+          supCfgModuleSelect.appendChild(empty);
+          resetSupervisorCfgEditor('Aucune branche locale disponible.');
+          return;
+        }
+
+        modules.forEach((name) => {
+          const opt = document.createElement('option');
+          opt.value = name;
+          opt.textContent = name;
+          supCfgModuleSelect.appendChild(opt);
+        });
+
+        const current = keepCurrentSelection ? nettoyerNomFlowCfg(supCfgCurrentModule) : '';
+        const selected = modules.includes(current) ? current : modules[0];
+        supCfgModuleSelect.value = selected;
+        await chargerSupervisorCfgModule(selected);
+      } catch (err) {
+        resetSupervisorCfgEditor('Chargement des branches locales échoué: ' + err);
+      }
+    }
+
+    async function appliquerSupervisorCfg() {
+      try {
+        const patch = buildSupervisorCfgPatchJson();
+        const body = new URLSearchParams();
+        body.set('patch', patch);
+        const res = await fetch('/api/supervisorcfg/apply', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+          body: body.toString()
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data || data.ok !== true) {
+          throw new Error('apply refusé');
+        }
+        supCfgStatus.textContent = 'Configuration locale appliquée.';
+        await chargerSupervisorCfgModule(supCfgCurrentModule);
+      } catch (err) {
+        supCfgStatus.textContent = 'Application cfg locale échouée: ' + err;
       }
     }
 
@@ -1110,6 +1245,16 @@
     });
     flowCfgApplyBtn.addEventListener('click', async () => {
       await appliquerFlowCfg();
+    });
+    supCfgRefreshBtn.addEventListener('click', async () => {
+      await chargerSupervisorCfgModules(true);
+    });
+    supCfgModuleSelect.addEventListener('change', async () => {
+      const selected = nettoyerNomFlowCfg(supCfgModuleSelect.value);
+      await chargerSupervisorCfgModule(selected);
+    });
+    supCfgApplyBtn.addEventListener('click', async () => {
+      await appliquerSupervisorCfg();
     });
 
     document.addEventListener('click', (event) => {

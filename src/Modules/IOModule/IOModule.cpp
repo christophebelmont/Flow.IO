@@ -1508,18 +1508,30 @@ void IOModule::init(ConfigStore& cfg, ServiceRegistry& services)
     }
     haPrecisionLastInit_ = true;
 
-    // Allocate and wire all IO runtime objects once during module init.
+    (void)logHub_;
+}
+
+void IOModule::onConfigLoaded(ConfigStore&, ServiceRegistry&)
+{
+    LOGI("io.onConfigLoaded begin enabled=%s i2c_sda=%ld i2c_scl=%ld runtimeReady=%s",
+         cfgData_.enabled ? "true" : "false",
+         (long)cfgData_.i2cSda,
+         (long)cfgData_.i2cScl,
+         runtimeReady_ ? "true" : "false");
+
+    // Allocate and wire all IO runtime objects once after persistent config is loaded.
     runtimeInitAttempted_ = true;
     if (cfgData_.enabled) {
         runtimeReady_ = configureRuntime_();
         if (!runtimeReady_) {
-            LOGW("Runtime init failed during io.init; no runtime allocations will be attempted later");
+            LOGW("Runtime init failed during io.onConfigLoaded; no runtime allocations will be attempted later");
+        } else {
+            LOGI("io.onConfigLoaded runtime configured");
         }
     } else {
         runtimeReady_ = false;
+        LOGI("io.onConfigLoaded skipped runtime init (disabled)");
     }
-
-    (void)logHub_;
 }
 
 void IOModule::loop()

@@ -31,14 +31,16 @@ void SystemMonitorModule::init(ConfigStore& cfg, ServiceRegistry& services) {
     wifiSvc = services.get<WifiService>("wifi");
     cfgSvc  = services.get<ConfigStoreService>("config");
     logHub  = services.get<LogHubService>("loghub");
-
-    LOGI("Starting SystemMonitorModule");
-    logBootInfo();
 }
 
 void SystemMonitorModule::logBootInfo() {
     LOGI("Reset reason=%s", SystemStats::resetReasonStr());
     LOGI("CPU=%luMHz", (unsigned long)ESP.getCpuFreqMHz());
+    const uint32_t psramSizeBytes = ESP.getPsramSize();
+    LOGI("PSRAM present=%s size=%luKB free=%luKB",
+         (psramSizeBytes > 0U) ? "yes" : "no",
+         (unsigned long)(psramSizeBytes / 1024U),
+         (unsigned long)(ESP.getFreePsram() / 1024U));
 }
 
 void SystemMonitorModule::logHeapStats() {
@@ -143,6 +145,11 @@ void SystemMonitorModule::buildHealthJson(char* out, size_t outLen) {
 }
 
 void SystemMonitorModule::loop() {
+    if (!bootInfoLogged_) {
+        bootInfoLogged_ = true;
+        logBootInfo();
+    }
+
     const uint32_t now = millis();
     if (cfgStore_) {
         cfgStore_->logNvsWriteSummaryIfDue(now, 60000U);

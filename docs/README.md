@@ -81,6 +81,30 @@ Puis:
 
 - [Quality Gates Modules (notes + description des 10 points)](core/module-quality-gates.md)
 
+## Capacités de slots (profil Flow.IO)
+
+Les valeurs ci-dessous correspondent au profil `Flow.IO` actuel (wiring et modules enregistrés dans `main_flowio.cpp`).
+
+| Domaine | Slots pré-définis (max) | Slots utilisés actuellement | Variable/constante de capacité (fichier) |
+|---|---:|---:|---|
+| IOModule - entrées analogiques | 12 | 6 | `IOModule::MAX_ANALOG_ENDPOINTS` ([src/Modules/IOModule/IOModule.h](../src/Modules/IOModule/IOModule.h)) |
+| IOModule - entrées digitales | 8 | 1 | `IOModule::MAX_DIGITAL_INPUTS` ([src/Modules/IOModule/IOModule.h](../src/Modules/IOModule/IOModule.h)) |
+| IOModule - sorties digitales | 12 | 8 | `IOModule::MAX_DIGITAL_OUTPUTS` ([src/Modules/IOModule/IOModule.h](../src/Modules/IOModule/IOModule.h)) |
+| IOModule - slots digitaux totaux | 20 | 9 | `IOModule::MAX_DIGITAL_SLOTS` ([src/Modules/IOModule/IOModule.h](../src/Modules/IOModule/IOModule.h)) |
+| PoolDeviceModule - devices | 8 | 8 | `POOL_DEVICE_MAX` ([src/Modules/PoolDeviceModule/PoolDeviceModuleDataModel.h](../src/Modules/PoolDeviceModule/PoolDeviceModuleDataModel.h)) |
+| HAModule - sensors | 24 | 20 | `HAModule::MAX_HA_SENSORS` ([src/Modules/Network/HAModule/HAModule.h](../src/Modules/Network/HAModule/HAModule.h)) |
+| HAModule - binary sensors | 8 | 0 | `HAModule::MAX_HA_BINARY_SENSORS` ([src/Modules/Network/HAModule/HAModule.h](../src/Modules/Network/HAModule/HAModule.h)) |
+| HAModule - switches | 16 | 12 | `HAModule::MAX_HA_SWITCHES` ([src/Modules/Network/HAModule/HAModule.h](../src/Modules/Network/HAModule/HAModule.h)) |
+| HAModule - numbers | 16 | 13 | `HAModule::MAX_HA_NUMBERS` ([src/Modules/Network/HAModule/HAModule.h](../src/Modules/Network/HAModule/HAModule.h)) |
+| HAModule - buttons | 8 | 3 | `HAModule::MAX_HA_BUTTONS` ([src/Modules/Network/HAModule/HAModule.h](../src/Modules/Network/HAModule/HAModule.h)) |
+| MQTTModule - runtime publishers | 8 | 4 | `Limits::Mqtt::Capacity::MaxPublishers` ([include/Core/SystemLimits.h](../include/Core/SystemLimits.h)) |
+| Routes runtime multiplexées | 34 | 33 | `Limits::MaxRuntimeRoutes` ([include/Core/SystemLimits.h](../include/Core/SystemLimits.h)) |
+| ConfigStore - variables de config | 256 | 253 | `Limits::MaxConfigVars` / `ConfigStore::MAX_CONFIG_VARS` ([include/Core/SystemLimits.h](../include/Core/SystemLimits.h), [src/Core/ConfigStore.h](../src/Core/ConfigStore.h)) |
+
+Notes:
+- Le compteur "utilisés actuellement" reflète l'état de la configuration/module wiring actuel de Flow.IO.
+- Certaines allocations bas niveau (ex: drivers DS18B20) dépendent de la détection matérielle au boot et peuvent varier selon la carte branchée.
+
 ## Notes importantes
 
 - Il n'existe pas de "EventStore" persistant dédié: les événements internes transitent dans `EventBus` (volatile en RAM).

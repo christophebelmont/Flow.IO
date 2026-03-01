@@ -12,27 +12,7 @@
 #include <string.h>
 
 namespace {
-
-bool extractIntField(const char* json, const char* key, int32_t& out)
-{
-    if (!json || !key || key[0] == '\0') return false;
-
-    char pattern[32] = {0};
-    const int pn = snprintf(pattern, sizeof(pattern), "\"%s\":", key);
-    if (pn <= 0 || (size_t)pn >= sizeof(pattern)) return false;
-
-    const char* p = strstr(json, pattern);
-    if (!p) return false;
-    p += strlen(pattern);
-    while (*p == ' ' || *p == '\t') ++p;
-
-    char* end = nullptr;
-    const long v = strtol(p, &end, 10);
-    if (!end || end == p) return false;
-
-    out = (int32_t)v;
-    return true;
-}
+constexpr uint8_t kInterlinkBus = 1;  // Interlink is fixed on I2C controller 1 (Wire1 on ESP32).
 
 const char* opName(uint8_t op)
 {
@@ -75,8 +55,6 @@ void I2CCfgClientModule::init(ConfigStore& cfg, ServiceRegistry& services)
     constexpr uint16_t kCfgBranchId = (uint16_t)ConfigBranchId::I2cCfgClient;
 
     cfg.registerVar(enabledVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(useIoBusVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(busVar_, kCfgModuleId, kCfgBranchId);
     cfg.registerVar(sdaVar_, kCfgModuleId, kCfgBranchId);
     cfg.registerVar(sclVar_, kCfgModuleId, kCfgBranchId);
     cfg.registerVar(freqVar_, kCfgModuleId, kCfgBranchId);
@@ -96,10 +74,9 @@ void I2CCfgClientModule::init(ConfigStore& cfg, ServiceRegistry& services)
 
 void I2CCfgClientModule::onConfigLoaded(ConfigStore&, ServiceRegistry&)
 {
-    LOGI("onConfigLoaded enabled=%s use_io_bus=%s bus=%ld sda=%ld scl=%ld freq=%ld target=0x%02X",
+    LOGI("onConfigLoaded enabled=%s bus=%u sda=%ld scl=%ld freq=%ld target=0x%02X",
          cfgData_.enabled ? "true" : "false",
-         cfgData_.useIoBus ? "true" : "false",
-         (long)cfgData_.bus,
+         (unsigned)kInterlinkBus,
          (long)cfgData_.sda,
          (long)cfgData_.scl,
          (long)cfgData_.freqHz,
@@ -118,42 +95,37 @@ void I2CCfgClientModule::startLink_()
         return;
     }
 
-    uint8_t bus = (uint8_t)(cfgData_.bus <= 0 ? 0 : 1);
     int32_t sda = cfgData_.sda;
     int32_t scl = cfgData_.scl;
-    if (cfgData_.useIoBus) {
-        int32_t ioSda = sda;
-        int32_t ioScl = scl;
-        if (resolveIoPins_(ioSda, ioScl)) {
-            sda = ioSda;
-            scl = ioScl;
-        } else {
-            LOGW("use_io_bus enabled but io config unavailable; fallback sda=%ld scl=%ld",
-                 (long)sda,
-                 (long)scl);
-        }
-    }
 
-    if (!link_.beginMaster(bus,
+    if (!link_.beginMaster(kInterlinkBus,
                            sda,
                            scl,
                            (uint32_t)(cfgData_.freqHz <= 0 ? 100000 : cfgData_.freqHz))) {
-        LOGE("I2C cfg client start failed");
+        LOGE("I2C cfg client start failed bus=%u sda=%ld scl=%ld freq=%ld target=0x%02X",
+             (unsigned)kInterlinkBus,
+             (long)sda,
+             (long)scl,
+             (long)cfgData_.freqHz,
+             (unsigned)cfgData_.targetAddr);
         return;
     }
     ready_ = true;
-    LOGI("I2C cfg client started app_role=client i2c_role=master target=0x%02X bus=%u sda=%ld scl=%ld freq=%ld use_io_bus=%s",
+    LOGI("I2C cfg client started app_role=client i2c_role=master target=0x%02X bus=%u sda=%ld scl=%ld freq=%ld",
          (unsigned)cfgData_.targetAddr,
-         (unsigned)bus,
+         (unsigned)kInterlinkBus,
          (long)sda,
          (long)scl,
-         (long)cfgData_.freqHz,
-         cfgData_.useIoBus ? "true" : "false");
+         (long)cfgData_.freqHz);
 
     uint8_t pingStatus = I2cCfgProtocol::StatusFailed;
     if (!pingFlow_(pingStatus)) {
-        LOGW("I2C cfg ping transport failed target=0x%02X (check wiring/power/address)",
-             (unsigned)cfgData_.targetAddr);
+        LOGW("I2C cfg ping transport failed target=0x%02X bus=%u sda=%ld scl=%ld freq=%ld (check wiring/power/address)",
+             (unsigned)cfgData_.targetAddr,
+             (unsigned)kInterlinkBus,
+             (long)cfgData_.sda,
+             (long)cfgData_.scl,
+             (long)cfgData_.freqHz);
     } else if (pingStatus != I2cCfgProtocol::StatusOk) {
         LOGW("I2C cfg ping returned status=%u (%s) target=0x%02X",
              (unsigned)pingStatus,
@@ -174,28 +146,6 @@ bool I2CCfgClientModule::ensureReady_()
     LOGW("ensureReady: link not ready, attempting restart");
     startLink_();
     return ready_;
-}
-
-bool I2CCfgClientModule::resolveIoPins_(int32_t& sdaOut, int32_t& sclOut) const
-{
-    if (!cfgSvc_ || !cfgSvc_->toJsonModule) return false;
-
-    char ioJson[320] = {0};
-    bool truncated = false;
-    if (!cfgSvc_->toJsonModule(cfgSvc_->ctx, "io", ioJson, sizeof(ioJson), &truncated)) {
-        return false;
-    }
-    (void)truncated;
-
-    int32_t parsedSda = sdaOut;
-    int32_t parsedScl = sclOut;
-    const bool okSda = extractIntField(ioJson, "i2c_sda", parsedSda);
-    const bool okScl = extractIntField(ioJson, "i2c_scl", parsedScl);
-    if (!okSda || !okScl) return false;
-
-    sdaOut = parsedSda;
-    sclOut = parsedScl;
-    return true;
 }
 
 bool I2CCfgClientModule::isReady_() const
@@ -263,6 +213,11 @@ bool I2CCfgClientModule::transact_(uint8_t op,
                  (unsigned)seq,
                  (unsigned)cfgData_.targetAddr,
                  (unsigned)(I2cCfgProtocol::ReqHeaderSize + reqLen));
+            LOGW("I2C link cfg bus=%u sda=%ld scl=%ld freq=%ld",
+                 (unsigned)kInterlinkBus,
+                 (long)cfgData_.sda,
+                 (long)cfgData_.scl,
+                 (long)cfgData_.freqHz);
             return false;
         }
         if (rxLen < I2cCfgProtocol::RespHeaderSize) {

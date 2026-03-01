@@ -520,14 +520,14 @@ bool MQTTModule::publishConfigModuleAt(size_t idx, bool retained)
     }
 
     bool truncated = false;
-    bool any = cfgSvc->toJsonModule(cfgSvc->ctx, cfgModules[idx], stateCfgBuf, sizeof(stateCfgBuf), &truncated);
+    bool any = cfgSvc->toJsonModule(cfgSvc->ctx, cfgModules[idx], publishBuf, sizeof(publishBuf), &truncated);
     if (truncated) {
-        LOGW("cfg/%s truncated (buffer=%u)", cfgModules[idx], (unsigned)sizeof(stateCfgBuf));
+        LOGW("cfg/%s truncated (buffer=%u)", cfgModules[idx], (unsigned)sizeof(publishBuf));
         // Avoid publishing malformed partial JSON when truncation happens.
-        if (!writeErrorJson(stateCfgBuf, sizeof(stateCfgBuf), ErrorCode::CfgTruncated, "cfg")) {
-            snprintf(stateCfgBuf, sizeof(stateCfgBuf), "{\"ok\":false}");
+        if (!writeErrorJson(publishBuf, sizeof(publishBuf), ErrorCode::CfgTruncated, "cfg")) {
+            snprintf(publishBuf, sizeof(publishBuf), "{\"ok\":false}");
         }
-        if (!publish(moduleTopic, stateCfgBuf, 1, retained)) {
+        if (!publish(moduleTopic, publishBuf, 1, retained)) {
             if (lowHeapSinceMs_ != 0U) MQTT_DLOG("cfg/%s publish deferred (truncated payload)", cfgModules[idx]);
             else LOGW("cfg/%s publish failed (truncated payload)", cfgModules[idx]);
             return false;
@@ -535,7 +535,7 @@ bool MQTTModule::publishConfigModuleAt(size_t idx, bool retained)
         return true;
     }
     if (!any) return false;
-    if (!publish(moduleTopic, stateCfgBuf, 1, retained)) {
+    if (!publish(moduleTopic, publishBuf, 1, retained)) {
         if (lowHeapSinceMs_ != 0U) MQTT_DLOG("cfg/%s publish deferred", cfgModules[idx]);
         else LOGW("cfg/%s publish failed", cfgModules[idx]);
         return false;
@@ -581,13 +581,13 @@ bool MQTTModule::publishConfigModuleByName_(const char* module, bool retained)
     }
 
     bool truncated = false;
-    const bool any = cfgSvc->toJsonModule(cfgSvc->ctx, module, stateCfgBuf, sizeof(stateCfgBuf), &truncated);
+    const bool any = cfgSvc->toJsonModule(cfgSvc->ctx, module, publishBuf, sizeof(publishBuf), &truncated);
     if (truncated) {
-        LOGW("cfg/%s truncated (buffer=%u)", module, (unsigned)sizeof(stateCfgBuf));
-        if (!writeErrorJson(stateCfgBuf, sizeof(stateCfgBuf), ErrorCode::CfgTruncated, "cfg")) {
-            snprintf(stateCfgBuf, sizeof(stateCfgBuf), "{\"ok\":false}");
+        LOGW("cfg/%s truncated (buffer=%u)", module, (unsigned)sizeof(publishBuf));
+        if (!writeErrorJson(publishBuf, sizeof(publishBuf), ErrorCode::CfgTruncated, "cfg")) {
+            snprintf(publishBuf, sizeof(publishBuf), "{\"ok\":false}");
         }
-        if (!publish(moduleTopic, stateCfgBuf, 1, retained)) {
+        if (!publish(moduleTopic, publishBuf, 1, retained)) {
             if (lowHeapSinceMs_ != 0U) MQTT_DLOG("cfg/%s publish deferred (truncated payload)", module);
             else LOGW("cfg/%s publish failed (truncated payload)", module);
             return false;
@@ -596,7 +596,7 @@ bool MQTTModule::publishConfigModuleByName_(const char* module, bool retained)
     }
     if (!any) return false;
 
-    if (!publish(moduleTopic, stateCfgBuf, 1, retained)) {
+    if (!publish(moduleTopic, publishBuf, 1, retained)) {
         if (lowHeapSinceMs_ != 0U) MQTT_DLOG("cfg/%s publish deferred", module);
         else LOGW("cfg/%s publish failed", module);
         return false;
@@ -692,10 +692,10 @@ void MQTTModule::runTimeSchedulerSlots_(uint32_t nowMs)
         const bool wasUsed = (schedCfgUsedMask_ & slotBit) != 0U;
         const bool publishUnused = (!known) || wasUsed;
         if (publishUnused) {
-            snprintf(stateCfgBuf, sizeof(stateCfgBuf),
+            snprintf(publishBuf, sizeof(publishBuf),
                      "{\"slot\":%u,\"used\":false}",
                      (unsigned)slot);
-            if (!publish(slotTopic, stateCfgBuf, 1, schedCfgRetained_)) {
+            if (!publish(slotTopic, publishBuf, 1, schedCfgRetained_)) {
                 MQTT_DLOG("cfg/time/scheduler slot%u publish deferred (unused)", (unsigned)slot);
                 scheduleRetry();
                 return;
@@ -705,7 +705,7 @@ void MQTTModule::runTimeSchedulerSlots_(uint32_t nowMs)
         schedCfgUsedMask_ &= (uint16_t)(~slotBit);
     } else {
         const char* mode = (def.mode == TimeSchedulerMode::OneShotEpoch) ? "one_shot_epoch" : "recurring_clock";
-        snprintf(stateCfgBuf, sizeof(stateCfgBuf),
+        snprintf(publishBuf, sizeof(publishBuf),
                  "{\"slot\":%u,\"used\":true,\"event_id\":%u,\"label\":\"%s\",\"enabled\":%s,"
                  "\"mode\":\"%s\",\"has_end\":%s,\"replay_on_boot\":%s,"
                  "\"weekday_mask\":%u,"
@@ -725,7 +725,7 @@ void MQTTModule::runTimeSchedulerSlots_(uint32_t nowMs)
                  (unsigned)def.endHour,
                  (unsigned)def.endMinute,
                  (unsigned long long)def.endEpochSec);
-        if (!publish(slotTopic, stateCfgBuf, 1, schedCfgRetained_)) {
+        if (!publish(slotTopic, publishBuf, 1, schedCfgRetained_)) {
             if (lowHeapSinceMs_ != 0U) MQTT_DLOG("cfg/time/scheduler slot%u publish deferred", (unsigned)slot);
             else LOGW("cfg/time/scheduler slot%u publish failed", (unsigned)slot);
             scheduleRetry();
@@ -1001,13 +1001,13 @@ void MQTTModule::processRxCmd_(const RxMsg& msg)
         return;
     }
 
-    int wrote = snprintf(ackBuf, sizeof(ackBuf), "{\"ok\":true,\"cmd\":\"%s\",\"reply\":%s}", cmd, replyBuf);
-    if (!(wrote > 0 && (size_t)wrote < sizeof(ackBuf))) {
+    int wrote = snprintf(publishBuf, sizeof(publishBuf), "{\"ok\":true,\"cmd\":\"%s\",\"reply\":%s}", cmd, replyBuf);
+    if (!(wrote > 0 && (size_t)wrote < sizeof(publishBuf))) {
         LOGW("processRxCmd: ack overflow (cmd=%s, wrote=%d)", cmd, wrote);
         publishRxError_(topicAck, ErrorCode::InternalAckOverflow, "cmd", false);
         return;
     }
-    if (!publish(topicAck, ackBuf, 0, false)) {
+    if (!publish(topicAck, publishBuf, 0, false)) {
         LOGW("cmd ack publish failed cmd=%s", cmd);
     }
 
@@ -1037,10 +1037,10 @@ void MQTTModule::processRxCfgSet_(const RxMsg& msg)
     }
     // cfg/* publication path is intentionally ConfigChanged-only.
 
-    if (!writeOkJson(ackBuf, sizeof(ackBuf), "cfg/set")) {
-        snprintf(ackBuf, sizeof(ackBuf), "{\"ok\":true}");
+    if (!writeOkJson(publishBuf, sizeof(publishBuf), "cfg/set")) {
+        snprintf(publishBuf, sizeof(publishBuf), "{\"ok\":true}");
     }
-    if (!publish(topicCfgAck, ackBuf, 1, false)) {
+    if (!publish(topicCfgAck, publishBuf, 1, false)) {
         LOGW("cfg/set ack publish failed");
     }
 }
@@ -1052,12 +1052,12 @@ void MQTTModule::publishRxError_(const char* ackTopic, ErrorCode code, const cha
     else ++handlerFailCount_;
     syncRxMetrics_();
 
-    if (!writeErrorJson(ackBuf, sizeof(ackBuf), code, where)) {
-        if (!writeErrorJson(ackBuf, sizeof(ackBuf), ErrorCode::InternalAckOverflow, "rx")) {
-            snprintf(ackBuf, sizeof(ackBuf), "{\"ok\":false}");
+    if (!writeErrorJson(publishBuf, sizeof(publishBuf), code, where)) {
+        if (!writeErrorJson(publishBuf, sizeof(publishBuf), ErrorCode::InternalAckOverflow, "rx")) {
+            snprintf(publishBuf, sizeof(publishBuf), "{\"ok\":false}");
         }
     }
-    if (!publish(ackTopic, ackBuf, 0, false)) {
+    if (!publish(ackTopic, publishBuf, 0, false)) {
         LOGW("rx error ack publish failed topic=%s", ackTopic);
     }
 }

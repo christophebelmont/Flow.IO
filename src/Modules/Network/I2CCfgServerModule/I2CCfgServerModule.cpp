@@ -20,27 +20,7 @@
 #endif
 
 namespace {
-
-bool extractIntField(const char* json, const char* key, int32_t& out)
-{
-    if (!json || !key || key[0] == '\0') return false;
-
-    char pattern[32] = {0};
-    const int pn = snprintf(pattern, sizeof(pattern), "\"%s\":", key);
-    if (pn <= 0 || (size_t)pn >= sizeof(pattern)) return false;
-
-    const char* p = strstr(json, pattern);
-    if (!p) return false;
-    p += strlen(pattern);
-    while (*p == ' ' || *p == '\t') ++p;
-
-    char* end = nullptr;
-    const long v = strtol(p, &end, 10);
-    if (!end || end == p) return false;
-
-    out = (int32_t)v;
-    return true;
-}
+constexpr uint8_t kInterlinkBus = 1;  // Interlink is fixed on I2C controller 1 (Wire1 on ESP32).
 
 size_t tokenLenToSlash_(const char* s)
 {
@@ -110,8 +90,6 @@ void I2CCfgServerModule::init(ConfigStore& cfg, ServiceRegistry& services)
     constexpr uint16_t kCfgBranchId = (uint16_t)ConfigBranchId::I2cCfgServer;
 
     cfg.registerVar(enabledVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(useIoBusVar_, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(busVar_, kCfgModuleId, kCfgBranchId);
     cfg.registerVar(sdaVar_, kCfgModuleId, kCfgBranchId);
     cfg.registerVar(sclVar_, kCfgModuleId, kCfgBranchId);
     cfg.registerVar(freqVar_, kCfgModuleId, kCfgBranchId);
@@ -145,23 +123,10 @@ void I2CCfgServerModule::startLink_()
         LOGW("I2C cfg server not ready (config service missing)");
         return;
     }
-    uint8_t bus = (uint8_t)(cfgData_.bus <= 0 ? 0 : 1);
     int32_t sda = cfgData_.sda;
     int32_t scl = cfgData_.scl;
-    if (cfgData_.useIoBus) {
-        int32_t ioSda = sda;
-        int32_t ioScl = scl;
-        if (resolveIoPins_(ioSda, ioScl)) {
-            sda = ioSda;
-            scl = ioScl;
-        } else {
-            LOGW("use_io_bus enabled but io config unavailable; fallback sda=%ld scl=%ld",
-                 (long)sda,
-                 (long)scl);
-        }
-    }
 
-    if (!link_.beginSlave(bus,
+    if (!link_.beginSlave(kInterlinkBus,
                           cfgData_.address,
                           sda,
                           scl,
@@ -172,13 +137,12 @@ void I2CCfgServerModule::startLink_()
     link_.setSlaveCallbacks(onReceiveStatic_, onRequestStatic_, this);
     started_ = true;
     ensureActionTask_();
-    LOGI("I2C cfg server started app_role=server i2c_role=slave addr=0x%02X bus=%u sda=%ld scl=%ld freq=%ld use_io_bus=%s",
+    LOGI("I2C cfg server started app_role=server i2c_role=slave addr=0x%02X bus=%u sda=%ld scl=%ld freq=%ld",
          (unsigned)cfgData_.address,
-         (unsigned)bus,
+         (unsigned)kInterlinkBus,
          (long)sda,
          (long)scl,
-         (long)cfgData_.freqHz,
-         cfgData_.useIoBus ? "true" : "false");
+         (long)cfgData_.freqHz);
 }
 
 void I2CCfgServerModule::resetPatchState_()
@@ -332,28 +296,6 @@ void I2CCfgServerModule::actionLoop_()
         const bool ok = cmdSvc_->execute(cmdSvc_->ctx, cmd, "{}", nullptr, reply, sizeof(reply));
         LOGI("executed queued action cmd=%s ok=%d reply=%s", cmd, (int)ok, reply[0] ? reply : "{}");
     }
-}
-
-bool I2CCfgServerModule::resolveIoPins_(int32_t& sdaOut, int32_t& sclOut) const
-{
-    if (!cfgSvc_ || !cfgSvc_->toJsonModule) return false;
-
-    char ioJson[320] = {0};
-    bool truncated = false;
-    if (!cfgSvc_->toJsonModule(cfgSvc_->ctx, "io", ioJson, sizeof(ioJson), &truncated)) {
-        return false;
-    }
-    (void)truncated;
-
-    int32_t parsedSda = sdaOut;
-    int32_t parsedScl = sclOut;
-    const bool okSda = extractIntField(ioJson, "i2c_sda", parsedSda);
-    const bool okScl = extractIntField(ioJson, "i2c_scl", parsedScl);
-    if (!okSda || !okScl) return false;
-
-    sdaOut = parsedSda;
-    sclOut = parsedScl;
-    return true;
 }
 
 void I2CCfgServerModule::onReceiveStatic_(void* ctx, const uint8_t* data, size_t len)

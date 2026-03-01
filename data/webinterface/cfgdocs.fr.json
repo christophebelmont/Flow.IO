@@ -1,10 +1,10 @@
 {
   "_meta": {
     "generated": true,
-    "total": 257,
-    "decl_total": 211,
-    "decl_with_cfgdoc": 85,
-    "missing_cfgdoc_count": 126,
+    "total": 253,
+    "decl_total": 207,
+    "decl_with_cfgdoc": 95,
+    "missing_cfgdoc_count": 112,
     "manual_overrides_total": 18,
     "manual_overrides_applied": 0
   },
@@ -194,131 +194,97 @@
       "var": "vendorVar",
       "source": "cfgdoc"
     },
-    "i2c/cfg/client/bus": {
-      "module": "i2c/cfg/client",
-      "name": "bus",
-      "type": "Int32",
-      "label": "Bus",
-      "help": "Parametre 'bus' pour la branche 'i2c/cfg/client' (type Int32).",
-      "var": "busVar_",
-      "source": "auto"
-    },
     "i2c/cfg/client/enabled": {
       "module": "i2c/cfg/client",
       "name": "enabled",
       "type": "Bool",
-      "label": "Enabled",
-      "help": "Parametre 'enabled' pour la branche 'i2c/cfg/client' (type Bool).",
+      "label": "Client cfg I2C actif",
+      "help": "Active le client de configuration I2C cote Supervisor pour dialoguer avec Flow.IO.",
       "var": "enabledVar_",
-      "source": "auto"
+      "source": "cfgdoc"
     },
     "i2c/cfg/client/freq_hz": {
       "module": "i2c/cfg/client",
       "name": "freq_hz",
       "type": "Int32",
-      "label": "Freq hz",
-      "help": "Parametre 'freq_hz' pour la branche 'i2c/cfg/client' (type Int32).",
+      "label": "Frequence I2C interlink",
+      "help": "Frequence du bus interlink en hertz.",
       "var": "freqVar_",
-      "source": "auto"
+      "source": "cfgdoc",
+      "unit": "Hz"
     },
     "i2c/cfg/client/scl": {
       "module": "i2c/cfg/client",
       "name": "scl",
       "type": "Int32",
-      "label": "Scl",
-      "help": "Parametre 'scl' pour la branche 'i2c/cfg/client' (type Int32).",
+      "label": "GPIO SCL interlink",
+      "help": "GPIO utilise pour la ligne SCL du bus interlink Supervisor -> Flow.IO.",
       "var": "sclVar_",
-      "source": "auto"
+      "source": "cfgdoc"
     },
     "i2c/cfg/client/sda": {
       "module": "i2c/cfg/client",
       "name": "sda",
       "type": "Int32",
-      "label": "Sda",
-      "help": "Parametre 'sda' pour la branche 'i2c/cfg/client' (type Int32).",
+      "label": "GPIO SDA interlink",
+      "help": "GPIO utilise pour la ligne SDA du bus interlink Supervisor -> Flow.IO.",
       "var": "sdaVar_",
-      "source": "auto"
+      "source": "cfgdoc"
     },
     "i2c/cfg/client/target_addr": {
       "module": "i2c/cfg/client",
       "name": "target_addr",
       "type": "UInt8",
-      "label": "Target addr",
-      "help": "Parametre 'target_addr' pour la branche 'i2c/cfg/client' (type UInt8).",
+      "label": "Adresse cible Flow.IO",
+      "help": "Adresse I2C du serveur de configuration sur Flow.IO (mode esclave).",
       "var": "addrVar_",
-      "source": "auto"
-    },
-    "i2c/cfg/client/use_io_bus": {
-      "module": "i2c/cfg/client",
-      "name": "use_io_bus",
-      "type": "Bool",
-      "label": "Use IO bus",
-      "help": "Parametre 'use_io_bus' pour la branche 'i2c/cfg/client' (type Bool).",
-      "var": "useIoBusVar_",
-      "source": "auto"
+      "source": "cfgdoc"
     },
     "i2c/cfg/server/address": {
       "module": "i2c/cfg/server",
       "name": "address",
       "type": "UInt8",
-      "label": "Address",
-      "help": "Parametre 'address' pour la branche 'i2c/cfg/server' (type UInt8).",
+      "label": "Adresse locale Flow.IO",
+      "help": "Adresse I2C locale du serveur de configuration Flow.IO (mode esclave).",
       "var": "addrVar_",
-      "source": "auto"
-    },
-    "i2c/cfg/server/bus": {
-      "module": "i2c/cfg/server",
-      "name": "bus",
-      "type": "Int32",
-      "label": "Bus",
-      "help": "Parametre 'bus' pour la branche 'i2c/cfg/server' (type Int32).",
-      "var": "busVar_",
-      "source": "auto"
+      "source": "cfgdoc"
     },
     "i2c/cfg/server/enabled": {
       "module": "i2c/cfg/server",
       "name": "enabled",
       "type": "Bool",
-      "label": "Enabled",
-      "help": "Parametre 'enabled' pour la branche 'i2c/cfg/server' (type Bool).",
+      "label": "Serveur cfg I2C actif",
+      "help": "Active le serveur de configuration I2C cote Flow.IO pour repondre au Supervisor.",
       "var": "enabledVar_",
-      "source": "auto"
+      "source": "cfgdoc"
     },
     "i2c/cfg/server/freq_hz": {
       "module": "i2c/cfg/server",
       "name": "freq_hz",
       "type": "Int32",
-      "label": "Freq hz",
-      "help": "Parametre 'freq_hz' pour la branche 'i2c/cfg/server' (type Int32).",
+      "label": "Frequence I2C interlink",
+      "help": "Frequence du bus interlink en hertz.",
       "var": "freqVar_",
-      "source": "auto"
+      "source": "cfgdoc",
+      "unit": "Hz"
     },
     "i2c/cfg/server/scl": {
       "module": "i2c/cfg/server",
       "name": "scl",
       "type": "Int32",
-      "label": "Scl",
-      "help": "Parametre 'scl' pour la branche 'i2c/cfg/server' (type Int32).",
+      "label": "GPIO SCL interlink",
+      "help": "GPIO utilise pour la ligne SCL du bus interlink Flow.IO <-> Supervisor.",
       "var": "sclVar_",
-      "source": "auto"
+      "source": "cfgdoc"
     },
     "i2c/cfg/server/sda": {
       "module": "i2c/cfg/server",
       "name": "sda",
       "type": "Int32",
-      "label": "Sda",
-      "help": "Parametre 'sda' pour la branche 'i2c/cfg/server' (type Int32).",
+      "label": "GPIO SDA interlink",
+      "help": "GPIO utilise pour la ligne SDA du bus interlink Flow.IO <-> Supervisor.",
       "var": "sdaVar_",
-      "source": "auto"
-    },
-    "i2c/cfg/server/use_io_bus": {
-      "module": "i2c/cfg/server",
-      "name": "use_io_bus",
-      "type": "Bool",
-      "label": "Use IO bus",
-      "help": "Parametre 'use_io_bus' pour la branche 'i2c/cfg/server' (type Bool).",
-      "var": "useIoBusVar_",
-      "source": "auto"
+      "source": "cfgdoc"
     },
     "io/ads_ext_addr": {
       "module": "io",

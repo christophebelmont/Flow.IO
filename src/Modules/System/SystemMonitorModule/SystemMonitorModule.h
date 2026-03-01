@@ -55,6 +55,7 @@ private:
 
     uint32_t lastJsonDumpMs = 0;
     uint32_t lastTraceLogMs = 0;
+    bool bootInfoLogged_ = false;
 
     void logBootInfo();
     void logHeapStats();

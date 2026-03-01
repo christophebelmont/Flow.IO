@@ -17,7 +17,7 @@ constexpr uint8_t Aux1 = 13;
 constexpr uint8_t Aux2 = 33;
 constexpr uint8_t Aux3 = 27;
 constexpr uint8_t Aux4 = 23;
-constexpr uint8_t Aux5 = 12;
+constexpr uint8_t Aux5 = 13; // temporary change for testing
 }  // namespace DO
 
 namespace DI {

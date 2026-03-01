@@ -34,38 +34,33 @@ public:
 private:
     struct ConfigData {
         bool enabled = true;
-        bool useIoBus = false;
-        int32_t bus = 1;
         int32_t sda = 12;
         int32_t scl = 14;
         int32_t freqHz = 100000;
         uint8_t address = 0x42;
     } cfgData_{};
 
+    // CFGDOC: {"label":"Serveur cfg I2C actif", "help":"Active le serveur de configuration I2C cote Flow.IO pour repondre au Supervisor."}
     ConfigVariable<bool, 0> enabledVar_{
         NVS_KEY(NvsKeys::I2cCfg::ServerEnabled), "enabled", "i2c/cfg/server",
         ConfigType::Bool, &cfgData_.enabled, ConfigPersistence::Persistent, 0
     };
-    ConfigVariable<bool, 0> useIoBusVar_{
-        NVS_KEY(NvsKeys::I2cCfg::ServerUseIoBus), "use_io_bus", "i2c/cfg/server",
-        ConfigType::Bool, &cfgData_.useIoBus, ConfigPersistence::Persistent, 0
-    };
-    ConfigVariable<int32_t, 0> busVar_{
-        NVS_KEY(NvsKeys::I2cCfg::ServerBus), "bus", "i2c/cfg/server",
-        ConfigType::Int32, &cfgData_.bus, ConfigPersistence::Persistent, 0
-    };
+    // CFGDOC: {"label":"GPIO SDA interlink", "help":"GPIO utilise pour la ligne SDA du bus interlink Flow.IO <-> Supervisor."}
     ConfigVariable<int32_t, 0> sdaVar_{
         NVS_KEY(NvsKeys::I2cCfg::ServerSda), "sda", "i2c/cfg/server",
         ConfigType::Int32, &cfgData_.sda, ConfigPersistence::Persistent, 0
     };
+    // CFGDOC: {"label":"GPIO SCL interlink", "help":"GPIO utilise pour la ligne SCL du bus interlink Flow.IO <-> Supervisor."}
     ConfigVariable<int32_t, 0> sclVar_{
         NVS_KEY(NvsKeys::I2cCfg::ServerScl), "scl", "i2c/cfg/server",
         ConfigType::Int32, &cfgData_.scl, ConfigPersistence::Persistent, 0
     };
+    // CFGDOC: {"label":"Frequence I2C interlink", "help":"Frequence du bus interlink en hertz.", "unit":"Hz"}
     ConfigVariable<int32_t, 0> freqVar_{
         NVS_KEY(NvsKeys::I2cCfg::ServerFreq), "freq_hz", "i2c/cfg/server",
         ConfigType::Int32, &cfgData_.freqHz, ConfigPersistence::Persistent, 0
     };
+    // CFGDOC: {"label":"Adresse locale Flow.IO", "help":"Adresse I2C locale du serveur de configuration Flow.IO (mode esclave)."}
     ConfigVariable<uint8_t, 0> addrVar_{
         NVS_KEY(NvsKeys::I2cCfg::ServerAddr), "address", "i2c/cfg/server",
         ConfigType::UInt8, &cfgData_.address, ConfigPersistence::Persistent, 0
@@ -126,7 +121,6 @@ private:
     PendingSystemAction takePendingSystemAction_();
     void actionLoop_();
     static void actionTaskStatic_(void* ctx);
-    bool resolveIoPins_(int32_t& sdaOut, int32_t& sclOut) const;
     void buildResponse_(uint8_t op, uint8_t seq, uint8_t status, const uint8_t* payload, size_t payloadLen);
     void handleRequest_(uint8_t op, uint8_t seq, const uint8_t* payload, size_t payloadLen);
 };

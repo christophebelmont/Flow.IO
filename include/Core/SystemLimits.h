@@ -76,14 +76,14 @@ constexpr size_t DynamicTopic = 160;
 constexpr size_t RxTopic = 128;
 /** @brief RX command payload buffer length inside `MQTTModule::RxMsg`. */
 constexpr size_t RxPayload = 384;
-/** @brief ACK JSON buffer length used by `MQTTModule` (`ackBuf`). */
+/** @brief ACK JSON buffer length used by command/config acknowledge payloads. */
 constexpr size_t Ack = 1536;
 /** @brief Command handler reply buffer length used by `MQTTModule` (`replyBuf`).
  *  Must accommodate larger structured replies (e.g. `alarms.list` snapshots). */
 constexpr size_t Reply = 1024;
-/** @brief Config JSON serialization buffer length used by `MQTTModule` (`stateCfgBuf`). */
+/** @brief Config JSON serialization buffer length used by module/state exports. */
 constexpr size_t StateCfg = 1536;
-/** @brief Runtime publish payload buffer length used by `MQTTModule` (`publishBuf`). */
+/** @brief Runtime publish payload buffer length used by `MQTTModule` shared scratch buffer. */
 constexpr size_t Publish = 1536;
 /** @brief Parsed command name buffer length in `MQTTModule::processRxCmd_`. */
 constexpr size_t CmdName = 64;

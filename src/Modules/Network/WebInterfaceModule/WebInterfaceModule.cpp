@@ -210,6 +210,9 @@ void WebInterfaceModule::startServer_()
     server_.on("/assets/icon-control.svg", HTTP_GET, [](AsyncWebServerRequest* request) {
         sendProgmemLiteral_(request, "image/svg+xml", kMenuIconControlSvg);
     });
+    server_.on("/assets/icon-settings.svg", HTTP_GET, [](AsyncWebServerRequest* request) {
+        sendProgmemLiteral_(request, "image/svg+xml", kMenuIconSettingsSvg);
+    });
 
     server_.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
         request->redirect("/webinterface");
@@ -762,6 +765,104 @@ void WebInterfaceModule::startServer_()
             return;
         }
         request->send(200, "application/json", ack);
+    });
+
+    server_.on("/api/supervisorcfg/modules", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        HttpLatencyScope latency(request, "/api/supervisorcfg/modules");
+        if (!cfgStore_) {
+            request->send(503, "application/json",
+                          "{\"ok\":false,\"err\":{\"code\":\"NotReady\",\"where\":\"supervisorcfg.modules\"}}");
+            return;
+        }
+
+        constexpr uint8_t kMaxModules = 96;
+        const char* modules[kMaxModules] = {0};
+        const uint8_t moduleCount = cfgStore_->listModules(modules, kMaxModules);
+
+        StaticJsonDocument<2048> doc;
+        doc["ok"] = true;
+        JsonArray arr = doc.createNestedArray("modules");
+        for (uint8_t i = 0; i < moduleCount; ++i) {
+            if (!modules[i] || modules[i][0] == '\0') continue;
+            arr.add(modules[i]);
+        }
+
+        char out[2048] = {0};
+        if (serializeJson(doc, out, sizeof(out)) == 0) {
+            request->send(500, "application/json",
+                          "{\"ok\":false,\"err\":{\"code\":\"Failed\",\"where\":\"supervisorcfg.modules\"}}");
+            return;
+        }
+        request->send(200, "application/json", out);
+    });
+
+    server_.on("/api/supervisorcfg/module", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        HttpLatencyScope latency(request, "/api/supervisorcfg/module");
+        if (!cfgStore_) {
+            request->send(503, "application/json",
+                          "{\"ok\":false,\"err\":{\"code\":\"NotReady\",\"where\":\"supervisorcfg.module\"}}");
+            return;
+        }
+        if (!request->hasParam("name")) {
+            request->send(400, "application/json",
+                          "{\"ok\":false,\"err\":{\"code\":\"InvalidArg\",\"where\":\"supervisorcfg.module.name\"}}");
+            return;
+        }
+
+        String moduleStr = request->getParam("name")->value();
+        if (moduleStr.length() == 0) {
+            request->send(400, "application/json",
+                          "{\"ok\":false,\"err\":{\"code\":\"InvalidArg\",\"where\":\"supervisorcfg.module.name\"}}");
+            return;
+        }
+
+        char moduleName[64] = {0};
+        snprintf(moduleName, sizeof(moduleName), "%s", moduleStr.c_str());
+        sanitizeJsonString_(moduleName);
+
+        bool truncated = false;
+        char moduleJson[Limits::Mqtt::Buffers::StateCfg] = {0};
+        if (!cfgStore_->toJsonModule(moduleStr.c_str(), moduleJson, sizeof(moduleJson), &truncated)) {
+            request->send(404, "application/json",
+                          "{\"ok\":false,\"err\":{\"code\":\"NotFound\",\"where\":\"supervisorcfg.module.get\"}}");
+            return;
+        }
+
+        char out[Limits::Mqtt::Buffers::StateCfg + 128] = {0};
+        const int n = snprintf(out,
+                               sizeof(out),
+                               "{\"ok\":true,\"module\":\"%s\",\"truncated\":%s,\"data\":%s}",
+                               moduleName,
+                               truncated ? "true" : "false",
+                               moduleJson);
+        if (n <= 0 || (size_t)n >= sizeof(out)) {
+            request->send(500, "application/json",
+                          "{\"ok\":false,\"err\":{\"code\":\"Failed\",\"where\":\"supervisorcfg.module.pack\"}}");
+            return;
+        }
+        request->send(200, "application/json", out);
+    });
+
+    server_.on("/api/supervisorcfg/apply", HTTP_POST, [this](AsyncWebServerRequest* request) {
+        HttpLatencyScope latency(request, "/api/supervisorcfg/apply");
+        if (!cfgStore_) {
+            request->send(503, "application/json",
+                          "{\"ok\":false,\"err\":{\"code\":\"NotReady\",\"where\":\"supervisorcfg.apply\"}}");
+            return;
+        }
+        if (!request->hasParam("patch", true)) {
+            request->send(400, "application/json",
+                          "{\"ok\":false,\"err\":{\"code\":\"InvalidArg\",\"where\":\"supervisorcfg.apply.patch\"}}");
+            return;
+        }
+
+        String patchStr = request->getParam("patch", true)->value();
+        if (!cfgStore_->applyJson(patchStr.c_str())) {
+            request->send(500, "application/json",
+                          "{\"ok\":false,\"err\":{\"code\":\"Failed\",\"where\":\"supervisorcfg.apply.exec\"}}");
+            return;
+        }
+        request->send(200, "application/json", "{\"ok\":true}");
     });
 
     server_.on("/api/system/reboot", HTTP_POST, [this](AsyncWebServerRequest* request) {
