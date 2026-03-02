@@ -63,21 +63,23 @@ Les tableaux ci-dessous résument les GPIO effectivement utilisés dans les prof
 
 | GPIO | Utilité | Module(s) | Remarques |
 |---|---|---|---|
-| 32 | Sortie digitale `filtration` | `io` / `pooldev` | `Board::DO::Pump` |
-| 25 | Sortie digitale `ph_pump` | `io` / `pooldev` | `Board::DO::Heater` |
-| 26 | Sortie digitale `chlorine_pump` | `io` / `pooldev` | `Board::DO::Light` |
-| 13 | Sortie digitale `chlorine_generator` (impulsion) | `io` / `pooldev` | `Board::DO::Aux1` |
-| 33 | Sortie digitale `robot` | `io` / `pooldev` | `Board::DO::Aux2` |
-| 27 | Sortie digitale `lights` | `io` / `pooldev` | `Board::DO::Aux3` |
-| 23 | Sortie digitale `fill_pump` | `io` / `pooldev` | `Board::DO::Aux4` |
-| 13 | Sortie digitale `water_heater` | `io` / `pooldev` | `Board::DO::Aux5`, actuellement dupliqué avec `Aux1` (commentaire source: test temporaire) |
-| 34 | Entrée digitale `flow` / niveau piscine | `io` | `Board::DI::FlowSwitch` |
+| 32 | Sortie digitale `filtration` | `io` / `pooldev` | `Board::DO::Filtration` |
+| 25 | Sortie digitale `ph_pump` | `io` / `pooldev` | `Board::DO::PhPump` |
+| 26 | Sortie digitale `chlorine_pump` | `io` / `pooldev` | `Board::DO::ChlorinePump` |
+| 13 | Sortie digitale `chlorine_generator` (impulsion) | `io` / `pooldev` | `Board::DO::ChlorineGenerator` |
+| 33 | Sortie digitale `robot` | `io` / `pooldev` | `Board::DO::Robot` |
+| 27 | Sortie digitale `lights` | `io` / `pooldev` | `Board::DO::Lights` |
+| 23 | Sortie digitale `fill_pump` | `io` / `pooldev` | `Board::DO::FillPump` |
+| 4 | Sortie digitale `water_heater` | `io` / `pooldev` | `Board::DO::WaterHeater` |
+| 34 | Entrée digitale `Pool Level` | `io` | `Board::DI::FlowSwitch` |
+| 36 | Entrée digitale `pH Level` | `io` | `Board::DI::PhLevel` |
+| 39 | Entrée digitale `Chlorine Level` | `io` | `Board::DI::ChlorineLevel` |
 | 19 | Bus 1-Wire A (sonde température eau) | `io` | `Board::OneWire::BusA` |
 | 18 | Bus 1-Wire B (sonde température air) | `io` | `Board::OneWire::BusB` |
-| 21 | I2C principal SDA (ADS1115/PCF8574) | `io` | `Board::I2C::Sda` |
-| 22 | I2C principal SCL (ADS1115/PCF8574) | `io` | `Board::I2C::Scl` |
-| 12 | I2C interlink SDA (Flow.IO <-> Supervisor) | `i2ccfg.server` | Valeur par défaut, configurable (`i2c/cfg/server/sda`) |
-| 14 | I2C interlink SCL (Flow.IO <-> Supervisor) | `i2ccfg.server` | Valeur par défaut, configurable (`i2c/cfg/server/scl`) |
+| 21 | I2C principal SDA (ADS1115/PCF8574, bus 0) | `io` | `Board::I2C::Sda` |
+| 22 | I2C principal SCL (ADS1115/PCF8574, bus 0) | `io` | `Board::I2C::Scl` |
+| 12 | I2C interlink SDA (Flow.IO <-> Supervisor, bus 1) | `i2ccfg.server` | Pin configurable (`i2c/cfg/server/sda`), bus fixé à 1 |
+| 14 | I2C interlink SCL (Flow.IO <-> Supervisor, bus 1) | `i2ccfg.server` | Pin configurable (`i2c/cfg/server/scl`), bus fixé à 1 |
 | 16 | UART2 RX (HMI Nextion) | `hmi` | Peut devenir port logs si `FLOW_SWAP_LOG_HMI_SERIAL=1` |
 | 17 | UART2 TX (HMI Nextion) | `hmi` | Peut devenir port logs si `FLOW_SWAP_LOG_HMI_SERIAL=1` |
 | 1 / 3 | UART0 TX/RX (console logs par défaut) | `log.sink.serial` | USB/serial monitor |
@@ -86,8 +88,8 @@ Les tableaux ci-dessous résument les GPIO effectivement utilisés dans les prof
 
 | GPIO | Utilité | Module(s) | Remarques |
 |---|---|---|---|
-| 21 | I2C interlink SDA (Supervisor -> Flow.IO) | `i2ccfg.client` | Valeur par défaut, configurable (`i2c/cfg/client/sda`) |
-| 22 | I2C interlink SCL (Supervisor -> Flow.IO) | `i2ccfg.client` | Valeur par défaut, configurable (`i2c/cfg/client/scl`) |
+| 21 | I2C interlink SDA (Supervisor -> Flow.IO, bus 1) | `i2ccfg.client` | Pin configurable (`i2c/cfg/client/sda`), bus fixé à 1 |
+| 22 | I2C interlink SCL (Supervisor -> Flow.IO, bus 1) | `i2ccfg.client` | Pin configurable (`i2c/cfg/client/scl`), bus fixé à 1 |
 | 16 | UART2 RX (bridge WebSerial et flash Flow.IO) | `webinterface`, `fwupdate` | Peut être redéfini via `FLOW_SUPERVISOR_WEBSERIAL_RX` |
 | 17 | UART2 TX (bridge WebSerial et flash Flow.IO) | `webinterface`, `fwupdate` | Peut être redéfini via `FLOW_SUPERVISOR_WEBSERIAL_TX` |
 | 25 | Contrôle `EN` du Flow.IO cible (reset/enable) | `fwupdate` | `FLOW_SUPERVISOR_FLOWIO_EN_PIN` |

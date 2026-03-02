@@ -3,9 +3,9 @@ flowchart TB
 
 %% Layer 0: Hardware
 subgraph L0["Socle hardware"]
-  HW1["GPIO sorties: Pump(32), Heater(25), Light(26), Aux1(13), Aux2(33), Aux3(27), Aux4(23), Aux5(13)"]
-  HW2["GPIO entree: FlowSwitch(34)"]
-  HW3["I2C: SDA(21) / SCL(22)"]
+  HW1["GPIO sorties: filtration(32), ph_pump(25), chlorine_pump(26), chlorine_generator(13), robot(33), lights(27), fill_pump(23), water_heater(4)"]
+  HW2["GPIO entrees: PoolLevel(34), pHLevel(36), ChlorineLevel(39)"]
+  HW3["I2C IO bus0: SDA(21)/SCL(22) + I2C interlink bus1: Flow.IO SDA(12)/SCL(14), Supervisor SDA(21)/SCL(22)"]
   HW4["1-Wire: BusA(19) / BusB(18)"]
   HW5["UART0(USB/Serial) + UART2 RX(16)/TX(17)"]
   HW6["WiFi radio ESP32"]
