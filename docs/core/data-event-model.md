@@ -1,343 +1,206 @@
-# Modèle DataStore, EventBus et Config
+# DataStore et Flux Runtime (état actuel)
 
 ## Introduction
 
-Flow.IO sépare volontairement 3 responsabilités:
-1. `ConfigStore`: vérité persistante (NVS), modifiable par patch JSON.
-2. `DataStore`: vérité runtime en RAM (état vivant du système).
-3. `EventBus`: signalisation asynchrone entre modules.
+Flow.IO sépare les responsabilités en 4 blocs:
+1. `ConfigStore`: configuration persistante (NVS), chargée au boot puis modifiable.
+2. `DataStore`: état runtime en RAM (`RuntimeData`).
+3. `EventBus`: signalisation asynchrone (`EventId`, payloads bornés à 48 octets).
+4. `RuntimeDispatchModule`: décision de publication runtime MQTT (throttle, immédiat, retry).
 
-Cette séparation évite de mélanger:
-- ce qui doit survivre au reboot (`ConfigStore`)
-- ce qui change en continu (`DataStore`)
-- la façon d’annoncer ces changements (`EventBus`)
+Ce document décrit le **flux réellement implémenté** après le refactor big-bang runtime.
 
-Référence rapide:
-- voir aussi l'[Annexe DataKeys complets](#annexe-datakeys-complets) en bas de page.
+## Structures et contrats clés
 
-## Les “registres” à connaître
-
-Quand on parle de registres dans ce firmware, il faut distinguer les registres de routage, pas des registres CPU.
-
-### 1) Registre de configuration (`ConfigStore` + `ConfigMeta`)
-
-Chaque variable config est enregistrée avec:
-- `module` JSON (ex: `mqtt`, `poollogic`, `pdm/pd1`)
-- `jsonName` (ex: `sens_min_pub_ms`)
-- `nvsKey` (ex: `mq_smin`)
-- `moduleId` + `branchId` (routage des événements `ConfigChanged`)
-- type et mode persistant/volatile
-
-Utilité:
-- convertir JSON <-> variables C++
-- persister automatiquement en NVS
-- notifier précisément quel bloc config a changé
-
-### 2) Registre runtime (`DataStore` + `RuntimeData`)
-
-`RuntimeData` est agrégé depuis `src/Core/Generated/ModuleDataModel_Generated.h`:
-- `wifi`
-- `time`
-- `mqtt`
-- `ha`
-- `io`
-- `pool`
-
-Utilité:
-- point central de lecture runtime pour tous les modules
-- écriture via helpers typés (`WifiRuntime.h`, `IORuntime.h`, `PoolDeviceRuntime.h`, etc.)
-
-### 3) Registre de clés runtime (`DataKeys`)
-
-`DataKey` est un identifiant stable de champ runtime utilisé dans `DataChangedPayload`.
-
-Clés fixes:
-- `1` `WifiReady`
-- `2` `WifiIp`
-- `3` `TimeReady`
-- `4` `MqttReady`
-- `5` `MqttRxDrop`
-- `6` `MqttParseFail`
-- `7` `MqttHandlerFail`
-- `8` `MqttOversizeDrop`
-- `10` `HaPublished`
-- `11` `HaVendor`
-- `12` `HaDeviceId`
-
-Plages réservées:
-- `40..63` IO endpoints
-- `80..87` pool-device state
-- `88..95` pool-device metrics
-
-Utilité:
-- décoder rapidement quel sous-système a changé sans parser un gros objet
-- garder un contrat stable entre producteurs runtime et consommateurs d’événements
-
-Référence:
-- liste exhaustive en [Annexe DataKeys complets](#annexe-datakeys-complets)
-
-### 4) Registre d’événements (`EventId` + payloads)
-
-`EventId` définit le type d’événement, les structures de payload dans `EventPayloads.h` définissent le contrat binaire.
-
-Événements majeurs:
-- `DataChanged`
-- `DataSnapshotAvailable`
-- `ConfigChanged`
-- `SchedulerEventTriggered`
-- `AlarmRaised`/`Cleared`/`Acked`/`SilenceChanged`/`ConditionChanged`
-
-Utilité:
-- découpler producteurs et consommateurs
-- transporter un delta petit, stable et déterministe
-
-### 5) Registre de branches config (`ConfigBranchIds`)
-
-`branchId` mappe chaque zone config à un topic logique (`cfg/<module>`).
-
-Exemples:
-- `Mqtt` -> `cfg/mqtt`
-- `TimeScheduler` -> `cfg/time/scheduler`
-- `PoolDevicePd0` -> `cfg/pdm/pd0`
-- `PoolDeviceRuntimePd0` -> `cfg/pdmrt/pd0`
-
-Utilité:
-- publication MQTT ciblée au lieu de republier toute la config
+- `RuntimeData` (agrégat): `wifi`, `time`, `mqtt`, `ha`, `io`, `pool`.
+- `DataKey` (`include/Core/DataKeys.h`): identifiants stables des champs runtime.
+- `DataChangedPayload`:
+  - `DataKey id`
+  - `uint32_t dirtyFlags`
+- `DirtyFlags`:
+  - `DIRTY_NETWORK`, `DIRTY_TIME`, `DIRTY_MQTT`, `DIRTY_SENSORS`, `DIRTY_ACTUATORS`.
+- `IRuntimeSnapshotProvider`:
+  - `runtimeSnapshotCount()`
+  - `runtimeSnapshotSuffix()`
+  - `runtimeSnapshotClass()`
+  - `runtimeSnapshotAffectsKey()`
+  - `buildRuntimeSnapshot()`
+- `RuntimeRouteClass`:
+  - `NumericThrottled`
+  - `ActuatorImmediate`
 
 ## DataStore: mécanique exacte
 
-### Contrat
-
-Toute écriture runtime suit ce pattern:
-1. module écrit dans `RuntimeData` via helper `set...`.
-2. helper appelle `DataStore::notifyChanged(key, dirtyMask)`.
-3. `notifyChanged()` fait 3 actions: OR du `dirtyMask` dans `_dirtyFlags`, `post(DataChanged, DataChangedPayload{key})`, puis `post(DataSnapshotAvailable, DataSnapshotPayload{dirtyFlags})`.
-
-### Dirty flags
-
-Flags:
-- `DIRTY_NETWORK`
-- `DIRTY_TIME`
-- `DIRTY_MQTT`
-- `DIRTY_SENSORS`
-- `DIRTY_ACTUATORS`
-
-Ces flags servent de “classe de changement”, pas d’identifiant fin.
-
-### Point important
-
-Dans l’état actuel du code, `_dirtyFlags` est cumulatif tant que personne n’appelle `consumeDirtyFlags()` (méthode présente mais non utilisée).
-
-Conséquence:
-- `DataSnapshotAvailable` est un hint de type “au moins ces classes ont changé”, pas un delta strict “depuis le dernier publish MQTT”.
-
-### Focus: `DataSnapshotAvailable` en détail
-
-`DataSnapshotAvailable` n’envoie pas une clé précise, il envoie un masque de classes modifiées (`dirtyFlags`).
-
-Différence avec `DataChanged`:
-- `DataChanged`: granularité fine (une `DataKey` précise)
-- `DataSnapshotAvailable`: granularité macro (catégorie(s) de changement)
-
-Séquence réelle dans `notifyChanged()`:
-1. `_dirtyFlags |= dirtyMask`
-2. publication `DataChanged(key)`
-3. publication `DataSnapshotAvailable(dirtyFlags = _dirtyFlags courant)`
-
-Exemple:
-- changement capteur: `_dirtyFlags = DIRTY_SENSORS`
-- puis changement actionneur: `_dirtyFlags = DIRTY_SENSORS | DIRTY_ACTUATORS`
-- le second `DataSnapshotAvailable` transporte ce masque combiné
-
-À quoi ça sert:
-- éviter aux consommateurs de réagir à chaque clé unitairement
-- permettre un traitement par “famille de données” (ex: capteurs vs actionneurs)
-- faciliter le throttling côté sortie MQTT (publish sélectif par type)
-
-Cas concret Flow.IO:
-- `MQTTModule` écoute `DataSnapshotAvailable`
-- il OR le masque reçu dans `sensorsPendingDirtyMask`
-- puis le runtime mux publie uniquement les routes dont le `dirtyMask` est pertinent
-
-Limite actuelle à connaître:
-- comme `_dirtyFlags` n’est pas consommé/réinitialisé dans le flux courant, le masque est cumulatif
-- c’est volontairement un signal de “travail possiblement nécessaire”, pas une preuve que chaque route doit republier
-- le filtrage final est assuré par les timestamps des snapshots (`lastPublishedTs`) et le throttling MQTT
-
-## EventBus: mécanique exacte
-
-### File et dispatch
-
-- queue FreeRTOS longueur `16` (`Limits::EventQueueLen`)
-- payload max `48` bytes
-- `post()` non bloquant (`xQueueSend(..., 0)`)
-- dispatch dans `EventBusModule` avec batch de `8` événements par tour
-- période de loop `5ms`
-
-### Implication pratique
-
-Si la queue est pleine, `post()` retourne `false`.
-Certains producteurs ignorent ce retour.
-Le design privilégie la non-blocage du temps réel, au prix d’une perte possible d’événement en surcharge.
-
-### Qui publie quoi
-
-- `DataStore` -> `DataChanged`, `DataSnapshotAvailable`
-- `ConfigStore` -> `ConfigChanged`
-- `TimeModule` -> `SchedulerEventTriggered`
-- `AlarmModule` -> événements d’alarme
-- `EventBusModule` -> `SystemStarted`
-
-### Qui consomme quoi (principaux)
-
-- `MQTTModule`: `DataChanged` (clé `WifiReady`), `DataSnapshotAvailable`, `ConfigChanged`, événements alarme
-- `TimeModule`: `DataChanged` (`WifiReady`), `ConfigChanged` (`Time`, `TimeScheduler`)
-- `PoolDeviceModule`: `SchedulerEventTriggered`, `DataChanged` (`TimeReady`), `ConfigChanged` (`Time`)
-- `PoolLogicModule`: `SchedulerEventTriggered`
-
-## ConfigStore: cycle de vie d’un changement
-
-### Boot
-
-1. modules enregistrent leurs `ConfigVariable`.
-2. `ConfigStore::loadPersistent()` hydrate depuis NVS.
-3. `onConfigLoaded()` permet aux modules d’ajuster leur runtime.
-
-### Patch JSON (`cfg/set`)
-
-Flux:
-1. MQTT reçoit patch JSON.
-2. `ConfigStore::applyJson()` met à jour variables concernées.
-3. chaque variable persistante modifiée est écrite NVS.
-4. pour chaque clé modifiée, `ConfigStore` publie `ConfigChanged` avec `moduleId`, `branchId`, `nvsKey`, `module`.
-
-Ce payload permet aux consommateurs (surtout MQTT) de republier seulement le bon bloc `cfg/...`.
-
-## End-to-end: exemples de flux
-
-### Exemple A: nouvelle mesure capteur (IO analogique)
-
-1. `IOModule` lit la valeur.
-2. `setIoEndpointFloat(..., DIRTY_SENSORS)`.
-3. `DataStore` publie `DataChanged` + `DataSnapshotAvailable`.
-4. `MQTTModule` reçoit `DataSnapshotAvailable`, pose `sensorsPending=true` et OR le mask dans `sensorsPendingDirtyMask`.
-5. boucle MQTT déclenche callback mux runtime (`publishRuntimeStates`).
-6. callback publie seulement les routes pertinentes/nécessaires.
-
-### Exemple B: commande actionneur
-
-1. `cmd` MQTT -> `pooldevice.write`.
-2. `PoolDeviceModule` met à jour état désiré/réel.
-3. `setPoolDeviceRuntimeState(..., DIRTY_ACTUATORS)`.
-4. `MQTTModule` déclenche un publish actuator prioritaire même en fenêtre de throttle (voir section suivante).
-
-### Exemple C: changement config
-
-1. `cfg/set` MQTT.
-2. `ConfigStore::applyJson`.
-3. `ConfigChanged(branchId=...)`.
-4. `MQTTModule` queue une republication ciblée de `cfg/<module>`.
-
-## Throttling: comment c’est réellement géré
-
-Le throttling est multi-couches.
-
-### Couche 1: anti-bruit à la source (setters runtime)
-
-Les helpers `set...` évitent de notifier si la valeur n’a pas changé.
-Exemple: `setMqttReady`, `setIoEndpointBool`, `setPoolDeviceRuntimeMetrics`.
-
-Effet:
-- pas d’événement inutile quand la donnée est identique
-
-### Couche 2: filtrage par classe de changement
-
-Le callback runtime mux (`main.cpp`) reçoit `activeSensorsDirtyMask` depuis MQTT.
-Chaque route possède un `dirtyMask`:
-- `rt/io/output/*` et `rt/pdm/state/*` -> `DIRTY_ACTUATORS`
-- `rt/io/input/*` et `rt/pdm/metrics/*` -> `DIRTY_SENSORS`
-
-Effet:
-- un changement capteur ne force pas le rebuild de toutes les routes actionneur, et inversement
-
-### Couche 3: fenêtre minimum MQTT (`sens_min_pub_ms`)
-
-Config: `mqtt.sens_min_pub_ms` (défaut `20000ms`).
-
-Comportement:
-- si on est dans la fenêtre throttle et qu’il y a des actionneurs dirty, publish actionneurs autorisé immédiatement
-- les capteurs peuvent attendre la fin de fenêtre
-- hors fenêtre, publish normal des dirty flags actifs
-
-Spécial reconnect/boot:
-- pendant `StartupActuatorRetryMs` (`3000ms`), les routes actionneurs sont republiées même si déjà envoyées, pour recoller vite l’état HA.
-
-### Couche 4: anti-duplicate par timestamp route
-
-Dans `publishRuntimeStates`, chaque route garde `lastPublishedTs`.
-Si `ts <= lastPublishedTs`, route skip (`routes_skip_nc`).
-
-Effet:
-- même si dirty flags restent larges, une route sans vrai nouveau timestamp n’est pas republiée
-
-### Couche 5: publishers périodiques séparés
-
-Indépendamment des dirty flags, des snapshots périodiques existent:
-- `rt/runtime/state` toutes 30s
-- `rt/network/state` toutes 60s
-- `rt/system/state` toutes 60s
-
-Effet:
-- observabilité continue même sans changement capteur/actionneur
-
-## Comment tuner le throttling
-
-1. Diminuer `mqtt.sens_min_pub_ms` pour plus de réactivité capteurs.
-2. Augmenter `mqtt.sens_min_pub_ms` pour réduire trafic CPU/radio.
-3. Garder en tête que les actionneurs sont priorisés pendant throttle.
-4. Surveiller `rt/runtime/state` avec `routes_pub`, `routes_skip_nc`, `routes_skip_m`, `build_errors`, `publish_errors`.
-
-## EventStore: ce qui existe et ce qui n’existe pas
-
-Il n’existe pas de journal d’événements persistant dédié.
-
-- `EventBus`: RAM, volatile, temps réel, potentiellement pertes sous surcharge
-- `ConfigStore`: durable (NVS), source de vérité de la configuration
-- `DataStore`: RAM, état courant partagé, non durable
-
-## Annexe DataKeys complets
-
-Source: `include/Core/DataKeys.h`.
-
-### Clés unitaires
-
-- `1` `DataKeys::WifiReady`
-- `2` `DataKeys::WifiIp`
-- `3` `DataKeys::TimeReady`
-- `4` `DataKeys::MqttReady`
-- `5` `DataKeys::MqttRxDrop`
-- `6` `DataKeys::MqttParseFail`
-- `7` `DataKeys::MqttHandlerFail`
-- `8` `DataKeys::MqttOversizeDrop`
-- `10` `DataKeys::HaPublished`
-- `11` `DataKeys::HaVendor`
-- `12` `DataKeys::HaDeviceId`
-
-### Bornes et plages réservées
-
-- `DataKeys::IoBase = 40`
-- `DataKeys::IoReservedCount = 24`
-- `DataKeys::IoEndExclusive = 64`
-- `DataKeys::PoolDeviceStateBase = 80`
-- `DataKeys::PoolDeviceStateReservedCount = 8`
-- `DataKeys::PoolDeviceStateEndExclusive = 88`
-- `DataKeys::PoolDeviceMetricsBase = 88`
-- `DataKeys::PoolDeviceMetricsReservedCount = 8`
-- `DataKeys::PoolDeviceMetricsEndExclusive = 96`
-- `DataKeys::ReservedMax = 127`
-
-### Mapping explicite des plages
-
-- `40..63`: IO runtime (`DataKeys::IoBase + idx`, `idx=0..23`)
-- `80..87`: pool-device state (`DataKeys::PoolDeviceStateBase + slot`, `slot=0..7`)
-- `88..95`: pool-device metrics (`DataKeys::PoolDeviceMetricsBase + slot`, `slot=0..7`)
+Écriture runtime standard:
+1. un module met à jour `RuntimeData` via un helper `set...`.
+2. le helper appelle `DataStore::notifyChanged(key, dirtyMask)`.
+3. `DataStore::notifyChanged()` publie `EventId::DataChanged` avec `DataChangedPayload{id, dirtyFlags}`.
+
+Important:
+- `DataSnapshotAvailable` n'est plus utilisé.
+- il n'y a plus de `_dirtyFlags` cumulatif dans `DataStore`.
+
+## Flowchart 1: enregistrements au démarrage
+
+```mermaid
+flowchart TD
+A["main_flowio::setup()"] --> B["moduleManager.add(...)\n(inclut runtimeDispatchModule)"]
+B --> C["runtimeDispatchModule.registerProvider(io/pooldev/poollogic)"]
+C --> D["ModuleManager::initAll(cfg, services)"]
+
+D --> E["Phase init() de chaque module"]
+E --> E1["DataStoreModule::init\nsetEventBus + services.add('datastore')"]
+E --> E2["EventBusModule::init\nservices.add('eventbus')"]
+E --> E3["MQTTModule::init\nservices.add('mqtt')"]
+E --> E4["IOModule::init\nregisterVar + services.add('io')"]
+E --> E5["PoolDeviceModule::init\nservices.add('pooldev')"]
+E --> E6["RuntimeDispatchModule::init\nsubscribe(DataChanged)"]
+
+D --> F["ConfigStore::loadPersistent()"]
+F --> G["Phase onConfigLoaded()"]
+G --> G1["IOModule::onConfigLoaded\nconfigureRuntime_()"]
+G --> G2["PoolDeviceModule::onConfigLoaded\nloadPersistedMetrics_()"]
+G --> G3["PoolLogicModule::onConfigLoaded\nensureDailySlot_()"]
+G --> G4["RuntimeDispatchModule::onConfigLoaded\nrebuildRoutes_ + markAllRoutesDirty(true)"]
+
+D --> H["startTask() modules actifs"]
+H --> H1["EventBusModule::loop\nEventBus::dispatch(8)"]
+H --> H2["RuntimeDispatchModule::loop\n(25 ms)"]
+H --> H3["IOModule::loop / PoolDeviceModule::loop / MQTTModule::loop"]
+```
+
+### Fonctions impliquées (startup)
+
+- `main_flowio::setup()`
+- `ModuleManager::initAll()`
+- `ConfigStore::loadPersistent()`
+- `Module::init()` / `Module::onConfigLoaded()` / `Module::startTask()`
+- `RuntimeDispatchModule::registerProvider()`
+- `RuntimeDispatchModule::rebuildRoutes_()`
+- `RuntimeDispatchModule::markAllRoutesDirty(true)`
+
+### Structures manipulées (startup)
+
+- `ServiceRegistry`
+- `ConfigStore` / `ConfigVariable<>`
+- `RuntimeDispatchModule::providers_[]`
+- `RuntimeDispatchModule::routes_[]` (`RouteEntry`)
+- `EventBus` (`QueuedEvent`)
+
+## Flowchart 2: changement d'un état numérique runtime
+
+Exemple typique: mesure analogique (`rt/io/input/aN`).
+
+```mermaid
+flowchart TD
+A["IOModule::loop()"] --> B["IOModule::ioTick_(now)"]
+B --> C["scheduler_.tick(now)"]
+C --> D["tickFastAds_/tickSlowDs_"]
+D --> E["IOModule::processAnalogDefinition_(idx)"]
+
+E --> F["slot.endpoint->update(value,true,ts)"]
+F --> G["callback def.onValueChanged(ctx,value)"]
+G --> H["main_flowio::onIoFloatValue(ctx,value)"]
+H --> I["setIoEndpointFloat(ds, idx, value, millis, DIRTY_SENSORS)"]
+
+I --> J["RuntimeData.io.endpoints[idx] = IOEndpointRuntime"]
+J --> K["DataStore::notifyChanged(DataKey=IoBase+idx, DIRTY_SENSORS)"]
+K --> L["EventBus::post(EventId::DataChanged, DataChangedPayload)"]
+
+L --> M["EventBus::dispatch() -> RuntimeDispatchModule::onEvent_()"]
+M --> N["provider.runtimeSnapshotAffectsKey(...) ? markRouteDirty(i,false)"]
+N --> O["RuntimeDispatchModule::loop()"]
+O --> P{"routeClass == NumericThrottled ?"}
+P -->|oui| Q["throttle 10s (kNumericThrottleMs)"]
+Q --> R["provider.buildRuntimeSnapshot(...)"]
+P -->|non| R
+R --> S["mqttSvc.publish -> MQTTModule::publish -> esp_mqtt_client_publish"]
+```
+
+### Fonctions impliquées (numérique)
+
+- `IOModule::processAnalogDefinition_()`
+- `main_flowio::onIoFloatValue()`
+- `setIoEndpointFloat()`
+- `DataStore::notifyChanged()`
+- `EventBus::post()`
+- `RuntimeDispatchModule::onEvent_()`
+- `RuntimeDispatchModule::markRouteDirty_()`
+- `RuntimeDispatchModule::loop()`
+- `IRuntimeSnapshotProvider::buildRuntimeSnapshot()`
+- `MQTTModule::publish()`
+
+### Structures manipulées (numérique)
+
+- `IOModule::AnalogSlot`
+- `IOAnalogSample`
+- `IOEndpointRuntime`
+- `DataChangedPayload`
+- `RuntimeDispatchModule::RouteEntry` / `RouteSnapshot`
+
+## Flowchart 3: changement d'un état actuateur runtime
+
+Exemple typique: sortie digitale (`rt/io/output/dN`) pilotée par `PoolDeviceModule`.
+
+```mermaid
+flowchart TD
+A["PoolDeviceModule::tickDevices_() ou cmd"] --> B["PoolDeviceModule::writeIo_(ioId,on)"]
+B --> C["ioSvc_->writeDigital(ctx,id,on,ts)"]
+C --> D["IOModule::svcWriteDigital_ -> ioWriteDigital_()"]
+
+D --> E["DigitalActuatorEndpoint::write(in)"]
+E --> F["setIoEndpointBool(ds, rtIdx, on, ts, DIRTY_ACTUATORS)"]
+F --> G["DataStore::notifyChanged(IoBase+rtIdx, DIRTY_ACTUATORS)"]
+G --> H["EventBus::post(DataChangedPayload)"]
+
+H --> I["RuntimeDispatchModule::onEvent_ -> markRouteDirty"]
+I --> J["RuntimeDispatchModule::loop"]
+J --> K["routeClass == ActuatorImmediate => pas de throttle 10s"]
+K --> L["buildRuntimeSnapshot(topic rt/io/output/dN)"]
+L --> M["mqttSvc.publish -> MQTTModule::publish"]
+```
+
+### Fonctions impliquées (actuateur)
+
+- `PoolDeviceModule::writeIo_()`
+- `IOModule::svcWriteDigital_()`
+- `IOModule::ioWriteDigital_()`
+- `setIoEndpointBool()`
+- `DataStore::notifyChanged()`
+- `RuntimeDispatchModule::onEvent_()`
+- `RuntimeDispatchModule::loop()`
+- `MQTTModule::publish()`
+
+### Structures manipulées (actuateur)
+
+- `IOModule::DigitalSlot`
+- `IOEndpointValue`
+- `IOEndpointRuntime`
+- `DataChangedPayload`
+- `RuntimeDispatchModule::RouteEntry`
+
+## Politique de dispatch runtime (état actuel)
+
+- `NumericThrottled`: publication max 1 fois / 10s par route.
+- `ActuatorImmediate`: publication immédiate, sans attendre la fenêtre 10s.
+- Retry publication: backoff exponentiel `250ms -> 500ms -> ... -> 5s`.
+- Déduplication: si `ts <= lastPublishedTs` (et pas `force`), la route n'est pas republiée.
+- Reconnexion MQTT: `DATAKEY_MQTT_READY=true` force un `markAllRoutesDirty(true)`.
+
+## DataKeys et plages runtime
+
+Référence `include/Core/DataKeys.h`:
+- clés fixes réseau/temps/mqtt/ha (`1..12` hors trous)
+- `40..63`: IO endpoints (`IoBase + idx`)
+- `80..87`: pool-device state
+- `88..95`: pool-device metrics
+
+## Rôle exact de MQTTModule après refactor
+
+`MQTTModule` ne fait plus la logique de throttling runtime par route.
+Il reste responsable de:
+- transport MQTT (`publish`, connexion, QoS/outbox guards, low-heap guards)
+- commandes `cmd` / `cfg/set`
+- publication config (`cfg/*`), alarmes et snapshots périodiques non liés au dispatcher runtime (`rt/network/state`, `rt/system/state`)
+
+Le throttling runtime capteurs/actionneurs est porté par `RuntimeDispatchModule`.
