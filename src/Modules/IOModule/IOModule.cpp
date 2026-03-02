@@ -634,6 +634,47 @@ void IOModule::registerHaAnalogSensors_()
     (void)haSvc_->addSensor(haSvc_->ctx, &s5);
 }
 
+void IOModule::registerHaDigitalInputBinarySensors_()
+{
+    if (!haSvc_ || !haSvc_->addBinarySensor) return;
+
+    static constexpr const char* kBoolTpl = "{{ 'True' if value_json.value else 'False' }}";
+    const HABinarySensorEntry poolLevel{
+        "io",
+        "pool_level",
+        "Pool Level",
+        "rt/io/input/i0",
+        kBoolTpl,
+        nullptr,
+        nullptr,
+        "mdi:waves-arrow-up"
+    };
+    const HABinarySensorEntry phLevel{
+        "io",
+        "ph_level",
+        "pH Level",
+        "rt/io/input/i1",
+        kBoolTpl,
+        nullptr,
+        nullptr,
+        "mdi:flask-outline"
+    };
+    const HABinarySensorEntry chlorineLevel{
+        "io",
+        "chlorine_level",
+        "Chlorine Level",
+        "rt/io/input/i2",
+        kBoolTpl,
+        nullptr,
+        nullptr,
+        "mdi:test-tube"
+    };
+
+    (void)haSvc_->addBinarySensor(haSvc_->ctx, &poolLevel);
+    (void)haSvc_->addBinarySensor(haSvc_->ctx, &phLevel);
+    (void)haSvc_->addBinarySensor(haSvc_->ctx, &chlorineLevel);
+}
+
 void IOModule::forceAnalogSnapshotPublish_(uint8_t analogIdx, uint32_t nowMs)
 {
     if (analogIdx >= MAX_ANALOG_ENDPOINTS) return;
@@ -1444,8 +1485,11 @@ void IOModule::init(ConfigStore& cfg, ServiceRegistry& services)
     cfg.registerVar(d7NameVar_, kCfgModuleId, kCfgBranchIoD7); cfg.registerVar(d7PinVar_, kCfgModuleId, kCfgBranchIoD7); cfg.registerVar(d7ActiveHighVar_, kCfgModuleId, kCfgBranchIoD7); cfg.registerVar(d7InitialOnVar_, kCfgModuleId, kCfgBranchIoD7); cfg.registerVar(d7MomentaryVar_, kCfgModuleId, kCfgBranchIoD7); cfg.registerVar(d7PulseVar_, kCfgModuleId, kCfgBranchIoD7);
 
     LOGI("I/O config registered");
+    if (haSvc_) {
+        if (haSvc_->addSensor) registerHaAnalogSensors_();
+        if (haSvc_->addBinarySensor) registerHaDigitalInputBinarySensors_();
+    }
     if (haSvc_ && haSvc_->addSwitch) {
-        registerHaAnalogSensors_();
         for (uint8_t i = 0; i < FLOW_POOL_IO_BINDING_COUNT; ++i) {
             const PoolIoBinding& b = FLOW_POOL_IO_BINDINGS[i];
             if (b.ioId < IO_ID_DO_BASE) continue;

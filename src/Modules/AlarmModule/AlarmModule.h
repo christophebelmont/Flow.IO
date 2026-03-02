@@ -89,6 +89,7 @@ private:
     uint8_t takeDueAlarmNotifyIds_(AlarmId* out, uint8_t max, uint32_t nowMs);
     static bool delayReached_(uint32_t sinceMs, uint32_t delayMs, uint32_t nowMs);
     static const char* condStateStr_(AlarmCondState s);
+    void registerHaEntities_(ServiceRegistry& services);
 
     AlarmService alarmSvc_{
         svcRegisterAlarm_,
@@ -108,6 +109,8 @@ private:
     const LogHubService* logHub_ = nullptr;
     EventBus* eventBus_ = nullptr;
     const CommandService* cmdSvc_ = nullptr;
+    const HAService* haSvc_ = nullptr;
+    bool haEntitiesRegistered_ = false;
 
     bool enabled_ = true;
     int32_t evalPeriodMsCfg_ = (int32_t)Limits::Alarm::DefaultEvalPeriodMs;

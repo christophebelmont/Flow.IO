@@ -33,6 +33,7 @@ public:
 
     /** @brief Initialize monitoring. */
     void init(ConfigStore& cfg, ServiceRegistry& services) override;
+    void onConfigLoaded(ConfigStore&, ServiceRegistry& services) override;
     /** @brief Monitoring loop. */
     void loop() override;
 
@@ -51,6 +52,8 @@ private:
     const WifiService* wifiSvc = nullptr;
     const ConfigStoreService* cfgSvc = nullptr;
     const LogHubService* logHub = nullptr;
+    const HAService* haSvc_ = nullptr;
+    bool haEntitiesRegistered_ = false;
 
     uint32_t lastJsonDumpMs = 0;
     uint32_t lastTraceLogMs = 0;
@@ -60,6 +63,7 @@ private:
     void logHeapStats();
     void logTaskStacks();
     void buildHealthJson(char* out, size_t outLen);
+    void registerHaEntities_(ServiceRegistry& services);
 
     static const char* wifiStateStr(WifiState st);
 

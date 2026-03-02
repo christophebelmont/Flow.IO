@@ -20,18 +20,20 @@ struct DigitalInDef {
 namespace BoardLayout {
 
 constexpr DigitalOutDef DOs[] = {
-    {"filtration", Board::DO::Pump, false, 0},
-    {"ph_pump", Board::DO::Heater, false, 0},
-    {"chlorine_pump", Board::DO::Light, false, 0},
-    {"chlorine_generator", Board::DO::Aux1, true, Limits::MomentaryPulseMs},
-    {"robot", Board::DO::Aux2, false, 0},
-    {"lights", Board::DO::Aux3, false, 0},
-    {"fill_pump", Board::DO::Aux4, false, 0},
-    {"water_heater", Board::DO::Aux5, false, 0},
+    {"filtration", Board::DO::Filtration, false, 0},
+    {"ph_pump", Board::DO::PhPump, false, 0},
+    {"chlorine_pump", Board::DO::ChlorinePump, false, 0},
+    {"chlorine_generator", Board::DO::ChlorineGenerator, true, Limits::MomentaryPulseMs},
+    {"robot", Board::DO::Robot, false, 0},
+    {"lights", Board::DO::Lights, false, 0},
+    {"fill_pump", Board::DO::FillPump, false, 0},
+    {"water_heater", Board::DO::WaterHeater, false, 0},
 };
 
 constexpr DigitalInDef DIs[] = {
-    {"flow", Board::DI::FlowSwitch},
+    {"Pool Level", Board::DI::FlowSwitch},
+    {"pH Level", Board::DI::PhLevel},
+    {"Chlorine Level", Board::DI::ChlorineLevel},
 };
 
 constexpr uint8_t DigitalOutCount = (uint8_t)(sizeof(DOs) / sizeof(DOs[0]));

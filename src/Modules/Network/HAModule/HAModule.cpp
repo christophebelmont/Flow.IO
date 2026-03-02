@@ -901,66 +901,6 @@ void HAModule::init(ConfigStore& cfg, ServiceRegistry& services)
     haSvc.ctx = this;
     services.add("ha", &haSvc);
 
-    const HASensorEntry alarmsPack{
-        "alarms",
-        "alarms_pack",
-        "Alarms Pack",
-        "rt/alarms/p",
-        "{{ value_json.p | int(0) }}",
-        "diagnostic",
-        "mdi:alarm-light-outline",
-        nullptr
-    };
-    (void)addSensorEntry(alarmsPack);
-
-    const HASensorEntry uptimeSeconds{
-        "system",
-        "uptime_seconds",
-        "Uptime",
-        "rt/system/state",
-        "{{ value_json.upt_s | int(0) }}",
-        "diagnostic",
-        "mdi:timer-outline",
-        "s"
-    };
-    (void)addSensorEntry(uptimeSeconds);
-
-    const HASensorEntry heapFreeBytes{
-        "system",
-        "heap_free_bytes",
-        "Heap Free",
-        "rt/system/state",
-        "{{ ((value_json.heap.free | float(0)) / 1024) | round(1) }}",
-        "diagnostic",
-        "mdi:memory",
-        "ko"
-    };
-    (void)addSensorEntry(heapFreeBytes);
-
-    const HASensorEntry heapMinFreeBytes{
-        "system",
-        "heap_min_free_bytes",
-        "Heap Min Free",
-        "rt/system/state",
-        "{{ ((value_json.heap.min | float(0)) / 1024) | round(1) }}",
-        "diagnostic",
-        "mdi:memory",
-        "ko"
-    };
-    (void)addSensorEntry(heapMinFreeBytes);
-
-    const HASensorEntry heapFragPercent{
-        "system",
-        "heap_fragmentation",
-        "Heap Fragmentation",
-        "rt/system/state",
-        "{{ value_json.heap.frag | int(0) }}",
-        "diagnostic",
-        "mdi:chart-donut",
-        "%"
-    };
-    (void)addSensorEntry(heapFragPercent);
-
     if (dsSvc && dsSvc->store) {
         setHaAutoconfigPublished(*dsSvc->store, false);
     }

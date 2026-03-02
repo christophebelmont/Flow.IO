@@ -12,19 +12,21 @@ namespace Board {
 //FLOW.IO uses UART pins 
 #if BOARD_REV == 1
 namespace DO {
-constexpr uint8_t Pump = 32;
-constexpr uint8_t Heater = 25;
-constexpr uint8_t Light = 26;
-constexpr uint8_t Aux1 = 13;
-constexpr uint8_t Aux2 = 33;
-constexpr uint8_t Aux3 = 27;
-constexpr uint8_t Aux4 = 23;
-constexpr uint8_t Aux5 = 13; // temporary change for testing
+constexpr uint8_t Filtration = 32;
+constexpr uint8_t PhPump = 25;
+constexpr uint8_t ChlorinePump = 26;
+constexpr uint8_t ChlorineGenerator = 13;
+constexpr uint8_t Robot = 33;
+constexpr uint8_t Lights = 27;
+constexpr uint8_t FillPump = 23;
+constexpr uint8_t WaterHeater = 4;
 }  // namespace DO
 
-// Digital inputs only pins are 34, 35, 36, 39. We use 34 for a flow switch.
+// Digital input-only pins are 34, 35, 36, 39.
 namespace DI {
 constexpr uint8_t FlowSwitch = 34;
+constexpr uint8_t PhLevel = 36;
+constexpr uint8_t ChlorineLevel = 39;
 }  // namespace DI
 
 namespace OneWire {

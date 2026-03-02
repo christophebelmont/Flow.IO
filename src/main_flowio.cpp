@@ -546,6 +546,30 @@ void setup() {
     poolLevelDef.onValueCtx = (void*)(uintptr_t)level->runtimeIndex;
     requireSetup(ioModule.defineDigitalInput(poolLevelDef), "define digital input pool level");
 
+    IODigitalInputDefinition phLevelDef{};
+    const PoolSensorBinding* phLevel = flowPoolSensorBySlot(POOL_SENSOR_SLOT_PH_LEVEL);
+    requireSetup(phLevel != nullptr, "missing sensor mapping pH Level");
+    snprintf(phLevelDef.id, sizeof(phLevelDef.id), "%s", phLevel->endpointId);
+    phLevelDef.ioId = phLevel->ioId;
+    phLevelDef.pin = Board::DI::PhLevel;
+    phLevelDef.activeHigh = true;
+    phLevelDef.pullMode = IO_PULL_NONE;
+    phLevelDef.onValueChanged = onIoBoolValue;
+    phLevelDef.onValueCtx = (void*)(uintptr_t)phLevel->runtimeIndex;
+    requireSetup(ioModule.defineDigitalInput(phLevelDef), "define digital input pH level");
+
+    IODigitalInputDefinition chlorineLevelDef{};
+    const PoolSensorBinding* chlorineLevel = flowPoolSensorBySlot(POOL_SENSOR_SLOT_CHLORINE_LEVEL);
+    requireSetup(chlorineLevel != nullptr, "missing sensor mapping Chlorine Level");
+    snprintf(chlorineLevelDef.id, sizeof(chlorineLevelDef.id), "%s", chlorineLevel->endpointId);
+    chlorineLevelDef.ioId = chlorineLevel->ioId;
+    chlorineLevelDef.pin = Board::DI::ChlorineLevel;
+    chlorineLevelDef.activeHigh = true;
+    chlorineLevelDef.pullMode = IO_PULL_NONE;
+    chlorineLevelDef.onValueChanged = onIoBoolValue;
+    chlorineLevelDef.onValueCtx = (void*)(uintptr_t)chlorineLevel->runtimeIndex;
+    requireSetup(ioModule.defineDigitalInput(chlorineLevelDef), "define digital input chlorine level");
+
     static_assert(FLOW_POOL_IO_BINDING_COUNT == BoardLayout::DigitalOutCount, "Unexpected pool IO binding count");
 
     for (uint8_t i = 0; i < FLOW_POOL_IO_BINDING_COUNT; ++i) {

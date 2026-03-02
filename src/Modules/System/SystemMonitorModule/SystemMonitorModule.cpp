@@ -30,6 +30,79 @@ void SystemMonitorModule::init(ConfigStore& cfg, ServiceRegistry& services) {
     wifiSvc = services.get<WifiService>("wifi");
     cfgSvc  = services.get<ConfigStoreService>("config");
     logHub  = services.get<LogHubService>("loghub");
+    haSvc_  = services.get<HAService>("ha");
+}
+
+void SystemMonitorModule::registerHaEntities_(ServiceRegistry& services)
+{
+    if (haEntitiesRegistered_) return;
+    if (!haSvc_) haSvc_ = services.get<HAService>("ha");
+    if (!haSvc_ || !haSvc_->addSensor) return;
+
+    const HASensorEntry uptimeSeconds{
+        "system",
+        "uptime_seconds",
+        "Uptime",
+        "rt/system/state",
+        "{{ value_json.upt_s | int(0) }}",
+        "diagnostic",
+        "mdi:timer-outline",
+        "s",
+        false,
+        nullptr
+    };
+    const HASensorEntry heapFreeBytes{
+        "system",
+        "heap_free_bytes",
+        "Heap Free",
+        "rt/system/state",
+        "{{ ((value_json.heap.free | float(0)) / 1024) | round(1) }}",
+        "diagnostic",
+        "mdi:memory",
+        "ko",
+        false,
+        nullptr
+    };
+    const HASensorEntry heapMinFreeBytes{
+        "system",
+        "heap_min_free_bytes",
+        "Heap Min Free",
+        "rt/system/state",
+        "{{ ((value_json.heap.min | float(0)) / 1024) | round(1) }}",
+        "diagnostic",
+        "mdi:memory",
+        "ko",
+        false,
+        nullptr
+    };
+    const HASensorEntry heapFragPercent{
+        "system",
+        "heap_fragmentation",
+        "Heap Fragmentation",
+        "rt/system/state",
+        "{{ value_json.heap.frag | int(0) }}",
+        "diagnostic",
+        "mdi:chart-donut",
+        "%",
+        false,
+        nullptr
+    };
+
+    bool ok = true;
+    ok = haSvc_->addSensor(haSvc_->ctx, &uptimeSeconds) && ok;
+    ok = haSvc_->addSensor(haSvc_->ctx, &heapFreeBytes) && ok;
+    ok = haSvc_->addSensor(haSvc_->ctx, &heapMinFreeBytes) && ok;
+    ok = haSvc_->addSensor(haSvc_->ctx, &heapFragPercent) && ok;
+    if (ok) {
+        haEntitiesRegistered_ = true;
+    } else {
+        LOGW("HA registration failed: system monitor entities");
+    }
+}
+
+void SystemMonitorModule::onConfigLoaded(ConfigStore&, ServiceRegistry& services)
+{
+    registerHaEntities_(services);
 }
 
 void SystemMonitorModule::logBootInfo() {

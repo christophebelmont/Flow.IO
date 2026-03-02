@@ -625,6 +625,7 @@ void AlarmModule::init(ConfigStore& cfg, ServiceRegistry& services)
     const EventBusService* eb = services.get<EventBusService>("eventbus");
     eventBus_ = eb ? eb->bus : nullptr;
     cmdSvc_ = services.get<CommandService>("cmd");
+    haSvc_ = services.get<HAService>("ha");
 
     (void)services.add("alarms", &alarmSvc_);
 
@@ -639,9 +640,35 @@ void AlarmModule::init(ConfigStore& cfg, ServiceRegistry& services)
     (void)logHub_;
 }
 
-void AlarmModule::onConfigLoaded(ConfigStore&, ServiceRegistry&)
+void AlarmModule::registerHaEntities_(ServiceRegistry& services)
+{
+    if (haEntitiesRegistered_) return;
+    if (!haSvc_) haSvc_ = services.get<HAService>("ha");
+    if (!haSvc_ || !haSvc_->addSensor) return;
+
+    const HASensorEntry alarmsPack{
+        "alarms",
+        "alarms_pack",
+        "Alarms Pack",
+        "rt/alarms/p",
+        "{{ value_json.p | int(0) }}",
+        "diagnostic",
+        "mdi:alarm-light-outline",
+        nullptr,
+        false,
+        nullptr
+    };
+    if (haSvc_->addSensor(haSvc_->ctx, &alarmsPack)) {
+        haEntitiesRegistered_ = true;
+    } else {
+        LOGW("HA registration failed: alarms_pack");
+    }
+}
+
+void AlarmModule::onConfigLoaded(ConfigStore&, ServiceRegistry& services)
 {
     evalPeriodMsCfg_ = (int32_t)clampEvalPeriodMs_(evalPeriodMsCfg_);
+    registerHaEntities_(services);
 }
 
 void AlarmModule::evaluateOnce_(uint32_t nowMs)

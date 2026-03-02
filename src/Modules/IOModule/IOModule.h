@@ -204,6 +204,7 @@ private:
     int32_t clampPrecisionForHa_(int32_t precision) const;
     void buildHaValueTemplate_(uint8_t analogIdx, char* out, size_t outLen) const;
     void registerHaAnalogSensors_();
+    void registerHaDigitalInputBinarySensors_();
     void forceAnalogSnapshotPublish_(uint8_t analogIdx, uint32_t nowMs);
     void maybeRefreshHaOnPrecisionChange_();
     bool endpointIndexFromId_(const char* id, uint8_t& idxOut) const;

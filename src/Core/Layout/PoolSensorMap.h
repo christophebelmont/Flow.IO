@@ -19,7 +19,9 @@ enum PoolSensorSlot : uint8_t {
     POOL_SENSOR_SLOT_SPARE = 3,
     POOL_SENSOR_SLOT_WATER_TEMP = 4,
     POOL_SENSOR_SLOT_AIR_TEMP = 5,
-    POOL_SENSOR_SLOT_POOL_LEVEL = 6
+    POOL_SENSOR_SLOT_POOL_LEVEL = 6,
+    POOL_SENSOR_SLOT_PH_LEVEL = 7,
+    POOL_SENSOR_SLOT_CHLORINE_LEVEL = 8
 };
 
 struct PoolSensorBinding {
@@ -45,6 +47,8 @@ static constexpr PoolSensorBinding FLOW_POOL_SENSOR_BINDINGS[] = {
     {POOL_SENSOR_SLOT_WATER_TEMP, POOL_SENSOR_KIND_ANALOG,  (IoId)(IO_ID_AI_BASE + 4), "Water Temperature", "Water Temperature", 4},
     {POOL_SENSOR_SLOT_AIR_TEMP,   POOL_SENSOR_KIND_ANALOG,  (IoId)(IO_ID_AI_BASE + 5), "Air Temperature",   "Air Temperature",   5},
     {POOL_SENSOR_SLOT_POOL_LEVEL, POOL_SENSOR_KIND_DIGITAL, (IoId)(IO_ID_DI_BASE + 0), "Pool Level",        "Pool Level",        20},
+    {POOL_SENSOR_SLOT_PH_LEVEL,   POOL_SENSOR_KIND_DIGITAL, (IoId)(IO_ID_DI_BASE + 1), "pH Level",          "pH Level",          21},
+    {POOL_SENSOR_SLOT_CHLORINE_LEVEL, POOL_SENSOR_KIND_DIGITAL, (IoId)(IO_ID_DI_BASE + 2), "Chlorine Level", "Chlorine Level",   22},
 };
 
 static constexpr uint8_t FLOW_POOL_SENSOR_BINDING_COUNT =
