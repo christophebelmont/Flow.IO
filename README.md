@@ -2,7 +2,7 @@
 
 Flow.IO est une plateforme de pilotage piscine connectée: elle automatise la gestiion de la qualité de l'eau, réduit les opérations manuelles, et donne une supervision claire des équipements en local comme à distance.
 
-![Home Automation Integration](docs/pictures/Grafana%20and%20App.png)
+![Home Automation](docs/pictures/Grafana%20and%20App.png)
 
 ## Pourquoi Flow.IO
 
