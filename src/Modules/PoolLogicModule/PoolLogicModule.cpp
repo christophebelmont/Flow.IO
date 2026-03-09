@@ -284,6 +284,8 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
     waterTempIdVar_.moduleName = kCfgModuleSensors;
     airTempIdVar_.moduleName = kCfgModuleSensors;
     levelIdVar_.moduleName = kCfgModuleSensors;
+    phLevelIdVar_.moduleName = kCfgModuleSensors;
+    chlorineLevelIdVar_.moduleName = kCfgModuleSensors;
 
     psiLowVar_.moduleName = kCfgModulePid;
     psiHighVar_.moduleName = kCfgModulePid;
@@ -340,6 +342,8 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
     cfg.registerVar(waterTempIdVar_, kCfgModuleId, kCfgBranchSensors);
     cfg.registerVar(airTempIdVar_, kCfgModuleId, kCfgBranchSensors);
     cfg.registerVar(levelIdVar_, kCfgModuleId, kCfgBranchSensors);
+    cfg.registerVar(phLevelIdVar_, kCfgModuleId, kCfgBranchSensors);
+    cfg.registerVar(chlorineLevelIdVar_, kCfgModuleId, kCfgBranchSensors);
 
     cfg.registerVar(psiLowVar_, kCfgModuleId, kCfgBranchPid);
     cfg.registerVar(psiHighVar_, kCfgModuleId, kCfgBranchPid);
@@ -647,6 +651,36 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
         if (!alarmSvc_->registerAlarm(alarmSvc_->ctx, &psiHighAlarm, &PoolLogicModule::condPsiHighStatic_, this)) {
             LOGW("PoolLogic failed to register AlarmId::PoolPsiHigh");
         }
+
+        const AlarmRegistration phTankLowAlarm{
+            AlarmId::PoolPhTankLow,
+            AlarmSeverity::Alarm,
+            false,
+            500,
+            1000,
+            60000,
+            "ph_tank_low",
+            "pH tank low",
+            "poollogic"
+        };
+        if (!alarmSvc_->registerAlarm(alarmSvc_->ctx, &phTankLowAlarm, &PoolLogicModule::condPhTankLowStatic_, this)) {
+            LOGW("PoolLogic failed to register AlarmId::PoolPhTankLow");
+        }
+
+        const AlarmRegistration chlorineTankLowAlarm{
+            AlarmId::PoolChlorineTankLow,
+            AlarmSeverity::Alarm,
+            false,
+            500,
+            1000,
+            60000,
+            "chlorine_tank_low",
+            "Chlorine tank low",
+            "poollogic"
+        };
+        if (!alarmSvc_->registerAlarm(alarmSvc_->ctx, &chlorineTankLowAlarm, &PoolLogicModule::condChlorineTankLowStatic_, this)) {
+            LOGW("PoolLogic failed to register AlarmId::PoolChlorineTankLow");
+        }
     } else {
         LOGW("PoolLogic running without alarm service");
     }
@@ -934,6 +968,30 @@ AlarmCondState PoolLogicModule::condPsiHighStatic_(void* ctx, uint32_t)
     }
 
     return (psi > self->psiHighThreshold_) ? AlarmCondState::True : AlarmCondState::False;
+}
+
+AlarmCondState PoolLogicModule::condPhTankLowStatic_(void* ctx, uint32_t)
+{
+    PoolLogicModule* self = static_cast<PoolLogicModule*>(ctx);
+    if (!self || !self->enabled_) return AlarmCondState::False;
+
+    bool low = false;
+    if (!self->loadDigitalSensor_(self->phLevelIoId_, low)) {
+        return AlarmCondState::Unknown;
+    }
+    return low ? AlarmCondState::True : AlarmCondState::False;
+}
+
+AlarmCondState PoolLogicModule::condChlorineTankLowStatic_(void* ctx, uint32_t)
+{
+    PoolLogicModule* self = static_cast<PoolLogicModule*>(ctx);
+    if (!self || !self->enabled_) return AlarmCondState::False;
+
+    bool low = false;
+    if (!self->loadDigitalSensor_(self->chlorineLevelIoId_, low)) {
+        return AlarmCondState::Unknown;
+    }
+    return low ? AlarmCondState::True : AlarmCondState::False;
 }
 
 bool PoolLogicModule::cmdFiltrationWriteStatic_(void* userCtx,
@@ -1474,6 +1532,8 @@ void PoolLogicModule::runControlLoop_(uint32_t nowMs)
     float airTemp = 0.0f;
     float orp = 0.0f;
     bool levelOk = true;
+    bool phTankLow = false;
+    bool chlorineTankLow = false;
 
     const bool havePsi = loadAnalogSensor_(psiIoId_, psi);
     const bool havePh = loadAnalogSensor_(phIoId_, ph);
@@ -1481,21 +1541,31 @@ void PoolLogicModule::runControlLoop_(uint32_t nowMs)
     const bool haveAirTemp = loadAnalogSensor_(airTempIoId_, airTemp);
     const bool haveOrp = loadAnalogSensor_(orpIoId_, orp);
     const bool haveLevel = loadDigitalSensor_(levelIoId_, levelOk);
+    const bool havePhTankLow = loadDigitalSensor_(phLevelIoId_, phTankLow);
+    const bool haveChlorineTankLow = loadDigitalSensor_(chlorineLevelIoId_, chlorineTankLow);
 
     if (alarmSvc_ && alarmSvc_->isActive) {
         const bool psiLow = alarmSvc_->isActive(alarmSvc_->ctx, AlarmId::PoolPsiLow);
         const bool psiHigh = alarmSvc_->isActive(alarmSvc_->ctx, AlarmId::PoolPsiHigh);
+        const bool phTankLowAlarm = alarmSvc_->isActive(alarmSvc_->ctx, AlarmId::PoolPhTankLow);
+        const bool chlorineTankLowAlarm = alarmSvc_->isActive(alarmSvc_->ctx, AlarmId::PoolChlorineTankLow);
         psiError_ = psiLow || psiHigh;
-    } else if (filtrationFsm_.on && havePsi) {
-        const uint32_t runSec = stateUptimeSec_(filtrationFsm_, nowMs);
-        const bool underPressure = (runSec > psiStartupDelaySec_) && (psi < psiLowThreshold_);
-        const bool overPressure = (psi > psiHighThreshold_);
-        if ((underPressure || overPressure) && !psiError_) {
-            psiError_ = true;
-            LOGW("PSI error latched (psi=%.3f low=%.3f high=%.3f)",
-                 (double)psi,
-                 (double)psiLowThreshold_,
-                 (double)psiHighThreshold_);
+        phTankLowError_ = phTankLowAlarm;
+        chlorineTankLowError_ = chlorineTankLowAlarm;
+    } else {
+        phTankLowError_ = havePhTankLow && phTankLow;
+        chlorineTankLowError_ = haveChlorineTankLow && chlorineTankLow;
+        if (filtrationFsm_.on && havePsi) {
+            const uint32_t runSec = stateUptimeSec_(filtrationFsm_, nowMs);
+            const bool underPressure = (runSec > psiStartupDelaySec_) && (psi < psiLowThreshold_);
+            const bool overPressure = (psi > psiHighThreshold_);
+            if ((underPressure || overPressure) && !psiError_) {
+                psiError_ = true;
+                LOGW("PSI error latched (psi=%.3f low=%.3f high=%.3f)",
+                     (double)psi,
+                     (double)psiLowThreshold_,
+                     (double)psiHighThreshold_);
+            }
         }
     }
 
@@ -1583,7 +1653,7 @@ void PoolLogicModule::runControlLoop_(uint32_t nowMs)
     bool phPumpDesired = false;
     bool orpPumpDesired = false;
     if (filtrationDesired) {
-        const bool phAllowed = phPidEnabled_ && havePh && !psiError_;
+        const bool phAllowed = phPidEnabled_ && havePh && !psiError_ && !phTankLowError_;
         if (phAllowed) {
             uint32_t outMs = 0;
             (void)stepTemporalPid_(phPidState_,
@@ -1602,7 +1672,7 @@ void PoolLogicModule::runControlLoop_(uint32_t nowMs)
         }
 
         // ORP peristaltic dosing is disabled when electrolyse mode is active.
-        const bool orpAllowed = orpPidEnabled_ && haveOrp && !electrolyseMode_ && !psiError_;
+        const bool orpAllowed = orpPidEnabled_ && haveOrp && !electrolyseMode_ && !psiError_ && !chlorineTankLowError_;
         if (orpAllowed) {
             uint32_t outMs = 0;
             (void)stepTemporalPid_(orpPidState_,

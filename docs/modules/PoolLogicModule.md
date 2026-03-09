@@ -84,6 +84,8 @@ Persistance: `ConfigStore` + `NvsKeys::PoolLogic::*`
 - `wat_temp_io_id`
 - `air_temp_io_id`
 - `pool_lvl_io_id`
+- `ph_lvl_io_id`
+- `chl_lvl_io_id`
 
 ### Seuils métier
 
@@ -206,6 +208,17 @@ Logique principale:
   - délai ON `0 ms`, OFF `1000 ms`, répétition `60000 ms`
   - condition active seulement si filtration ON
 
+### Alarmes niveau cuves dosage
+
+- `AlarmId::PoolPhTankLow`
+  - non-latched (auto-clear quand entrée inactive)
+  - délai ON `500 ms`, OFF `1000 ms`, répétition `60000 ms`
+  - condition: entrée digitale `ph_lvl_io_id == true`
+- `AlarmId::PoolChlorineTankLow`
+  - non-latched (auto-clear quand entrée inactive)
+  - délai ON `500 ms`, OFF `1000 ms`, répétition `60000 ms`
+  - condition: entrée digitale `chl_lvl_io_id == true`
+
 ### Réarmement / acquittement PSI
 
 - source de vérité en nominal: `alarmSvc->isActive(PoolPsiLow|PoolPsiHigh)`
@@ -237,6 +250,9 @@ Le mode PID est autorisé seulement si:
 Le calcul et la commande sont ensuite conditionnés par:
 - capteur disponible (`ph_io_id` / `orp_io_id`)
 - pas de défaut PSI latched (`psiError_==false`)
+- pas de niveau bas cuve actif:
+  - pH: `phTankLowError_==false`
+  - ORP/chlore: `chlorineTankLowError_==false`
 - pour ORP péristaltique: `electrolys_mode == false` (en mode électrolyse, la pompe ORP liquide est inhibée)
 
 ### Convention d'erreur

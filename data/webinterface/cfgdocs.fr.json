@@ -1,9 +1,9 @@
 {
   "_meta": {
     "generated": true,
-    "total": 258,
-    "decl_total": 210,
-    "decl_with_cfgdoc": 97,
+    "total": 262,
+    "decl_total": 212,
+    "decl_with_cfgdoc": 99,
     "missing_cfgdoc_count": 113,
     "manual_overrides_total": 18,
     "manual_overrides_applied": 0
@@ -1393,6 +1393,15 @@
       "var": "autoModeVar_",
       "source": "cfgdoc"
     },
+    "poollogic/chl_lvl_io_id": {
+      "module": "poollogic",
+      "name": "chl_lvl_io_id",
+      "type": "UInt8",
+      "label": "IO niveau cuve chlore",
+      "help": "Identifiant IO de l'entrée digitale niveau bas cuve chlore.",
+      "var": "chlorineLevelIdVar_",
+      "source": "cfgdoc"
+    },
     "poollogic/delay/dly_electro_min": {
       "module": "poollogic/delay",
       "name": "dly_electro_min",
@@ -1883,6 +1892,15 @@
       "var": "phKpVar_",
       "source": "cfgdoc"
     },
+    "poollogic/ph_lvl_io_id": {
+      "module": "poollogic",
+      "name": "ph_lvl_io_id",
+      "type": "UInt8",
+      "label": "IO niveau cuve pH",
+      "help": "Identifiant IO de l'entrée digitale niveau bas cuve pH.",
+      "var": "phLevelIdVar_",
+      "source": "cfgdoc"
+    },
     "poollogic/ph_pump_slot": {
       "module": "poollogic",
       "name": "ph_pump_slot",
@@ -2189,6 +2207,15 @@
       "var": "airTempIdVar_",
       "source": "cfgdoc-alias"
     },
+    "poollogic/sensors/chl_lvl_io_id": {
+      "module": "poollogic/sensors",
+      "name": "chl_lvl_io_id",
+      "type": "UInt8",
+      "label": "IO niveau cuve chlore",
+      "help": "Identifiant IO de l'entrée digitale niveau bas cuve chlore.",
+      "var": "chlorineLevelIdVar_",
+      "source": "cfgdoc-alias"
+    },
     "poollogic/sensors/orp_io_id": {
       "module": "poollogic/sensors",
       "name": "orp_io_id",
@@ -2205,6 +2232,15 @@
       "label": "IO capteur pH",
       "help": "Identifiant IO de la mesure pH.",
       "var": "phIdVar_",
+      "source": "cfgdoc-alias"
+    },
+    "poollogic/sensors/ph_lvl_io_id": {
+      "module": "poollogic/sensors",
+      "name": "ph_lvl_io_id",
+      "type": "UInt8",
+      "label": "IO niveau cuve pH",
+      "help": "Identifiant IO de l'entrée digitale niveau bas cuve pH.",
+      "var": "phLevelIdVar_",
       "source": "cfgdoc-alias"
     },
     "poollogic/sensors/pool_lvl_io_id": {

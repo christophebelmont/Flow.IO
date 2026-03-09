@@ -89,6 +89,10 @@ private:
         (uint8_t)FLOW_POOL_SENSOR_BINDINGS[POOL_SENSOR_SLOT_AIR_TEMP].ioId;
     static constexpr uint8_t IO_ID_LEVEL_DEFAULT =
         (uint8_t)FLOW_POOL_SENSOR_BINDINGS[POOL_SENSOR_SLOT_POOL_LEVEL].ioId;
+    static constexpr uint8_t IO_ID_PH_LEVEL_DEFAULT =
+        (uint8_t)FLOW_POOL_SENSOR_BINDINGS[POOL_SENSOR_SLOT_PH_LEVEL].ioId;
+    static constexpr uint8_t IO_ID_CHLORINE_LEVEL_DEFAULT =
+        (uint8_t)FLOW_POOL_SENSOR_BINDINGS[POOL_SENSOR_SLOT_CHLORINE_LEVEL].ioId;
 
     bool enabled_ = true;
     volatile bool startupReady_ = true;
@@ -118,6 +122,8 @@ private:
     uint8_t waterTempIoId_ = IO_ID_WATER_TEMP_DEFAULT;
     uint8_t airTempIoId_ = IO_ID_AIR_TEMP_DEFAULT;
     uint8_t levelIoId_ = IO_ID_LEVEL_DEFAULT;
+    uint8_t phLevelIoId_ = IO_ID_PH_LEVEL_DEFAULT;
+    uint8_t chlorineLevelIoId_ = IO_ID_CHLORINE_LEVEL_DEFAULT;
 
     // Thresholds / delays
     float psiLowThreshold_ = 0.15f;
@@ -167,6 +173,8 @@ private:
     bool pendingDayReset_ = false;
 
     bool psiError_ = false;
+    bool phTankLowError_ = false;
+    bool chlorineTankLowError_ = false;
     bool cleaningDone_ = false;
     bool phPidEnabled_ = false;
     bool orpPidEnabled_ = false;
@@ -248,6 +256,12 @@ private:
     // CFGDOC: {"label":"IO niveau bassin","help":"Identifiant IO de la mesure de niveau bassin."}
     ConfigVariable<uint8_t,0> levelIdVar_{NVS_KEY(NvsKeys::PoolLogic::LevelIoId), "pool_lvl_io_id", "poollogic", ConfigType::UInt8,
                                           &levelIoId_, ConfigPersistence::Persistent, 0};
+    // CFGDOC: {"label":"IO niveau cuve pH","help":"Identifiant IO de l'entrée digitale niveau bas cuve pH."}
+    ConfigVariable<uint8_t,0> phLevelIdVar_{NVS_KEY(NvsKeys::PoolLogic::PhLevelIoId), "ph_lvl_io_id", "poollogic", ConfigType::UInt8,
+                                            &phLevelIoId_, ConfigPersistence::Persistent, 0};
+    // CFGDOC: {"label":"IO niveau cuve chlore","help":"Identifiant IO de l'entrée digitale niveau bas cuve chlore."}
+    ConfigVariable<uint8_t,0> chlorineLevelIdVar_{NVS_KEY(NvsKeys::PoolLogic::ChlorineLevelIoId), "chl_lvl_io_id", "poollogic", ConfigType::UInt8,
+                                                  &chlorineLevelIoId_, ConfigPersistence::Persistent, 0};
 
     // CFGDOC: {"label":"Seuil pression basse","help":"Seuil de pression basse pour detection d'anomalie.","unit":"bar"}
     ConfigVariable<float,0> psiLowVar_{NVS_KEY(NvsKeys::PoolLogic::PsiLow), "psi_low_th", "poollogic", ConfigType::Float,
@@ -346,6 +360,8 @@ private:
     static bool cmdAutoModeSetStatic_(void* userCtx, const CommandRequest& req, char* reply, size_t replyLen);
     static AlarmCondState condPsiLowStatic_(void* ctx, uint32_t nowMs);
     static AlarmCondState condPsiHighStatic_(void* ctx, uint32_t nowMs);
+    static AlarmCondState condPhTankLowStatic_(void* ctx, uint32_t nowMs);
+    static AlarmCondState condChlorineTankLowStatic_(void* ctx, uint32_t nowMs);
     bool cmdFiltrationWrite_(const CommandRequest& req, char* reply, size_t replyLen);
     bool cmdFiltrationRecalc_(const CommandRequest& req, char* reply, size_t replyLen);
     bool cmdAutoModeSet_(const CommandRequest& req, char* reply, size_t replyLen);

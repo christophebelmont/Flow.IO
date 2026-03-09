@@ -100,6 +100,8 @@ quand une condition reste active/oscille rapidement.
 Le module est générique. Dans le projet actuel, `PoolLogicModule` enregistre:
 - `AlarmId::PoolPsiLow`
 - `AlarmId::PoolPsiHigh`
+- `AlarmId::PoolPhTankLow`
+- `AlarmId::PoolChlorineTankLow`
 
 Pour `PoolLogic`, ces alarmes servent d'interlock sécurité:
 - `PoolLogic` lit `isActive()` sur ces IDs
