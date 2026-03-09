@@ -4,6 +4,7 @@
  * @brief Time synchronization and scheduling module.
  */
 #include "Core/Module.h"
+#include "Modules/Network/MQTTModule/MqttConfigRouteProducer.h"
 #include "Core/NvsKeys.h"
 #include "Core/Services/Services.h"
 #include <time.h>
@@ -74,6 +75,7 @@ private:
     const LogHubService* logHub = nullptr;
     EventBus* eventBus = nullptr;
     DataStore* dataStore = nullptr;
+    MqttConfigRouteProducer* cfgMqttPub_ = nullptr;
 
     static void onEventStatic(const Event& e, void* user);
     void onEvent(const Event& e);

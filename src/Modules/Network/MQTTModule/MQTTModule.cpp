@@ -1,41 +1,41 @@
 /**
  * @file MQTTModule.cpp
- * @brief Implementation file.
+ * @brief Unified MQTT TX implementation.
  */
+
 #include "MQTTModule.h"
+
 #include "Core/Runtime.h"
 #include "Core/MqttTopics.h"
-#include "Core/ConfigBranchIds.h"
 #include "Core/SystemLimits.h"
-#include "Core/SystemStats.h"
-#include <ArduinoJson.h>
-#include <esp_system.h>
-#include <esp_heap_caps.h>
-#include <initializer_list>
-#include <string.h>
 #include "Core/EventBus/EventPayloads.h"
+#include "Core/DataKeys.h"
+#include "Modules/Network/MQTTModule/MQTTRuntime.h"
+
+#include <ArduinoJson.h>
+#include <esp_heap_caps.h>
+#include <esp_system.h>
+#include <initializer_list>
+#include <new>
+#include <string.h>
+
 #define LOG_MODULE_ID ((LogModuleId)LogModuleIdValue::MQTTModule)
 #include "Core/ModuleLog.h"
 
-// Toggle all MQTT debug logs from one place (set true for diagnostics).
-static constexpr bool kMqttDebugLogsEnabled = false;
-#define MQTT_DLOG(...) do { if (kMqttDebugLogsEnabled) LOGD(__VA_ARGS__); } while (0)
-static constexpr bool kMqttRuntimeDiagEnabled = true;
-static constexpr uint32_t kMqttRuntimeDiagPeriodMs = 1000U;
-static constexpr UBaseType_t kMqttStackWarnThresholdWords = 256U;
-
-static uint32_t clampU32(uint32_t v, uint32_t minV, uint32_t maxV) {
+static uint32_t clampU32(uint32_t v, uint32_t minV, uint32_t maxV)
+{
     if (v < minV) return minV;
     if (v > maxV) return maxV;
     return v;
 }
 
-static uint32_t jitterMs(uint32_t baseMs, uint8_t pct) {
-    if (baseMs == 0 || pct == 0) return baseMs;
-    uint32_t span = (baseMs * pct) / 100U;
-    uint32_t r = esp_random();
-    uint32_t delta = r % (2U * span + 1U);
-    int32_t signedDelta = (int32_t)delta - (int32_t)span;
+static uint32_t jitterMs(uint32_t baseMs, uint8_t pct)
+{
+    if (baseMs == 0U || pct == 0U) return baseMs;
+    const uint32_t span = (baseMs * pct) / 100U;
+    const uint32_t r = esp_random();
+    const uint32_t delta = r % (2U * span + 1U);
+    const int32_t signedDelta = (int32_t)delta - (int32_t)span;
     int32_t out = (int32_t)baseMs + signedDelta;
     if (out < 0) out = 0;
     return (uint32_t)out;
@@ -61,65 +61,475 @@ static bool isMqttConnKey(const char* key)
     });
 }
 
-static const char* wifiStateName_(WifiState s)
+static void makeDeviceId(char* out, size_t len)
 {
-    switch (s) {
-        case WifiState::Disabled: return "Disabled";
-        case WifiState::Idle: return "Idle";
-        case WifiState::Connecting: return "Connecting";
-        case WifiState::Connected: return "Connected";
-        case WifiState::ErrorWait: return "ErrorWait";
-        default: return "Unknown";
-    }
+    if (!out || len == 0) return;
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    snprintf(out, len, "ESP32-%02X%02X%02X", mac[3], mac[4], mac[5]);
 }
 
-bool MQTTModule::svcPublish(void* ctx, const char* topic, const char* payload, int qos, bool retain)
-{
-    MQTTModule* self = static_cast<MQTTModule*>(ctx);
-    return self ? self->publish(topic, payload, qos, retain) : false;
-}
+static constexpr uint8_t kMqttCfgBranch = 1;
+static constexpr MqttConfigRouteProducer::Route kMqttCfgRoutes[] = {
+    {1, {(uint8_t)ConfigModuleId::Mqtt, kMqttCfgBranch}, "mqtt", "mqtt", (uint8_t)MqttPublishPriority::Normal, nullptr},
+};
 
-bool MQTTModule::svcPublishPrio(void* ctx, const char* topic, const char* payload, int qos, bool retain, uint8_t prio)
+bool MQTTModule::svcEnqueue_(void* ctx, uint8_t producerId, uint16_t messageId, uint8_t prio, uint8_t flags)
 {
     MQTTModule* self = static_cast<MQTTModule*>(ctx);
-    return self ? self->publishWithPriority(topic, payload, qos, retain, prio) : false;
+    if (!self) return false;
+
+    MqttPublishPriority p = MqttPublishPriority::Normal;
+    if (prio == (uint8_t)MqttPublishPriority::Low) p = MqttPublishPriority::Low;
+    else if (prio == (uint8_t)MqttPublishPriority::High) p = MqttPublishPriority::High;
+
+    return self->enqueue(producerId, messageId, p, flags);
 }
 
-void MQTTModule::svcFormatTopic(void* ctx, const char* suffix, char* out, size_t outLen)
+bool MQTTModule::svcRegisterProducer_(void* ctx, const MqttPublishProducer* producer)
+{
+    MQTTModule* self = static_cast<MQTTModule*>(ctx);
+    return self ? self->registerProducer(producer) : false;
+}
+
+void MQTTModule::svcFormatTopic_(void* ctx, const char* suffix, char* out, size_t outLen)
 {
     MQTTModule* self = static_cast<MQTTModule*>(ctx);
     if (!self) return;
     self->formatTopic(out, outLen, suffix);
 }
 
-bool MQTTModule::svcIsConnected(void* ctx)
+bool MQTTModule::svcIsConnected_(void* ctx)
 {
     MQTTModule* self = static_cast<MQTTModule*>(ctx);
     return self ? self->isConnected() : false;
 }
 
-void MQTTModule::setState(MQTTState s) {
-    state = s;
-    stateTs = millis();
-    if (dataStore) {
-        setMqttReady(*dataStore, s == MQTTState::Connected);
+void MQTTModule::setState_(MQTTState s)
+{
+    state_ = s;
+    stateTs_ = millis();
+    if (dataStore_) {
+        setMqttReady(*dataStore_, s == MQTTState::Connected);
     }
 }
 
-static void makeDeviceId(char* out, size_t len) {
-    uint8_t mac[6];
-    esp_read_mac(mac, ESP_MAC_WIFI_STA);
-    snprintf(out, len, "ESP32-%02X%02X%02X", mac[3], mac[4], mac[5]);
+void MQTTModule::buildTopics_()
+{
+    snprintf(topicCmd_, sizeof(topicCmd_), "%s/%s/%s", cfgData_.baseTopic, deviceId_, MqttTopics::SuffixCmd);
+    snprintf(topicStatus_, sizeof(topicStatus_), "%s/%s/%s", cfgData_.baseTopic, deviceId_, MqttTopics::SuffixStatus);
+    snprintf(topicCfgSet_, sizeof(topicCfgSet_), "%s/%s/%s", cfgData_.baseTopic, deviceId_, MqttTopics::SuffixCfgSet);
 }
 
-void MQTTModule::buildTopics() {
-    snprintf(topicCmd, sizeof(topicCmd), "%s/%s/%s", cfgData.baseTopic, deviceId, MqttTopics::SuffixCmd);
-    snprintf(topicAck, sizeof(topicAck), "%s/%s/%s", cfgData.baseTopic, deviceId, MqttTopics::SuffixAck);
-    snprintf(topicStatus, sizeof(topicStatus), "%s/%s/%s", cfgData.baseTopic, deviceId, MqttTopics::SuffixStatus);
-    snprintf(topicCfgSet, sizeof(topicCfgSet), "%s/%s/%s", cfgData.baseTopic, deviceId, MqttTopics::SuffixCfgSet);
-    snprintf(topicCfgAck, sizeof(topicCfgAck), "%s/%s/%s", cfgData.baseTopic, deviceId, MqttTopics::SuffixCfgAck);
-    snprintf(topicRtAlarmsMeta, sizeof(topicRtAlarmsMeta), "%s/%s/rt/alarms/m", cfgData.baseTopic, deviceId);
-    snprintf(topicRtAlarmsPack, sizeof(topicRtAlarmsPack), "%s/%s/rt/alarms/p", cfgData.baseTopic, deviceId);
+bool MQTTModule::registerRuntimeProvider(const IRuntimeSnapshotProvider* provider)
+{
+    return runtimeProducerCore_.registerProvider(provider);
+}
+
+bool MQTTModule::addRuntimePublisher(const char* topic,
+                                     uint32_t periodMs,
+                                     int qos,
+                                     bool retain,
+                                     bool (*build)(MQTTModule* self, char* out, size_t outLen),
+                                     bool allowNoPayload)
+{
+    if (!topic || !build) return false;
+    if (runtimePublisherCount_ >= Limits::Mqtt::Capacity::MaxPublishers) return false;
+
+    RuntimePublisher& p = runtimePublishers_[runtimePublisherCount_];
+    p.used = true;
+    p.messageId = (uint16_t)(StatusMsgRuntimeBase + runtimePublisherCount_);
+    p.topic = topic;
+    p.periodMs = periodMs;
+    p.nextDueMs = 0;
+    p.qos = (qos < 0) ? 0U : (uint8_t)qos;
+    p.retain = retain;
+    p.build = build;
+    p.allowNoPayload = allowNoPayload;
+    ++runtimePublisherCount_;
+    return true;
+}
+
+bool MQTTModule::registerProducer(const MqttPublishProducer* producer)
+{
+    if (!producer) return false;
+    if (producer->producerId == 0U) return false;
+    if (!producer->buildMessage) return false;
+
+    bool ok = false;
+    portENTER_CRITICAL(&producerMux_);
+    for (uint8_t i = 0; i < producerCount_; ++i) {
+        if (producers_[i] && producers_[i]->producerId == producer->producerId) {
+            producers_[i] = producer;
+            ok = true;
+            break;
+        }
+    }
+
+    if (!ok) {
+        if (producerCount_ < MaxProducers) {
+            producers_[producerCount_++] = producer;
+            ok = true;
+        }
+    }
+    portEXIT_CRITICAL(&producerMux_);
+    return ok;
+}
+
+const MqttPublishProducer* MQTTModule::findProducer_(uint8_t producerId) const
+{
+    const MqttPublishProducer* out = nullptr;
+    portENTER_CRITICAL(const_cast<portMUX_TYPE*>(&producerMux_));
+    for (uint8_t i = 0; i < producerCount_; ++i) {
+        const MqttPublishProducer* p = producers_[i];
+        if (p && p->producerId == producerId) {
+            out = p;
+            break;
+        }
+    }
+    portEXIT_CRITICAL(const_cast<portMUX_TYPE*>(&producerMux_));
+    return out;
+}
+
+int16_t MQTTModule::findJobSlot_(uint8_t producerId, uint16_t messageId) const
+{
+    for (uint8_t i = 0; i < MaxJobs; ++i) {
+        const Job& job = jobs_[i];
+        if (!job.used) continue;
+        if (job.producerId == producerId && job.messageId == messageId) return (int16_t)i;
+    }
+    return -1;
+}
+
+int16_t MQTTModule::allocJobSlot_()
+{
+    for (uint8_t i = 0; i < MaxJobs; ++i) {
+        if (!jobs_[i].used) return (int16_t)i;
+    }
+    return -1;
+}
+
+bool MQTTModule::queuePush_(uint8_t prio, const JobQueueItem& item)
+{
+    if (prio == (uint8_t)MqttPublishPriority::High) {
+        if (highQ_.count >= HighQueueCap) return false;
+        highQ_.items[highQ_.tail] = item;
+        highQ_.tail = (uint16_t)((highQ_.tail + 1U) % HighQueueCap);
+        ++highQ_.count;
+        return true;
+    }
+    if (prio == (uint8_t)MqttPublishPriority::Normal) {
+        if (normalQ_.count >= NormalQueueCap) return false;
+        normalQ_.items[normalQ_.tail] = item;
+        normalQ_.tail = (uint16_t)((normalQ_.tail + 1U) % NormalQueueCap);
+        ++normalQ_.count;
+        return true;
+    }
+    if (lowQ_.count >= LowQueueCap) return false;
+    lowQ_.items[lowQ_.tail] = item;
+    lowQ_.tail = (uint16_t)((lowQ_.tail + 1U) % LowQueueCap);
+    ++lowQ_.count;
+    return true;
+}
+
+bool MQTTModule::queuePop_(uint8_t prio, JobQueueItem& out)
+{
+    if (prio == (uint8_t)MqttPublishPriority::High) {
+        if (highQ_.count == 0U) return false;
+        out = highQ_.items[highQ_.head];
+        highQ_.head = (uint16_t)((highQ_.head + 1U) % HighQueueCap);
+        --highQ_.count;
+        return true;
+    }
+    if (prio == (uint8_t)MqttPublishPriority::Normal) {
+        if (normalQ_.count == 0U) return false;
+        out = normalQ_.items[normalQ_.head];
+        normalQ_.head = (uint16_t)((normalQ_.head + 1U) % NormalQueueCap);
+        --normalQ_.count;
+        return true;
+    }
+    if (lowQ_.count == 0U) return false;
+    out = lowQ_.items[lowQ_.head];
+    lowQ_.head = (uint16_t)((lowQ_.head + 1U) % LowQueueCap);
+    --lowQ_.count;
+    return true;
+}
+
+bool MQTTModule::queueSlot_(uint8_t slotIdx, uint8_t prio, bool invalidateOld)
+{
+    if (slotIdx >= MaxJobs) return false;
+    Job& job = jobs_[slotIdx];
+    if (!job.used) return false;
+
+    if (invalidateOld && job.queued) {
+        ++job.queueToken;
+        job.queued = false;
+    }
+
+    if (job.queued) return true;
+
+    job.queuedPrio = prio;
+    job.queued = true;
+    ++job.queueToken;
+
+    JobQueueItem item{};
+    item.slot = slotIdx;
+    item.token = job.queueToken;
+
+    if (!queuePush_(prio, item)) {
+        job.queued = false;
+        return false;
+    }
+
+    return true;
+}
+
+bool MQTTModule::enqueueJob_(uint8_t producerId, uint16_t messageId, uint8_t priority, uint8_t flags)
+{
+    bool ok = false;
+    portENTER_CRITICAL(&jobsMux_);
+
+    int16_t idx = findJobSlot_(producerId, messageId);
+    if (idx >= 0) {
+        Job& job = jobs_[(uint8_t)idx];
+        job.flags |= flags;
+
+        if (priority > job.priority) {
+            job.priority = priority;
+        }
+
+        if (job.processing) {
+            job.requeueAfterProcess = true;
+            ok = true;
+            portEXIT_CRITICAL(&jobsMux_);
+            return ok;
+        }
+
+        if (job.queued) {
+            if (job.priority > job.queuedPrio) {
+                ok = queueSlot_((uint8_t)idx, job.priority, true);
+            } else {
+                ok = true;
+            }
+            portEXIT_CRITICAL(&jobsMux_);
+            return ok;
+        }
+
+        job.retryCount = 0;
+        job.notBeforeMs = 0;
+        ok = queueSlot_((uint8_t)idx, job.priority, false);
+        portEXIT_CRITICAL(&jobsMux_);
+        return ok;
+    }
+
+    idx = allocJobSlot_();
+    if (idx < 0) {
+        portEXIT_CRITICAL(&jobsMux_);
+        return false;
+    }
+
+    Job& job = jobs_[(uint8_t)idx];
+    job = Job{};
+    job.used = true;
+    job.producerId = producerId;
+    job.messageId = messageId;
+    job.priority = priority;
+    job.flags = flags;
+    job.retryCount = 0;
+    job.notBeforeMs = 0;
+
+    ok = queueSlot_((uint8_t)idx, job.priority, false);
+    if (!ok) {
+        job = Job{};
+    }
+
+    portEXIT_CRITICAL(&jobsMux_);
+    return ok;
+}
+
+bool MQTTModule::enqueue(uint8_t producerId, uint16_t messageId, MqttPublishPriority priority, uint8_t flags)
+{
+    if (producerId == 0U) return false;
+    return enqueueJob_(producerId, messageId, (uint8_t)priority, flags);
+}
+
+bool MQTTModule::dequeueNextJob_(uint32_t nowMs, uint8_t& slotIdx)
+{
+    static const uint8_t order[3] = {
+        (uint8_t)MqttPublishPriority::High,
+        (uint8_t)MqttPublishPriority::Normal,
+        (uint8_t)MqttPublishPriority::Low
+    };
+
+    portENTER_CRITICAL(&jobsMux_);
+    const uint16_t maxScan = highQ_.count + normalQ_.count + lowQ_.count + 4U;
+
+    for (uint16_t scan = 0; scan < maxScan; ++scan) {
+        for (uint8_t i = 0; i < 3; ++i) {
+            JobQueueItem item{};
+            if (!queuePop_(order[i], item)) continue;
+            if (item.slot >= MaxJobs) continue;
+
+            Job& job = jobs_[item.slot];
+            if (!job.used || !job.queued || job.queueToken != item.token || job.queuedPrio != order[i]) {
+                continue;
+            }
+
+            job.queued = false;
+            if (job.processing) continue;
+
+            if ((int32_t)(nowMs - job.notBeforeMs) < 0) {
+                (void)queueSlot_(item.slot, job.priority, false);
+                continue;
+            }
+
+            job.processing = true;
+            slotIdx = item.slot;
+            portEXIT_CRITICAL(&jobsMux_);
+            return true;
+        }
+    }
+
+    portEXIT_CRITICAL(&jobsMux_);
+    return false;
+}
+
+bool MQTTModule::tryPublishNow_(const char* topic, const char* payload, uint8_t qos, bool retain)
+{
+    if (!topic || !payload) return false;
+    if (state_ != MQTTState::Connected) return false;
+    if (!client_) return false;
+
+    const uint32_t freeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    const uint32_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    if (freeHeap < Limits::NetworkPublish::MinFreeHeapBytes ||
+        largest < Limits::NetworkPublish::MinLargestBlockBytes) {
+        return false;
+    }
+
+    if (qos > 0U) {
+        static constexpr int kMaxOutboxBytes = 12 * 1024;
+        const int outboxBytes = esp_mqtt_client_get_outbox_size(client_);
+        if (outboxBytes >= kMaxOutboxBytes) return false;
+    }
+
+    const int packetId = esp_mqtt_client_publish(client_, topic, payload, 0, qos, retain ? 1 : 0);
+    return packetId >= 0;
+}
+
+void MQTTModule::processJobs_(uint32_t nowMs)
+{
+    for (uint8_t budget = 0; budget < ProcessBudgetPerTick; ++budget) {
+        uint8_t slotIdx = 0;
+        if (!dequeueNextJob_(nowMs, slotIdx)) break;
+
+        uint8_t producerId = 0;
+        uint16_t messageId = 0;
+        {
+            portENTER_CRITICAL(&jobsMux_);
+            Job& job = jobs_[slotIdx];
+            if (!job.used || !job.processing) {
+                portEXIT_CRITICAL(&jobsMux_);
+                continue;
+            }
+            producerId = job.producerId;
+            messageId = job.messageId;
+            portEXIT_CRITICAL(&jobsMux_);
+        }
+
+        const MqttPublishProducer* producer = findProducer_(producerId);
+        MqttBuildResult buildResult = MqttBuildResult::PermanentError;
+        bool published = false;
+
+        memset(topicBuf_, 0, sizeof(topicBuf_));
+        memset(payloadBuf_, 0, sizeof(payloadBuf_));
+
+        MqttBuildContext ctx{};
+        ctx.topic = topicBuf_;
+        ctx.topicCapacity = (uint16_t)sizeof(topicBuf_);
+        ctx.payload = payloadBuf_;
+        ctx.payloadCapacity = (uint16_t)sizeof(payloadBuf_);
+
+        if (producer && producer->buildMessage) {
+            buildResult = producer->buildMessage(producer->ctx, messageId, ctx);
+            if (buildResult == MqttBuildResult::Ready) {
+                if (ctx.topicLen == 0U && ctx.topic[0] != '\0') {
+                    ctx.topicLen = (uint16_t)strnlen(ctx.topic, ctx.topicCapacity);
+                }
+                if (ctx.payloadLen == 0U && ctx.payload[0] != '\0') {
+                    ctx.payloadLen = (uint16_t)strnlen(ctx.payload, ctx.payloadCapacity);
+                }
+
+                if (ctx.topicLen == 0U || ctx.payloadLen == 0U) {
+                    buildResult = MqttBuildResult::PermanentError;
+                } else {
+                    published = tryPublishNow_(ctx.topic, ctx.payload, ctx.qos, ctx.retain);
+                }
+            }
+        }
+
+        bool callbackPublished = false;
+        bool callbackDeferred = false;
+        bool callbackDropped = false;
+
+        portENTER_CRITICAL(&jobsMux_);
+        Job& job = jobs_[slotIdx];
+        if (!job.used) {
+            portEXIT_CRITICAL(&jobsMux_);
+            continue;
+        }
+
+        if (published) {
+            job.processing = false;
+            job.retryCount = 0;
+            job.notBeforeMs = 0;
+            if (job.requeueAfterProcess) {
+                job.requeueAfterProcess = false;
+                (void)queueSlot_(slotIdx, job.priority, false);
+            } else {
+                job = Job{};
+            }
+            callbackPublished = true;
+        } else if (buildResult == MqttBuildResult::RetryLater ||
+                   (buildResult == MqttBuildResult::Ready && !published)) {
+            uint32_t backoff = RetryMinMs;
+            if (job.retryCount > 0U) {
+                backoff = (uint32_t)RetryMinMs << job.retryCount;
+                if (backoff > RetryMaxMs) backoff = RetryMaxMs;
+            }
+            if (backoff > RetryMaxMs) backoff = RetryMaxMs;
+
+            if (job.retryCount < 15U) ++job.retryCount;
+            job.notBeforeMs = nowMs + backoff;
+            job.processing = false;
+            job.requeueAfterProcess = false;
+            (void)queueSlot_(slotIdx, job.priority, false);
+            callbackDeferred = true;
+        } else {
+            job.processing = false;
+            if (job.requeueAfterProcess) {
+                job.requeueAfterProcess = false;
+                job.retryCount = 0;
+                job.notBeforeMs = 0;
+                (void)queueSlot_(slotIdx, job.priority, false);
+                callbackDeferred = true;
+            } else {
+                job = Job{};
+                callbackDropped = true;
+            }
+        }
+        portEXIT_CRITICAL(&jobsMux_);
+
+        if (producer) {
+            if (callbackPublished && producer->onMessagePublished) {
+                producer->onMessagePublished(producer->ctx, messageId);
+            } else if (callbackDeferred && producer->onMessageDeferred) {
+                producer->onMessageDeferred(producer->ctx, messageId);
+            } else if (callbackDropped && producer->onMessageDropped) {
+                producer->onMessageDropped(producer->ctx, messageId);
+            }
+        }
+    }
 }
 
 bool MQTTModule::ensureClient_()
@@ -128,33 +538,30 @@ bool MQTTModule::ensureClient_()
 
     destroyClient_();
 
-    const int uriLen = snprintf(brokerUri_, sizeof(brokerUri_), "mqtt://%s:%ld", cfgData.host, (long)cfgData.port);
-    if (!(uriLen > 0 && (size_t)uriLen < sizeof(brokerUri_))) {
-        LOGE("MQTT broker URI overflow");
-        return false;
-    }
+    const int uriLen = snprintf(brokerUri_, sizeof(brokerUri_), "mqtt://%s:%ld", cfgData_.host, (long)cfgData_.port);
+    if (!(uriLen > 0 && (size_t)uriLen < sizeof(brokerUri_))) return false;
 
     esp_mqtt_client_config_t cfg = {};
 #if defined(ESP_IDF_VERSION_MAJOR) && (ESP_IDF_VERSION_MAJOR >= 5)
     cfg.broker.address.uri = brokerUri_;
-    cfg.credentials.client_id = deviceId;
-    if (cfgData.user[0] != '\0') {
-        cfg.credentials.username = cfgData.user;
-        cfg.credentials.authentication.password = cfgData.pass;
+    cfg.credentials.client_id = deviceId_;
+    if (cfgData_.user[0] != '\0') {
+        cfg.credentials.username = cfgData_.user;
+        cfg.credentials.authentication.password = cfgData_.pass;
     }
-    cfg.session.last_will.topic = topicStatus;
+    cfg.session.last_will.topic = topicStatus_;
     cfg.session.last_will.msg = "{\"online\":false}";
     cfg.session.last_will.qos = 1;
     cfg.session.last_will.retain = 1;
     cfg.network.disable_auto_reconnect = true;
 #else
     cfg.uri = brokerUri_;
-    cfg.client_id = deviceId;
-    if (cfgData.user[0] != '\0') {
-        cfg.username = cfgData.user;
-        cfg.password = cfgData.pass;
+    cfg.client_id = deviceId_;
+    if (cfgData_.user[0] != '\0') {
+        cfg.username = cfgData_.user;
+        cfg.password = cfgData_.pass;
     }
-    cfg.lwt_topic = topicStatus;
+    cfg.lwt_topic = topicStatus_;
     cfg.lwt_msg = "{\"online\":false}";
     cfg.lwt_qos = 1;
     cfg.lwt_retain = 1;
@@ -163,13 +570,9 @@ bool MQTTModule::ensureClient_()
 #endif
 
     client_ = esp_mqtt_client_init(&cfg);
-    if (!client_) {
-        LOGE("esp_mqtt_client_init failed");
-        return false;
-    }
+    if (!client_) return false;
 
     if (esp_mqtt_client_register_event(client_, MQTT_EVENT_ANY, &MQTTModule::mqttEventHandlerStatic_, this) != ESP_OK) {
-        LOGE("esp_mqtt_client_register_event failed");
         destroyClient_();
         return false;
     }
@@ -195,11 +598,13 @@ void MQTTModule::destroyClient_()
     clientStarted_ = false;
 }
 
-void MQTTModule::connectMqtt() {
-    buildTopics();
+void MQTTModule::connectMqtt_()
+{
+    buildTopics_();
     suppressDisconnectEvent_ = false;
+
     if (!ensureClient_()) {
-        setState(MQTTState::ErrorWait);
+        setState_(MQTTState::ErrorWait);
         return;
     }
 
@@ -212,163 +617,58 @@ void MQTTModule::connectMqtt() {
     }
 
     if (err != ESP_OK) {
-        LOGW("MQTT connect request failed err=%d", (int)err);
-        setState(MQTTState::ErrorWait);
+        setState_(MQTTState::ErrorWait);
         return;
     }
 
-    setState(MQTTState::Connecting);
-    LOGI("Connecting to %s:%ld", cfgData.host, cfgData.port);
+    setState_(MQTTState::Connecting);
 }
 
-void MQTTModule::onConnect_(bool) {
+void MQTTModule::onConnect_(bool)
+{
     suppressDisconnectEvent_ = false;
-    LOGI("Connected subscribe %s", topicCmd);
-    (void)esp_mqtt_client_subscribe(client_, topicCmd, 0);
-    (void)esp_mqtt_client_subscribe(client_, topicCfgSet, 1);
 
-    _retryCount = 0;
-    _retryDelayMs = Limits::Mqtt::Backoff::MinMs;
-    setState(MQTTState::Connected);
+    (void)esp_mqtt_client_subscribe(client_, topicCmd_, 0);
+    (void)esp_mqtt_client_subscribe(client_, topicCfgSet_, 1);
 
-    statusOnlinePending_ = true;
-    statusOnlineDeadlineMs_ = millis() + 20000U;
-    statusOnlineNextTryMs_ = millis();
-    MQTT_DLOG("status publish deferred until startup bursts complete");
+    retryCount_ = 0;
+    retryDelayMs_ = Limits::Mqtt::Backoff::MinMs;
+    setState_(MQTTState::Connected);
 
-    // Defer cfg/* publication to loop() to avoid contention with runtime bursts.
-    _pendingPublish = true;
-    alarmsMetaPending_ = true;
-    alarmsFullSyncPending_ = true;
-    alarmsPackPending_ = true;
-    alarmsRetryBackoffMs_ = 0;
-    alarmsRetryNextMs_ = 0;
-    schedCfgActive_ = false;
-    schedCfgRootPending_ = false;
-    schedCfgSlotCursor_ = 0;
-    schedCfgNextMs_ = 0;
-    schedCfgRetryBackoffMs_ = 0;
-    diagNextLogMs_ = millis();
+    (void)enqueue(ProducerIdStatus, StatusMsgOnline, MqttPublishPriority::High, 0);
+    if (cfgProducer_) {
+        cfgProducer_->requestFullSync(MqttPublishPriority::Low);
+    }
+    runtimeProducerCore_.onConnected();
+    enqueueAlarmFullSync_();
+
+    const uint32_t now = millis();
+    for (uint8_t i = 0; i < runtimePublisherCount_; ++i) {
+        RuntimePublisher& p = runtimePublishers_[i];
+        if (!p.used || p.periodMs == 0U) continue;
+        p.nextDueMs = now;
+        (void)enqueue(ProducerIdStatus, p.messageId, MqttPublishPriority::Normal, 0);
+    }
 }
 
-void MQTTModule::onDisconnect_(const esp_mqtt_error_codes_t* err) {
+void MQTTModule::onDisconnect_(const esp_mqtt_error_codes_t*)
+{
     if (suppressDisconnectEvent_) {
-        MQTT_DLOG("Disconnected (suppressed)");
         suppressDisconnectEvent_ = false;
         return;
     }
-    const bool wifiConnected = (wifiSvc && wifiSvc->isConnected) ? wifiSvc->isConnected(wifiSvc->ctx) : false;
-    const WifiState wifiState = (wifiSvc && wifiSvc->state) ? wifiSvc->state(wifiSvc->ctx) : WifiState::Disabled;
-    const uint32_t freeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-    const uint32_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-    const int outboxBytes = client_ ? esp_mqtt_client_get_outbox_size(client_) : -1;
 
-    if (err) {
-        LOGW("Disconnected netReady=%d wifi_connected=%d wifi_state=%s free=%lu largest=%lu outbox=%d "
-             "err_type=%d tls_last=%d tls_stack=%d conn_refused=%d sock_errno=%d",
-             _netReady ? 1 : 0,
-             wifiConnected ? 1 : 0,
-             wifiStateName_(wifiState),
-             (unsigned long)freeHeap,
-             (unsigned long)largest,
-             outboxBytes,
-             (int)err->error_type,
-             (int)err->esp_tls_last_esp_err,
-             (int)err->esp_tls_stack_err,
-             (int)err->connect_return_code,
-             (int)err->esp_transport_sock_errno);
-    } else {
-        LOGW("Disconnected netReady=%d wifi_connected=%d wifi_state=%s free=%lu largest=%lu outbox=%d",
-             _netReady ? 1 : 0,
-             wifiConnected ? 1 : 0,
-             wifiStateName_(wifiState),
-             (unsigned long)freeHeap,
-             (unsigned long)largest,
-             outboxBytes);
-    }
-    cfgRampActive_ = false;
-    cfgRampRestartRequested_ = false;
-    cfgRampIndex_ = 0;
-    schedCfgActive_ = false;
-    schedCfgRootPending_ = false;
-    schedCfgSlotCursor_ = 0;
-    schedCfgNextMs_ = 0;
-    schedCfgRetryBackoffMs_ = 0;
-    alarmsRetryBackoffMs_ = 0;
-    alarmsRetryNextMs_ = 0;
-    statusOnlinePending_ = false;
-    statusOnlineDeadlineMs_ = 0;
-    statusOnlineNextTryMs_ = 0;
-    if (txHighQ_) xQueueReset(txHighQ_);
-    if (txNormalQ_) xQueueReset(txNormalQ_);
-    if (txLowQ_) xQueueReset(txLowQ_);
-    if (txLowLarge_) {
-        memset(txLowLarge_, 0, sizeof(LowLargeMsg));
-    }
-    setState(MQTTState::ErrorWait);
+    setState_(MQTTState::ErrorWait);
 }
 
-void MQTTModule::logRuntimeDiag_(uint32_t nowMs, bool force)
+void MQTTModule::onMessage_(const char* topic,
+                            size_t topicLen,
+                            const char* payload,
+                            size_t len,
+                            size_t index,
+                            size_t total)
 {
-    const UBaseType_t stackHw = uxTaskGetStackHighWaterMark(nullptr);
-    if (diagMinStackHw_ == (UBaseType_t)0xFFFFFFFFUL || stackHw < diagMinStackHw_) {
-        diagMinStackHw_ = stackHw;
-    }
-
-    const bool lowStack = (stackHw <= kMqttStackWarnThresholdWords);
-    const bool periodicDue = kMqttRuntimeDiagEnabled &&
-                             (force || diagNextLogMs_ == 0U || (int32_t)(nowMs - diagNextLogMs_) >= 0);
-    const bool lowStackDue = lowStack &&
-                             (diagLastLowStackWarnMs_ == 0U || (int32_t)(nowMs - diagLastLowStackWarnMs_) >= 1000);
-    if (!periodicDue && !lowStackDue) return;
-
-    if (periodicDue) diagNextLogMs_ = nowMs + kMqttRuntimeDiagPeriodMs;
-    if (lowStackDue) diagLastLowStackWarnMs_ = nowMs;
-
-    const int outboxBytes = client_ ? esp_mqtt_client_get_outbox_size(client_) : -1;
-    const uint32_t qfHigh = __atomic_load_n(&txQFullHighCount_, __ATOMIC_RELAXED);
-    const uint32_t qfNormal = __atomic_load_n(&txQFullNormalCount_, __ATOMIC_RELAXED);
-    const uint32_t qfLow = __atomic_load_n(&txQFullLowCount_, __ATOMIC_RELAXED);
-    const uint32_t lowLargeOverwrite = __atomic_load_n(&txLowLargeOverwriteCount_, __ATOMIC_RELAXED);
-    const uint32_t dHigh = __atomic_load_n(&txDropHighCount_, __ATOMIC_RELAXED);
-    const uint32_t dNormal = __atomic_load_n(&txDropNormalCount_, __ATOMIC_RELAXED);
-    const uint32_t dLow = __atomic_load_n(&txDropLowCount_, __ATOMIC_RELAXED);
-
-    const char* levelState = lowStackDue ? "LOW_STACK" : "hist";
-    if (lowStackDue) {
-        LOGW("MQTT %s s=%u hw=%u mn=%u qf=%lu/%lu/%lu llo=%lu d=%lu/%lu/%lu ob=%d",
-             levelState,
-             (unsigned)state,
-             (unsigned)stackHw,
-             (unsigned)diagMinStackHw_,
-             (unsigned long)qfHigh,
-             (unsigned long)qfNormal,
-             (unsigned long)qfLow,
-             (unsigned long)lowLargeOverwrite,
-             (unsigned long)dHigh,
-             (unsigned long)dNormal,
-             (unsigned long)dLow,
-             outboxBytes);
-    } else {
-        LOGD("MQTT %s s=%u hw=%u mn=%u qf=%lu/%lu/%lu llo=%lu d=%lu/%lu/%lu ob=%d",
-             levelState,
-             (unsigned)state,
-             (unsigned)stackHw,
-             (unsigned)diagMinStackHw_,
-             (unsigned long)qfHigh,
-             (unsigned long)qfNormal,
-             (unsigned long)qfLow,
-             (unsigned long)lowLargeOverwrite,
-             (unsigned long)dHigh,
-             (unsigned long)dNormal,
-             (unsigned long)dLow,
-             outboxBytes);
-    }
-}
-
-void MQTTModule::onMessage_(const char* topic, size_t topicLen,
-                            const char* payload, size_t len, size_t index, size_t total) {
-    if (!rxQ) return;
+    if (!rxQ_) return;
     if (!topic || !payload) {
         countRxDrop_();
         return;
@@ -378,22 +678,18 @@ void MQTTModule::onMessage_(const char* topic, size_t topicLen,
         return;
     }
 
-    const size_t topicCap = sizeof(RxMsg{}.topic);
-    const size_t payloadCap = sizeof(RxMsg{}.payload);
-    if (topicLen >= topicCap || len >= payloadCap) {
+    if (topicLen >= sizeof(RxMsg{}.topic) || len >= sizeof(RxMsg{}.payload)) {
         countOversizeDrop_();
         return;
     }
 
-    RxMsg m{};
-    memcpy(m.topic, topic, topicLen);
-    m.topic[topicLen] = '\0';
+    RxMsg msg{};
+    memcpy(msg.topic, topic, topicLen);
+    msg.topic[topicLen] = '\0';
+    memcpy(msg.payload, payload, len);
+    msg.payload[len] = '\0';
 
-    memcpy(m.payload, payload, len);
-    size_t copyLen = len;
-    m.payload[copyLen] = '\0';
-
-    if (xQueueSend(rxQ, &m, 0) != pdTRUE) {
+    if (xQueueSend(rxQ_, &msg, 0) != pdTRUE) {
         countRxDrop_();
     }
 }
@@ -405,6 +701,7 @@ void MQTTModule::mqttEventHandlerStatic_(void* handler_args,
 {
     MQTTModule* self = static_cast<MQTTModule*>(handler_args);
     if (!self || !event_data) return;
+
     esp_mqtt_event_handle_t ev = static_cast<esp_mqtt_event_handle_t>(event_data);
 
     switch ((esp_mqtt_event_id_t)event_id) {
@@ -422,1275 +719,417 @@ void MQTTModule::mqttEventHandlerStatic_(void* handler_args,
                              (size_t)ev->current_data_offset,
                              (size_t)ev->total_data_len);
             break;
-        case MQTT_EVENT_ERROR:
-            {
-            const bool wifiConnected = (self->wifiSvc && self->wifiSvc->isConnected) ? self->wifiSvc->isConnected(self->wifiSvc->ctx) : false;
-            const WifiState wifiState = (self->wifiSvc && self->wifiSvc->state) ? self->wifiSvc->state(self->wifiSvc->ctx) : WifiState::Disabled;
-            const uint32_t freeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-            const uint32_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-            const int outboxBytes = self->client_ ? esp_mqtt_client_get_outbox_size(self->client_) : -1;
-            if (ev->error_handle) {
-                LOGW("MQTT error netReady=%d wifi_connected=%d wifi_state=%s free=%lu largest=%lu outbox=%d "
-                     "type=%d tls_last=%d tls_stack=%d conn_refused=%d sock_errno=%d",
-                     self->_netReady ? 1 : 0,
-                     wifiConnected ? 1 : 0,
-                     wifiStateName_(wifiState),
-                     (unsigned long)freeHeap,
-                     (unsigned long)largest,
-                     outboxBytes,
-                     (int)ev->error_handle->error_type,
-                     (int)ev->error_handle->esp_tls_last_esp_err,
-                     (int)ev->error_handle->esp_tls_stack_err,
-                     (int)ev->error_handle->connect_return_code,
-                     (int)ev->error_handle->esp_transport_sock_errno);
-            } else {
-                LOGW("MQTT error event without details netReady=%d wifi_connected=%d wifi_state=%s free=%lu largest=%lu outbox=%d",
-                     self->_netReady ? 1 : 0,
-                     wifiConnected ? 1 : 0,
-                     wifiStateName_(wifiState),
-                     (unsigned long)freeHeap,
-                     (unsigned long)largest,
-                     outboxBytes);
-            }
-            break;
-            }
         default:
             break;
     }
 }
 
-void MQTTModule::refreshConfigModules()
-{
-    if (cfgSvc && cfgSvc->listModules) {
-        cfgModuleCount = cfgSvc->listModules(cfgSvc->ctx, cfgModules, Limits::Mqtt::Capacity::CfgTopicMax);
-        if (cfgModuleCount >= Limits::Mqtt::Capacity::CfgTopicMax) {
-            LOGW("Config module list reached limit (%u), some cfg/* blocks may be omitted", (unsigned)Limits::Mqtt::Capacity::CfgTopicMax);
-        }
-    } else {
-        cfgModuleCount = 0;
-    }
-}
-
-void MQTTModule::publishConfigBlocks(bool retained) {
-    if (!cfgSvc || !cfgSvc->toJsonModule) return;
-    refreshConfigModules();
-    for (size_t i = 0; i < cfgModuleCount; ++i) {
-        (void)publishConfigModuleAt(i, retained);
-    }
-}
-
-void MQTTModule::enqueueCfgBranch_(uint16_t branchId)
-{
-    if (branchId == (uint16_t)ConfigBranchId::Unknown) return;
-
-    portENTER_CRITICAL(&pendingCfgMux_);
-    for (uint8_t i = 0; i < pendingCfgBranchCount_; ++i) {
-        if (pendingCfgBranches_[i] == branchId) {
-            portEXIT_CRITICAL(&pendingCfgMux_);
-            return;
-        }
-    }
-    if (pendingCfgBranchCount_ < PendingCfgBranchesMax) {
-        pendingCfgBranches_[pendingCfgBranchCount_++] = branchId;
-    } else {
-        // Queue saturated: fallback to full cfg ramp to avoid dropping updates.
-        _pendingPublish = true;
-    }
-    portEXIT_CRITICAL(&pendingCfgMux_);
-}
-
-uint8_t MQTTModule::takePendingCfgBranches_(uint16_t* out, uint8_t maxItems)
-{
-    if (!out || maxItems == 0) return 0;
-
-    portENTER_CRITICAL(&pendingCfgMux_);
-    const uint8_t n = (pendingCfgBranchCount_ < maxItems) ? pendingCfgBranchCount_ : maxItems;
-    for (uint8_t i = 0; i < n; ++i) {
-        out[i] = pendingCfgBranches_[i];
-    }
-    pendingCfgBranchCount_ = 0;
-    portEXIT_CRITICAL(&pendingCfgMux_);
-    return n;
-}
-
-void MQTTModule::processPendingCfgBranches_()
-{
-    uint16_t branchIds[PendingCfgBranchesMax] = {0};
-    const uint8_t n = takePendingCfgBranches_(branchIds, PendingCfgBranchesMax);
-    for (uint8_t i = 0; i < n; ++i) {
-        const char* module = configBranchModuleName((ConfigBranchId)branchIds[i]);
-        if (!module || module[0] == '\0' || !publishConfigModuleByName_(module, true)) {
-            _pendingPublish = true;
-        }
-    }
-}
-
-void MQTTModule::beginConfigRamp_(uint32_t nowMs)
-{
-    if (!cfgSvc || !cfgSvc->toJsonModule) {
-        cfgRampActive_ = false;
-        cfgRampRestartRequested_ = false;
-        cfgRampIndex_ = 0;
-        return;
-    }
-
-    refreshConfigModules();
-    cfgRampIndex_ = 0;
-    cfgRampNextMs_ = nowMs;
-    cfgRampRestartRequested_ = false;
-    cfgRampActive_ = (cfgModuleCount > 0);
-}
-
-void MQTTModule::runConfigRamp_(uint32_t nowMs)
-{
-    if (!cfgRampActive_) return;
-    if (state != MQTTState::Connected) {
-        cfgRampActive_ = false;
-        cfgRampRestartRequested_ = false;
-        cfgRampIndex_ = 0;
-        return;
-    }
-
-    if (cfgRampRestartRequested_) {
-        beginConfigRamp_(nowMs);
-    }
-
-    if ((int32_t)(nowMs - cfgRampNextMs_) < 0) return;
-    if (cfgRampIndex_ >= cfgModuleCount) {
-        cfgRampActive_ = false;
-        return;
-    }
-
-    (void)publishConfigModuleAt(cfgRampIndex_, true);
-    ++cfgRampIndex_;
-    cfgRampNextMs_ = nowMs + Limits::Mqtt::Timing::CfgRampStepMs;
-
-    if (cfgRampIndex_ >= cfgModuleCount) {
-        cfgRampActive_ = false;
-    }
-}
-
-bool MQTTModule::publishConfigModuleAt(size_t idx, bool retained)
-{
-    if (!cfgSvc || !cfgSvc->toJsonModule) return false;
-    if (idx >= cfgModuleCount) return false;
-    if (!cfgModules[idx] || cfgModules[idx][0] == '\0') return false;
-
-    char moduleTopic[Limits::Mqtt::Buffers::DynamicTopic] = {0};
-    if (!buildCfgTopic_(cfgModules[idx], moduleTopic, sizeof(moduleTopic))) {
-        return false;
-    }
-
-    if (strcmp(cfgModules[idx], "time/scheduler") == 0) {
-        publishTimeSchedulerSlots(retained, moduleTopic);
-        return true;
-    }
-
-    bool truncated = false;
-    bool any = cfgSvc->toJsonModule(cfgSvc->ctx, cfgModules[idx], publishBuf, sizeof(publishBuf), &truncated);
-    if (truncated) {
-        LOGW("cfg/%s truncated (buffer=%u)", cfgModules[idx], (unsigned)sizeof(publishBuf));
-        // Avoid publishing malformed partial JSON when truncation happens.
-        if (!writeErrorJson(publishBuf, sizeof(publishBuf), ErrorCode::CfgTruncated, "cfg")) {
-            snprintf(publishBuf, sizeof(publishBuf), "{\"ok\":false}");
-        }
-        if (!publish(moduleTopic, publishBuf, 1, retained)) {
-            if (lowHeapSinceMs_ != 0U) MQTT_DLOG("cfg/%s publish deferred (truncated payload)", cfgModules[idx]);
-            else LOGW("cfg/%s publish failed (truncated payload)", cfgModules[idx]);
-            return false;
-        }
-        return true;
-    }
-    if (!any) return false;
-    if (!publish(moduleTopic, publishBuf, 1, retained)) {
-        if (lowHeapSinceMs_ != 0U) MQTT_DLOG("cfg/%s publish deferred", cfgModules[idx]);
-        else LOGW("cfg/%s publish failed", cfgModules[idx]);
-        return false;
-    }
-    return true;
-}
-
-bool MQTTModule::publishConfigBlocksFromPatch(const char* patchJson, bool retained)
-{
-    if (!patchJson || patchJson[0] == '\0') return false;
-    if (!cfgSvc || !cfgSvc->toJsonModule) return false;
-    static constexpr size_t PATCH_DOC_CAPACITY = Limits::JsonPatchBuf;
-    static StaticJsonDocument<PATCH_DOC_CAPACITY> patchDoc;
-    patchDoc.clear();
-    const DeserializationError patchErr = deserializeJson(patchDoc, patchJson);
-    if (patchErr || !patchDoc.is<JsonObjectConst>()) return false;
-    JsonObjectConst patch = patchDoc.as<JsonObjectConst>();
-
-    refreshConfigModules();
-    bool publishedAny = false;
-    for (size_t i = 0; i < cfgModuleCount; ++i) {
-        const char* module = cfgModules[i];
-        if (!module || module[0] == '\0') continue;
-        if (!patch.containsKey(module)) continue;
-        publishedAny = publishConfigModuleAt(i, retained) || publishedAny;
-    }
-    return publishedAny;
-}
-
-bool MQTTModule::publishConfigModuleByName_(const char* module, bool retained)
-{
-    if (!module || module[0] == '\0') return false;
-    if (!cfgSvc || !cfgSvc->toJsonModule) return false;
-
-    char moduleTopic[Limits::Mqtt::Buffers::DynamicTopic] = {0};
-    if (!buildCfgTopic_(module, moduleTopic, sizeof(moduleTopic))) {
-        return false;
-    }
-
-    if (strcmp(module, "time/scheduler") == 0) {
-        publishTimeSchedulerSlots(retained, moduleTopic);
-        return true;
-    }
-
-    bool truncated = false;
-    const bool any = cfgSvc->toJsonModule(cfgSvc->ctx, module, publishBuf, sizeof(publishBuf), &truncated);
-    if (truncated) {
-        LOGW("cfg/%s truncated (buffer=%u)", module, (unsigned)sizeof(publishBuf));
-        if (!writeErrorJson(publishBuf, sizeof(publishBuf), ErrorCode::CfgTruncated, "cfg")) {
-            snprintf(publishBuf, sizeof(publishBuf), "{\"ok\":false}");
-        }
-        if (!publish(moduleTopic, publishBuf, 1, retained)) {
-            if (lowHeapSinceMs_ != 0U) MQTT_DLOG("cfg/%s publish deferred (truncated payload)", module);
-            else LOGW("cfg/%s publish failed (truncated payload)", module);
-            return false;
-        }
-        return true;
-    }
-    if (!any) return false;
-
-    if (!publish(moduleTopic, publishBuf, 1, retained)) {
-        if (lowHeapSinceMs_ != 0U) MQTT_DLOG("cfg/%s publish deferred", module);
-        else LOGW("cfg/%s publish failed", module);
-        return false;
-    }
-    return true;
-}
-
-bool MQTTModule::buildCfgTopic_(const char* module, char* out, size_t outLen) const
-{
-    if (!module || module[0] == '\0' || !out || outLen == 0) return false;
-    const int tw = snprintf(out, outLen, "%s/%s/cfg/%s", cfgData.baseTopic, deviceId, module);
-    if (!(tw > 0 && (size_t)tw < outLen)) {
-        LOGW("cfg publish: topic truncated for module=%s", module);
-        return false;
-    }
-    return true;
-}
-
-void MQTTModule::publishTimeSchedulerSlots(bool retained, const char* rootTopic)
-{
-    if (!rootTopic || rootTopic[0] == '\0') return;
-    snprintf(schedCfgRootTopic_, sizeof(schedCfgRootTopic_), "%s", rootTopic);
-    schedCfgRetained_ = retained;
-    schedCfgRootPending_ = true;
-    schedCfgSlotCursor_ = 0;
-    schedCfgNextMs_ = millis();
-    schedCfgRetryBackoffMs_ = 0;
-    schedCfgActive_ = true;
-}
-
-void MQTTModule::runTimeSchedulerSlots_(uint32_t nowMs)
-{
-    if (!schedCfgActive_) return;
-    if (state != MQTTState::Connected) {
-        schedCfgActive_ = false;
-        schedCfgRootPending_ = false;
-        schedCfgSlotCursor_ = 0;
-        schedCfgNextMs_ = 0;
-        schedCfgRetryBackoffMs_ = 0;
-        return;
-    }
-    if ((int32_t)(nowMs - schedCfgNextMs_) < 0) return;
-
-    constexpr uint32_t kSlotStepMs = Limits::Mqtt::Timing::CfgRampStepMs;
-    constexpr uint32_t kRetryMinMs = 250U;
-    constexpr uint32_t kRetryMaxMs = 5000U;
-    auto scheduleRetry = [&]() {
-        uint32_t backoff = schedCfgRetryBackoffMs_;
-        if (backoff == 0U) backoff = kRetryMinMs;
-        else if (backoff >= (kRetryMaxMs / 2U)) backoff = kRetryMaxMs;
-        else backoff *= 2U;
-        schedCfgRetryBackoffMs_ = backoff;
-        schedCfgNextMs_ = nowMs + backoff;
-    };
-    auto scheduleNextSlot = [&]() {
-        schedCfgRetryBackoffMs_ = 0;
-        schedCfgNextMs_ = nowMs + kSlotStepMs;
-    };
-
-    if (schedCfgRootPending_) {
-        if (!publish(schedCfgRootTopic_, "{\"mode\":\"per_slot\",\"slots\":16}", 1, schedCfgRetained_)) {
-            if (lowHeapSinceMs_ != 0U) MQTT_DLOG("cfg/time/scheduler root publish deferred (mqtt pressure)");
-            else LOGW("cfg/time/scheduler root publish failed");
-            scheduleRetry();
-            return;
-        }
-        schedCfgRootPending_ = false;
-        scheduleNextSlot();
-        return;
-    }
-
-    if (!timeSchedSvc || !timeSchedSvc->getSlot) {
-        LOGW("time.scheduler service unavailable for cfg publication");
-        schedCfgActive_ = false;
-        return;
-    }
-    if (schedCfgSlotCursor_ >= TIME_SCHED_MAX_SLOTS) {
-        schedCfgActive_ = false;
-        schedCfgNextMs_ = 0;
-        schedCfgRetryBackoffMs_ = 0;
-        return;
-    }
-
-    const uint8_t slot = schedCfgSlotCursor_;
-    char slotTopic[Limits::Mqtt::Buffers::DynamicTopic] = {0};
-    snprintf(slotTopic, sizeof(slotTopic), "%s/slot%u", schedCfgRootTopic_, (unsigned)slot);
-
-    TimeSchedulerSlot def{};
-    const bool hasSlot = timeSchedSvc->getSlot(timeSchedSvc->ctx, slot, &def);
-    const uint16_t slotBit = (uint16_t)(1U << slot);
-    if (!hasSlot) {
-        const bool known = (schedCfgKnownMask_ & slotBit) != 0U;
-        const bool wasUsed = (schedCfgUsedMask_ & slotBit) != 0U;
-        const bool publishUnused = (!known) || wasUsed;
-        if (publishUnused) {
-            snprintf(publishBuf, sizeof(publishBuf),
-                     "{\"slot\":%u,\"used\":false}",
-                     (unsigned)slot);
-            if (!publish(slotTopic, publishBuf, 1, schedCfgRetained_)) {
-                MQTT_DLOG("cfg/time/scheduler slot%u publish deferred (unused)", (unsigned)slot);
-                scheduleRetry();
-                return;
-            }
-        }
-        schedCfgKnownMask_ |= slotBit;
-        schedCfgUsedMask_ &= (uint16_t)(~slotBit);
-    } else {
-        const char* mode = (def.mode == TimeSchedulerMode::OneShotEpoch) ? "one_shot_epoch" : "recurring_clock";
-        snprintf(publishBuf, sizeof(publishBuf),
-                 "{\"slot\":%u,\"used\":true,\"event_id\":%u,\"label\":\"%s\",\"enabled\":%s,"
-                 "\"mode\":\"%s\",\"has_end\":%s,\"replay_on_boot\":%s,"
-                 "\"weekday_mask\":%u,"
-                 "\"start\":{\"hour\":%u,\"minute\":%u,\"epoch\":%llu},"
-                 "\"end\":{\"hour\":%u,\"minute\":%u,\"epoch\":%llu}}",
-                 (unsigned)def.slot,
-                 (unsigned)def.eventId,
-                 def.label,
-                 def.enabled ? "true" : "false",
-                 mode,
-                 def.hasEnd ? "true" : "false",
-                 def.replayStartOnBoot ? "true" : "false",
-                 (unsigned)def.weekdayMask,
-                 (unsigned)def.startHour,
-                 (unsigned)def.startMinute,
-                 (unsigned long long)def.startEpochSec,
-                 (unsigned)def.endHour,
-                 (unsigned)def.endMinute,
-                 (unsigned long long)def.endEpochSec);
-        if (!publish(slotTopic, publishBuf, 1, schedCfgRetained_)) {
-            if (lowHeapSinceMs_ != 0U) MQTT_DLOG("cfg/time/scheduler slot%u publish deferred", (unsigned)slot);
-            else LOGW("cfg/time/scheduler slot%u publish failed", (unsigned)slot);
-            scheduleRetry();
-            return;
-        }
-        schedCfgKnownMask_ |= slotBit;
-        schedCfgUsedMask_ |= slotBit;
-    }
-
-    ++schedCfgSlotCursor_;
-    if (schedCfgSlotCursor_ >= TIME_SCHED_MAX_SLOTS) {
-        schedCfgActive_ = false;
-        schedCfgNextMs_ = 0;
-        schedCfgRetryBackoffMs_ = 0;
-        return;
-    }
-    scheduleNextSlot();
-}
-
-bool MQTTModule::publish(const char* topic, const char* payload, int qos, bool retain)
-{
-    return publishWithPriority(topic, payload, qos, retain, (uint8_t)TxPriority::Normal);
-}
-
-bool MQTTModule::publishWithPriority(const char* topic, const char* payload, int qos, bool retain, uint8_t prio)
-{
-    TxPriority priority = TxPriority::Normal;
-    if (prio == (uint8_t)TxPriority::High) priority = TxPriority::High;
-    else if (prio == (uint8_t)TxPriority::Low) priority = TxPriority::Low;
-
-    TaskHandle_t selfTask = getTaskHandle();
-    const TaskHandle_t currentTask = xTaskGetCurrentTaskHandle();
-    if (selfTask && currentTask == selfTask) {
-        return publishDirect_(topic, payload, qos, retain);
-    }
-
-    return txEnqueue_(topic, payload, qos, retain, priority);
-}
-
-bool MQTTModule::publishDirect_(const char* topic, const char* payload, int qos, bool retain)
-{
-    if (!topic || !payload) return false;
-    if (state != MQTTState::Connected) return false;
-    if (!client_) return false;
-
-    constexpr uint32_t kMinFreeHeapForPublish = Limits::NetworkPublish::MinFreeHeapBytes;
-    constexpr uint32_t kMinLargestBlockForPublish = Limits::NetworkPublish::MinLargestBlockBytes;
-    const uint32_t freeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-    const uint32_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-    if (freeHeap < kMinFreeHeapForPublish || largest < kMinLargestBlockForPublish) {
-        const uint32_t now = millis();
-        if (lowHeapSinceMs_ == 0U) lowHeapSinceMs_ = now;
-        const uint32_t lowForMs = now - lowHeapSinceMs_;
-        if (lowForMs >= 10000U) {
-            if ((now - lastLowHeapWarnMs_) >= 10000U) {
-                lastLowHeapWarnMs_ = now;
-                LOGW("skip mqtt publish (low heap sustained %lums free=%lu largest=%lu need_free=%lu need_largest=%lu topic=%s)",
-                     (unsigned long)lowForMs,
-                     (unsigned long)freeHeap,
-                     (unsigned long)largest,
-                     (unsigned long)kMinFreeHeapForPublish,
-                     (unsigned long)kMinLargestBlockForPublish,
-                     topic);
-            }
-        } else {
-            if ((now - lastLowHeapWarnMs_) >= 5000U) {
-                lastLowHeapWarnMs_ = now;
-                MQTT_DLOG("skip mqtt publish (transient low heap free=%lu largest=%lu topic=%s)",
-                          (unsigned long)freeHeap,
-                          (unsigned long)largest,
-                          topic);
-            }
-        }
-        return false;
-    }
-    lowHeapSinceMs_ = 0U;
-
-    // Guard against QoS outbox buildup (retained cfg/* bursts, link hiccups),
-    // which can fragment heap and starve other modules.
-    if (qos > 0) {
-        constexpr int kMaxOutboxBytes = 12 * 1024;
-        const int outboxBytes = esp_mqtt_client_get_outbox_size(client_);
-        if (outboxBytes >= kMaxOutboxBytes) {
-            const uint32_t now = millis();
-            if ((now - lastOutboxWarnMs_) >= 2000U) {
-                lastOutboxWarnMs_ = now;
-                LOGW("skip qos%d publish (outbox=%dB limit=%dB topic=%s)",
-                     qos, outboxBytes, kMaxOutboxBytes, topic);
-            }
-            return false;
-        }
-    }
-
-    const int packetId = esp_mqtt_client_publish(client_, topic, payload, 0, qos, retain ? 1 : 0);
-    if (packetId < 0) {
-        LOGW("mqtt publish rejected topic=%s qos=%d retain=%d", topic, qos, retain ? 1 : 0);
-        return false;
-    }
-    const size_t payloadLen = strlen(payload);
-    const char* logTopic = topic;
-    const size_t baseLen = strnlen(cfgData.baseTopic, sizeof(cfgData.baseTopic));
-    const size_t devLen = strnlen(deviceId, sizeof(deviceId));
-    if (baseLen > 0U && devLen > 0U &&
-        strncmp(topic, cfgData.baseTopic, baseLen) == 0 &&
-        topic[baseLen] == '/' &&
-        strncmp(topic + baseLen + 1U, deviceId, devLen) == 0 &&
-        topic[baseLen + 1U + devLen] == '/') {
-        logTopic = topic + baseLen + 1U + devLen + 1U;
-    }
-
-    // Temporary diagnostics: also log qos0 publishes to trace runtime routing.
-    constexpr bool kLogQos0Tx = true;
-    if (qos > 0 || kLogQos0Tx) {
-        MQTT_DLOG("MQTT TX ok id=%d qos=%d retain=%d len=%u topic=%s",
-                  packetId,
-                  qos,
-                  retain ? 1 : 0,
-                  (unsigned)payloadLen,
-                  logTopic);
-    }
-    return true;
-}
-
-bool MQTTModule::txEnqueue_(const char* topic, const char* payload, int qos, bool retain, TxPriority prio)
-{
-    if (!topic || !payload) return false;
-    if (state != MQTTState::Connected) return false;
-    if (!client_) return false;
-    if (!txHighQ_ || !txNormalQ_ || !txLowQ_) return false;
-
-    const size_t topicLen = strnlen(topic, Limits::Mqtt::Buffers::Topic);
-    if (topicLen == 0U || topicLen >= Limits::Mqtt::Buffers::Topic) return false;
-
-    const size_t payloadLen = strlen(payload);
-    if (payloadLen >= sizeof(TxMsg{}.payload)) {
-        if (prio == TxPriority::Low) {
-            return txStoreLowLarge_(topic, payload, qos, retain);
-        }
-        return false;
-    }
-
-    TxMsg msg{};
-    msg.qos = (qos < 0) ? 0U : (uint8_t)qos;
-    msg.retain = retain ? 1U : 0U;
-    msg.topicLen = (uint16_t)topicLen;
-    msg.payloadLen = (uint16_t)payloadLen;
-    memcpy(msg.topic, topic, topicLen + 1U);
-    memcpy(msg.payload, payload, payloadLen + 1U);
-    return txEnqueueSmall_(msg, prio);
-}
-
-bool MQTTModule::txEnqueueSmall_(const TxMsg& msg, TxPriority prio)
-{
-    QueueHandle_t q = txNormalQ_;
-    if (prio == TxPriority::High) q = txHighQ_;
-    else if (prio == TxPriority::Low) q = txLowQ_;
-    if (!q) return false;
-
-    TickType_t waitTicks = 0;
-    if (prio == TxPriority::High) waitTicks = pdMS_TO_TICKS(25);
-    else if (prio == TxPriority::Low) waitTicks = pdMS_TO_TICKS(10);
-
-    if (xQueueSend(q, &msg, waitTicks) == pdTRUE) return true;
-    if (prio == TxPriority::High) __atomic_fetch_add(&txQFullHighCount_, 1U, __ATOMIC_RELAXED);
-    else if (prio == TxPriority::Low) __atomic_fetch_add(&txQFullLowCount_, 1U, __ATOMIC_RELAXED);
-    else __atomic_fetch_add(&txQFullNormalCount_, 1U, __ATOMIC_RELAXED);
-    if (prio == TxPriority::Normal) {
-        __atomic_fetch_add(&txDropNormalCount_, 1U, __ATOMIC_RELAXED);
-        LOGW("MQTT drop prio=N reason=txq_full topic=%s qos=%u len=%u",
-             msg.topic, (unsigned)msg.qos, (unsigned)msg.payloadLen);
-        return false;
-    }
-
-    if (prio == TxPriority::High) {
-        __atomic_fetch_add(&txDropHighCount_, 1U, __ATOMIC_RELAXED);
-        LOGW("MQTT drop prio=H reason=txq_full topic=%s qos=%u len=%u",
-             msg.topic, (unsigned)msg.qos, (unsigned)msg.payloadLen);
-    } else {
-        __atomic_fetch_add(&txDropLowCount_, 1U, __ATOMIC_RELAXED);
-        LOGW("MQTT drop prio=L reason=txq_full topic=%s qos=%u len=%u",
-             msg.topic, (unsigned)msg.qos, (unsigned)msg.payloadLen);
-    }
-    return false;
-}
-
-bool MQTTModule::txStoreLowLarge_(const char* topic, const char* payload, int qos, bool retain)
-{
-    if (!txLowLarge_) return false;
-    if (!topic || !payload) return false;
-    const size_t topicLen = strlen(topic);
-    const size_t payloadLen = strlen(payload);
-    if (topicLen >= sizeof(txLowLarge_->topic)) return false;
-    if (payloadLen >= sizeof(txLowLarge_->payload)) return false;
-
-    bool overwritten = false;
-    portENTER_CRITICAL(&txLowLargeMux_);
-    if (txLowLarge_->pending) {
-        overwritten = true;
-        __atomic_fetch_add(&txLowLargeOverwriteCount_, 1U, __ATOMIC_RELAXED);
-        __atomic_fetch_add(&txDropLowCount_, 1U, __ATOMIC_RELAXED);
-    }
-    snprintf(txLowLarge_->topic, sizeof(txLowLarge_->topic), "%s", topic);
-    snprintf(txLowLarge_->payload, sizeof(txLowLarge_->payload), "%s", payload);
-    txLowLarge_->qos = (qos < 0) ? 0U : (uint8_t)qos;
-    txLowLarge_->retain = retain ? 1U : 0U;
-    txLowLarge_->pending = true;
-    portEXIT_CRITICAL(&txLowLargeMux_);
-    if (overwritten) {
-        LOGW("MQTT drop prio=L reason=lowLarge_overwrite topic=%s qos=%d len=%u",
-             topic, qos, (unsigned)payloadLen);
-    }
-    return true;
-}
-
-bool MQTTModule::txTakeLowLarge_(LowLargeMsg& out)
-{
-    if (!txLowLarge_) return false;
-    bool ok = false;
-    portENTER_CRITICAL(&txLowLargeMux_);
-    if (txLowLarge_->pending) {
-        out = *txLowLarge_;
-        txLowLarge_->pending = false;
-        ok = true;
-    }
-    portEXIT_CRITICAL(&txLowLargeMux_);
-    return ok;
-}
-
-void MQTTModule::drainTx_()
-{
-    if (state != MQTTState::Connected) return;
-    if (!client_) return;
-
-    static const TxPriority kSchedule[] = {
-        TxPriority::High, TxPriority::High, TxPriority::High, TxPriority::High,
-        TxPriority::Normal, TxPriority::Normal,
-        TxPriority::Low
-    };
-
-    for (uint8_t step = 0; step < sizeof(kSchedule) / sizeof(kSchedule[0]); ++step) {
-        const TxPriority prio = kSchedule[step];
-
-        if (prio == TxPriority::Low) {
-            TxMsg msg{};
-            if (txLowQ_ && xQueueReceive(txLowQ_, &msg, 0) == pdTRUE) {
-                if (!publishDirect_(msg.topic, msg.payload, (int)msg.qos, msg.retain != 0U)) {
-                    (void)txEnqueueSmall_(msg, TxPriority::Low);
-                    break;
-                }
-                continue;
-            }
-
-            LowLargeMsg lowLarge{};
-            if (txTakeLowLarge_(lowLarge)) {
-                if (!publishDirect_(lowLarge.topic, lowLarge.payload, (int)lowLarge.qos, lowLarge.retain != 0U)) {
-                    (void)txStoreLowLarge_(lowLarge.topic, lowLarge.payload, (int)lowLarge.qos, lowLarge.retain != 0U);
-                    break;
-                }
-            }
-            continue;
-        }
-
-        TxMsg msg{};
-        bool hasMsg = false;
-        if (prio == TxPriority::High) {
-            hasMsg = (txHighQ_ && xQueueReceive(txHighQ_, &msg, 0) == pdTRUE);
-        } else {
-            hasMsg = (txNormalQ_ && xQueueReceive(txNormalQ_, &msg, 0) == pdTRUE);
-        }
-        if (!hasMsg) continue;
-
-        if (!publishDirect_(msg.topic, msg.payload, (int)msg.qos, msg.retain != 0U)) {
-            (void)txEnqueueSmall_(msg, prio);
-            break;
-        }
-    }
-}
-
-bool MQTTModule::publishAlarmState_(AlarmId id)
-{
-    if (!alarmSvc || !alarmSvc->buildAlarmState) return false;
-    if (!alarmSvc->buildAlarmState(alarmSvc->ctx, id, publishBuf, sizeof(publishBuf))) {
-        LOGW("alarm state build failed id=%u (buffer=%u)", (unsigned)((uint16_t)id), (unsigned)sizeof(publishBuf));
-        return false;
-    }
-
-    char alarmTopic[Limits::Mqtt::Buffers::DynamicTopic] = {0};
-    const int tw = snprintf(
-        alarmTopic,
-        sizeof(alarmTopic),
-        "%s/%s/rt/alarms/id%u",
-        cfgData.baseTopic,
-        deviceId,
-        (unsigned)((uint16_t)id));
-    if (!(tw > 0 && (size_t)tw < sizeof(alarmTopic))) {
-        LOGW("alarm topic truncated id=%u", (unsigned)((uint16_t)id));
-        return false;
-    }
-    return publish(alarmTopic, publishBuf, 0, false);
-}
-
-bool MQTTModule::publishAlarmMeta_()
-{
-    if (!alarmSvc || !alarmSvc->activeCount || !alarmSvc->highestSeverity) return false;
-    if (topicRtAlarmsMeta[0] == '\0') return false;
-
-    const uint8_t active = alarmSvc->activeCount(alarmSvc->ctx);
-    const AlarmSeverity highest = alarmSvc->highestSeverity(alarmSvc->ctx);
-    const int wrote = snprintf(
-        publishBuf,
-        sizeof(publishBuf),
-        "{\"a\":%u,\"h\":%u,\"ts\":%lu}",
-        (unsigned)active,
-        (unsigned)((uint8_t)highest),
-        (unsigned long)millis());
-    if (!(wrote > 0 && (size_t)wrote < sizeof(publishBuf))) {
-        LOGW("alarm meta payload truncated (buffer=%u)", (unsigned)sizeof(publishBuf));
-        return false;
-    }
-    return publish(topicRtAlarmsMeta, publishBuf, 0, false);
-}
-
-bool MQTTModule::publishAlarmPack_()
-{
-    if (!alarmSvc || !alarmSvc->buildPacked) return false;
-    if (topicRtAlarmsPack[0] == '\0') return false;
-    if (!alarmSvc->buildPacked(alarmSvc->ctx, publishBuf, sizeof(publishBuf), 8)) {
-        LOGW("alarm pack build failed (buffer=%u)", (unsigned)sizeof(publishBuf));
-        return false;
-    }
-    return publish(topicRtAlarmsPack, publishBuf, 0, false);
-}
-
-void MQTTModule::enqueuePendingAlarmId_(AlarmId id)
-{
-    if (id == AlarmId::None) return;
-    portENTER_CRITICAL(&pendingAlarmMux_);
-    for (uint8_t i = 0; i < pendingAlarmCount_; ++i) {
-        if (pendingAlarmIds_[i] == id) {
-            portEXIT_CRITICAL(&pendingAlarmMux_);
-            return;
-        }
-    }
-    if (pendingAlarmCount_ < PendingAlarmIdsMax) {
-        pendingAlarmIds_[pendingAlarmCount_++] = id;
-    } else {
-        alarmsFullSyncPending_ = true;
-    }
-    portEXIT_CRITICAL(&pendingAlarmMux_);
-}
-
-uint8_t MQTTModule::takePendingAlarmIds_(AlarmId* out, uint8_t maxItems)
-{
-    if (!out || maxItems == 0) return 0;
-
-    portENTER_CRITICAL(&pendingAlarmMux_);
-    const uint8_t n = (pendingAlarmCount_ < maxItems) ? pendingAlarmCount_ : maxItems;
-    for (uint8_t i = 0; i < n; ++i) {
-        out[i] = pendingAlarmIds_[i];
-    }
-    pendingAlarmCount_ = 0;
-    portEXIT_CRITICAL(&pendingAlarmMux_);
-    return n;
-}
-
 void MQTTModule::formatTopic(char* out, size_t outLen, const char* suffix) const
 {
     if (!out || outLen == 0 || !suffix) return;
-    snprintf(out, outLen, "%s/%s/%s", cfgData.baseTopic, deviceId, suffix);
+    snprintf(out, outLen, "%s/%s/%s", cfgData_.baseTopic, deviceId_, suffix);
 }
 
-bool MQTTModule::addRuntimePublisher(const char* topic, uint32_t periodMs, int qos, bool retain,
-                                     bool (*build)(MQTTModule* self, char* out, size_t outLen),
-                                     bool allowNoPayload)
+bool MQTTModule::enqueueAck_(const char* topicSuffix,
+                             const char* payload,
+                             uint8_t qos,
+                             bool retain,
+                             MqttPublishPriority priority)
 {
-    if (!topic || !build) return false;
-    if (publisherCount >= Limits::Mqtt::Capacity::MaxPublishers) return false;
-    RuntimePublisher& p = publishers[publisherCount++];
-    p.topic = topic;
-    p.periodMs = periodMs;
-    p.qos = qos;
-    p.retain = retain;
-    p.build = build;
-    p.allowNoPayload = allowNoPayload;
-    p.lastMs = 0;
+    if (!topicSuffix || topicSuffix[0] == '\0') return false;
+    if (!payload) return false;
+
+    AckMessage& m = ackMessages_[ackWriteCursor_];
+    ackWriteCursor_ = (uint8_t)((ackWriteCursor_ + 1U) % MaxAckMessages);
+
+    m = AckMessage{};
+    m.used = true;
+    m.messageId = ackNextMessageId_;
+    m.qos = qos;
+    m.retain = retain;
+    snprintf(m.topicSuffix, sizeof(m.topicSuffix), "%s", topicSuffix);
+    snprintf(m.payload, sizeof(m.payload), "%s", payload);
+
+    ++ackNextMessageId_;
+    if (ackNextMessageId_ == 0U) ++ackNextMessageId_;
+
+    if (!enqueue(ProducerIdAck, m.messageId, priority, 0)) {
+        m.used = false;
+        return false;
+    }
     return true;
 }
-void MQTTModule::processRx(const RxMsg& msg) {
-    if (strcmp(msg.topic, topicCmd) == 0) return processRxCmd_(msg);
-    if (strcmp(msg.topic, topicCfgSet) == 0) return processRxCfgSet_(msg);
-    publishRxError_(topicAck, ErrorCode::UnknownTopic, "rx", false);
+
+void MQTTModule::processRx_(const RxMsg& msg)
+{
+    if (strcmp(msg.topic, topicCmd_) == 0) {
+        processRxCmd_(msg);
+        return;
+    }
+
+    if (strcmp(msg.topic, topicCfgSet_) == 0) {
+        processRxCfgSet_(msg);
+        return;
+    }
+
+    publishRxError_(MqttTopics::SuffixAck, ErrorCode::UnknownTopic, "rx", false);
 }
 
 void MQTTModule::processRxCmd_(const RxMsg& msg)
 {
     static constexpr size_t CMD_DOC_CAPACITY = Limits::JsonCmdBuf;
     static StaticJsonDocument<CMD_DOC_CAPACITY> doc;
+
     doc.clear();
     DeserializationError err = deserializeJson(doc, msg.payload);
     if (err || !doc.is<JsonObjectConst>()) {
-        LOGW("processRxCmd: bad cmd json (topic=%s, payload=%s)", msg.topic, msg.payload);
-        publishRxError_(topicAck, ErrorCode::BadCmdJson, "cmd", true);
+        publishRxError_(MqttTopics::SuffixAck, ErrorCode::BadCmdJson, "cmd", true);
         return;
     }
 
     JsonObjectConst root = doc.as<JsonObjectConst>();
     JsonVariantConst cmdVar = root["cmd"];
     if (!cmdVar.is<const char*>()) {
-        LOGW("processRxCmd: missing cmd field");
-        publishRxError_(topicAck, ErrorCode::MissingCmd, "cmd", true);
-        return;
-    }
-    const char* cmdVal = cmdVar.as<const char*>();
-    if (!cmdVal || cmdVal[0] == '\0') {
-        LOGW("processRxCmd: empty cmd value");
-        publishRxError_(topicAck, ErrorCode::MissingCmd, "cmd", true);
-        return;
-    }
-    if (!cmdSvc || !cmdSvc->execute) {
-        LOGW("processRxCmd: command service unavailable (cmd=%s)", cmdVal);
-        publishRxError_(topicAck, ErrorCode::CmdServiceUnavailable, "cmd", false);
+        publishRxError_(MqttTopics::SuffixAck, ErrorCode::MissingCmd, "cmd", true);
         return;
     }
 
-    char cmd[Limits::Mqtt::Buffers::CmdName];
-    size_t clen = strlen(cmdVal);
-    if (clen >= sizeof(cmd)) clen = sizeof(cmd) - 1;
-    memcpy(cmd, cmdVal, clen);
-    cmd[clen] = '\0';
+    const char* cmdVal = cmdVar.as<const char*>();
+    if (!cmdVal || cmdVal[0] == '\0') {
+        publishRxError_(MqttTopics::SuffixAck, ErrorCode::MissingCmd, "cmd", true);
+        return;
+    }
+
+    if (!cmdSvc_ || !cmdSvc_->execute) {
+        publishRxError_(MqttTopics::SuffixAck, ErrorCode::CmdServiceUnavailable, "cmd", false);
+        return;
+    }
+
+    char cmd[Limits::Mqtt::Buffers::CmdName] = {0};
+    size_t cmdLen = strlen(cmdVal);
+    if (cmdLen >= sizeof(cmd)) cmdLen = sizeof(cmd) - 1U;
+    memcpy(cmd, cmdVal, cmdLen);
+    cmd[cmdLen] = '\0';
 
     const char* argsJson = nullptr;
     char argsBuf[Limits::Mqtt::Buffers::CmdArgs] = {0};
     JsonVariantConst argsVar = root["args"];
     if (!argsVar.isNull()) {
         const size_t written = serializeJson(argsVar, argsBuf, sizeof(argsBuf));
-        if (written == 0 || written >= sizeof(argsBuf)) {
-            LOGW("processRxCmd: args too large (cmd=%s)", cmd);
-            publishRxError_(topicAck, ErrorCode::ArgsTooLarge, "cmd", true);
+        if (written == 0U || written >= sizeof(argsBuf)) {
+            publishRxError_(MqttTopics::SuffixAck, ErrorCode::ArgsTooLarge, "cmd", true);
             return;
         }
         argsJson = argsBuf;
     }
 
-    bool ok = cmdSvc->execute(cmdSvc->ctx, cmd, msg.payload, argsJson, replyBuf, sizeof(replyBuf));
+    const bool ok = cmdSvc_->execute(cmdSvc_->ctx, cmd, msg.payload, argsJson, replyBuf_, sizeof(replyBuf_));
     if (!ok) {
-        LOGW("processRxCmd: command handler failed (cmd=%s)", cmd);
-        publishRxError_(topicAck, ErrorCode::CmdHandlerFailed, "cmd", false);
+        publishRxError_(MqttTopics::SuffixAck, ErrorCode::CmdHandlerFailed, "cmd", false);
         return;
     }
 
-    int wrote = snprintf(publishBuf, sizeof(publishBuf), "{\"ok\":true,\"cmd\":\"%s\",\"reply\":%s}", cmd, replyBuf);
-    if (!(wrote > 0 && (size_t)wrote < sizeof(publishBuf))) {
-        LOGW("processRxCmd: ack overflow (cmd=%s, wrote=%d)", cmd, wrote);
-        publishRxError_(topicAck, ErrorCode::InternalAckOverflow, "cmd", false);
+    const int wrote = snprintf(payloadBuf_, sizeof(payloadBuf_),
+                               "{\"ok\":true,\"cmd\":\"%s\",\"reply\":%s}",
+                               cmd,
+                               replyBuf_);
+    if (!(wrote > 0 && (size_t)wrote < sizeof(payloadBuf_))) {
+        publishRxError_(MqttTopics::SuffixAck, ErrorCode::InternalAckOverflow, "cmd", false);
         return;
     }
-    if (!publish(topicAck, publishBuf, 0, false)) {
-        LOGW("cmd ack publish failed cmd=%s", cmd);
-    }
 
-    // cfg/* publication path is intentionally ConfigChanged-only.
+    (void)enqueueAck_(MqttTopics::SuffixAck, payloadBuf_, 0, false, MqttPublishPriority::High);
 }
 
 void MQTTModule::processRxCfgSet_(const RxMsg& msg)
 {
-    if (!cfgSvc || !cfgSvc->applyJson) {
-        publishRxError_(topicCfgAck, ErrorCode::CfgServiceUnavailable, "cfg/set", false);
+    if (!cfgSvc_ || !cfgSvc_->applyJson) {
+        publishRxError_(MqttTopics::SuffixCfgAck, ErrorCode::CfgServiceUnavailable, "cfg/set", false);
         return;
     }
 
     static constexpr size_t CFG_DOC_CAPACITY = Limits::JsonCfgBuf;
     static StaticJsonDocument<CFG_DOC_CAPACITY> cfgDoc;
     cfgDoc.clear();
+
     const DeserializationError cfgErr = deserializeJson(cfgDoc, msg.payload);
     if (cfgErr || !cfgDoc.is<JsonObjectConst>()) {
-        publishRxError_(topicCfgAck, ErrorCode::BadCfgJson, "cfg/set", true);
+        publishRxError_(MqttTopics::SuffixCfgAck, ErrorCode::BadCfgJson, "cfg/set", true);
         return;
     }
 
-    bool ok = cfgSvc->applyJson(cfgSvc->ctx, msg.payload);
-    if (!ok) {
-        publishRxError_(topicCfgAck, ErrorCode::CfgApplyFailed, "cfg/set", false);
+    if (!cfgSvc_->applyJson(cfgSvc_->ctx, msg.payload)) {
+        publishRxError_(MqttTopics::SuffixCfgAck, ErrorCode::CfgApplyFailed, "cfg/set", false);
         return;
     }
-    // cfg/* publication path is intentionally ConfigChanged-only.
 
-    if (!writeOkJson(publishBuf, sizeof(publishBuf), "cfg/set")) {
-        snprintf(publishBuf, sizeof(publishBuf), "{\"ok\":true}");
+    if (!writeOkJson(payloadBuf_, sizeof(payloadBuf_), "cfg/set")) {
+        snprintf(payloadBuf_, sizeof(payloadBuf_), "{\"ok\":true}");
     }
-    if (!publish(topicCfgAck, publishBuf, 1, false)) {
-        LOGW("cfg/set ack publish failed");
-    }
+    (void)enqueueAck_(MqttTopics::SuffixCfgAck, payloadBuf_, 1, false, MqttPublishPriority::High);
 }
 
-void MQTTModule::publishRxError_(const char* ackTopic, ErrorCode code, const char* where, bool parseFailure)
+void MQTTModule::publishRxError_(const char* ackTopicSuffix, ErrorCode code, const char* where, bool parseFailure)
 {
-    if (!ackTopic || ackTopic[0] == '\0') return;
-    if (parseFailure) __atomic_fetch_add(&parseFailCount_, 1U, __ATOMIC_RELAXED);
-    else __atomic_fetch_add(&handlerFailCount_, 1U, __ATOMIC_RELAXED);
+    if (parseFailure) ++parseFailCount_;
+    else ++handlerFailCount_;
+
     syncRxMetrics_();
 
-    if (!writeErrorJson(publishBuf, sizeof(publishBuf), code, where)) {
-        if (!writeErrorJson(publishBuf, sizeof(publishBuf), ErrorCode::InternalAckOverflow, "rx")) {
-            snprintf(publishBuf, sizeof(publishBuf), "{\"ok\":false}");
-        }
+    if (!writeErrorJson(payloadBuf_, sizeof(payloadBuf_), code, where)) {
+        snprintf(payloadBuf_, sizeof(payloadBuf_), "{\"ok\":false}");
     }
-    if (!publish(ackTopic, publishBuf, 0, false)) {
-        LOGW("rx error ack publish failed topic=%s", ackTopic);
-    }
+
+    (void)enqueueAck_(ackTopicSuffix, payloadBuf_, 0, false, MqttPublishPriority::High);
 }
 
 void MQTTModule::syncRxMetrics_()
 {
-    if (!dataStore) return;
-    setMqttRxDrop(*dataStore, __atomic_load_n(&rxDropCount_, __ATOMIC_RELAXED));
-    setMqttOversizeDrop(*dataStore, __atomic_load_n(&oversizeDropCount_, __ATOMIC_RELAXED));
-    setMqttParseFail(*dataStore, __atomic_load_n(&parseFailCount_, __ATOMIC_RELAXED));
-    setMqttHandlerFail(*dataStore, __atomic_load_n(&handlerFailCount_, __ATOMIC_RELAXED));
+    if (!dataStore_) return;
+    setMqttRxDrop(*dataStore_, rxDropCount_);
+    setMqttOversizeDrop(*dataStore_, oversizeDropCount_);
+    setMqttParseFail(*dataStore_, parseFailCount_);
+    setMqttHandlerFail(*dataStore_, handlerFailCount_);
 }
 
 void MQTTModule::countRxDrop_()
 {
-    __atomic_fetch_add(&rxDropCount_, 1U, __ATOMIC_RELAXED);
+    ++rxDropCount_;
     syncRxMetrics_();
 }
 
 void MQTTModule::countOversizeDrop_()
 {
-    __atomic_fetch_add(&oversizeDropCount_, 1U, __ATOMIC_RELAXED);
-    __atomic_fetch_add(&rxDropCount_, 1U, __ATOMIC_RELAXED);
+    ++oversizeDropCount_;
+    ++rxDropCount_;
     syncRxMetrics_();
 }
 
-void MQTTModule::init(ConfigStore& cfg, ServiceRegistry& services) {
-    constexpr uint8_t kCfgModuleId = (uint8_t)ConfigModuleId::Mqtt;
-    constexpr uint16_t kCfgBranchId = (uint16_t)ConfigBranchId::Mqtt;
-    cfg.registerVar(hostVar, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(portVar, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(userVar, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(passVar, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(baseTopicVar, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(enabledVar, kCfgModuleId, kCfgBranchId);
+void MQTTModule::enqueueAlarmFullSync_()
+{
+    if (!alarmSvc_ || !alarmSvc_->listIds) return;
 
-    wifiSvc = services.get<WifiService>("wifi");
-    cmdSvc = services.get<CommandService>("cmd");
-    cfgSvc = services.get<ConfigStoreService>("config");
-    timeSchedSvc = services.get<TimeSchedulerService>("time.scheduler");
-    alarmSvc = services.get<AlarmService>("alarms");
-    logHub = services.get<LogHubService>("loghub");
-
-    auto* ebSvc = services.get<EventBusService>("eventbus");
-    eventBus = ebSvc ? ebSvc->bus : nullptr;
-
-    const DataStoreService* dsSvc = services.get<DataStoreService>("datastore");
-    dataStore = dsSvc ? dsSvc->store : nullptr;
-    rxDropCount_ = 0;
-    oversizeDropCount_ = 0;
-    parseFailCount_ = 0;
-    handlerFailCount_ = 0;
-    pendingAlarmCount_ = 0;
-    alarmsMetaPending_ = false;
-    alarmsFullSyncPending_ = false;
-    alarmsPackPending_ = false;
-    statusOnlinePending_ = false;
-    statusOnlineDeadlineMs_ = 0;
-    statusOnlineNextTryMs_ = 0;
-    alarmsRetryBackoffMs_ = 0;
-    alarmsRetryNextMs_ = 0;
-    schedCfgActive_ = false;
-    schedCfgRootPending_ = false;
-    schedCfgSlotCursor_ = 0;
-    schedCfgNextMs_ = 0;
-    schedCfgRetryBackoffMs_ = 0;
-    syncRxMetrics_();
-
-    mqttSvc.publish = MQTTModule::svcPublish;
-    mqttSvc.publishPrio = MQTTModule::svcPublishPrio;
-    mqttSvc.formatTopic = MQTTModule::svcFormatTopic;
-    mqttSvc.isConnected = MQTTModule::svcIsConnected;
-    mqttSvc.ctx = this;
-    services.add("mqtt", &mqttSvc);
-
-    if (eventBus) {
-        eventBus->subscribe(EventId::DataChanged, &MQTTModule::onEventStatic, this);
-        eventBus->subscribe(EventId::ConfigChanged, &MQTTModule::onEventStatic, this);
-        eventBus->subscribe(EventId::AlarmRaised, &MQTTModule::onEventStatic, this);
-        eventBus->subscribe(EventId::AlarmCleared, &MQTTModule::onEventStatic, this);
-        eventBus->subscribe(EventId::AlarmAcked, &MQTTModule::onEventStatic, this);
-        eventBus->subscribe(EventId::AlarmSilenceChanged, &MQTTModule::onEventStatic, this);
-        eventBus->subscribe(EventId::AlarmConditionChanged, &MQTTModule::onEventStatic, this);
+    AlarmId ids[Limits::Alarm::MaxAlarms]{};
+    const uint8_t n = alarmSvc_->listIds(alarmSvc_->ctx, ids, (uint8_t)Limits::Alarm::MaxAlarms);
+    for (uint8_t i = 0; i < n; ++i) {
+        const uint16_t msg = (uint16_t)(AlarmMsgStateBase + (uint16_t)ids[i]);
+        (void)enqueue(ProducerIdAlarm, msg, MqttPublishPriority::High, 0);
     }
-
-    makeDeviceId(deviceId, sizeof(deviceId));
-    buildTopics();
-    clientConfigDirty_ = true;
-    suppressDisconnectEvent_ = false;
-
-    rxQ = xQueueCreate(Limits::Mqtt::Capacity::RxQueueLen, sizeof(RxMsg));
-
-    const size_t txHighBytes = TxHighQueueLen * sizeof(TxMsg);
-    const size_t txNormalBytes = TxNormalQueueLen * sizeof(TxMsg);
-    const size_t txLowBytes = TxLowQueueLen * sizeof(TxMsg);
-    const size_t txLowLargeBytes = sizeof(LowLargeMsg);
-
-    if (!txHighQueueStorage_) {
-        txHighQueueStorage_ = static_cast<uint8_t*>(heap_caps_malloc(txHighBytes, MALLOC_CAP_8BIT));
-    }
-    if (!txNormalQueueStorage_) {
-        txNormalQueueStorage_ = static_cast<uint8_t*>(heap_caps_malloc(txNormalBytes, MALLOC_CAP_8BIT));
-    }
-    if (!txLowQueueStorage_) {
-        txLowQueueStorage_ = static_cast<uint8_t*>(heap_caps_malloc(txLowBytes, MALLOC_CAP_8BIT));
-    }
-    if (!txLowLarge_) {
-        txLowLarge_ = static_cast<LowLargeMsg*>(heap_caps_calloc(1, sizeof(LowLargeMsg), MALLOC_CAP_8BIT));
-    }
-
-    txHighQ_ = (txHighQueueStorage_ != nullptr)
-        ? xQueueCreateStatic(TxHighQueueLen, sizeof(TxMsg), txHighQueueStorage_, &txHighQueueStruct_)
-        : nullptr;
-    txNormalQ_ = (txNormalQueueStorage_ != nullptr)
-        ? xQueueCreateStatic(TxNormalQueueLen, sizeof(TxMsg), txNormalQueueStorage_, &txNormalQueueStruct_)
-        : nullptr;
-    txLowQ_ = (txLowQueueStorage_ != nullptr)
-        ? xQueueCreateStatic(TxLowQueueLen, sizeof(TxMsg), txLowQueueStorage_, &txLowQueueStruct_)
-        : nullptr;
-
-    if (!txHighQ_ || !txNormalQ_ || !txLowQ_ || !txLowLarge_) {
-        LOGW("TX init failed highQ=%p normalQ=%p lowQ=%p highBuf=%p normalBuf=%p lowBuf=%p lowLarge=%p",
-             txHighQ_, txNormalQ_, txLowQ_,
-             txHighQueueStorage_, txNormalQueueStorage_, txLowQueueStorage_,
-             txLowLarge_);
-        LOGW("TX alloc bytes high=%u normal=%u low=%u lowLarge=%u",
-             (unsigned)txHighBytes,
-             (unsigned)txNormalBytes,
-             (unsigned)txLowBytes,
-             (unsigned)txLowLargeBytes);
-    } else {
-        const size_t txTotalBytes = txHighBytes + txNormalBytes + txLowBytes + txLowLargeBytes;
-        LOGI("TX buffers on heap total=%uB (high=%u normal=%u low=%u lowLarge=%u)",
-             (unsigned)txTotalBytes,
-             (unsigned)txHighBytes,
-             (unsigned)txNormalBytes,
-             (unsigned)txLowBytes,
-             (unsigned)txLowLargeBytes);
-        LOGI("TX/RX queue caps rx=%u high=%u normal=%u low=%u",
-             (unsigned)Limits::Mqtt::Capacity::RxQueueLen,
-             (unsigned)TxHighQueueLen,
-             (unsigned)TxNormalQueueLen,
-             (unsigned)TxLowQueueLen);
-    }
-
-    if (txLowLarge_) {
-        memset(txLowLarge_, 0, sizeof(LowLargeMsg));
-    }
-
-    refreshConfigModules();
-
-    LOGI("Init id=%s topic=%s cfgModules=%u", deviceId, topicCmd, (unsigned)cfgModuleCount);
-    if (timeSchedSvc) {
-        LOGI("Time scheduler config will be published per-slot on cfg/time/scheduler/slotN");
-    }
-
-    _netReady = dataStore ? wifiReady(*dataStore) : false;
-    _netReadyTs = millis();
-    _retryCount = 0;
-    _retryDelayMs = Limits::Mqtt::Backoff::MinMs;
-    diagNextLogMs_ = millis() + kMqttRuntimeDiagPeriodMs;
-    diagLastLowStackWarnMs_ = 0;
-    diagMinStackHw_ = (UBaseType_t)0xFFFFFFFFUL;
-
-    setState(cfgData.enabled ? MQTTState::WaitingNetwork : MQTTState::Disabled);
+    (void)enqueue(ProducerIdAlarm, AlarmMsgMeta, MqttPublishPriority::Normal, 0);
+    (void)enqueue(ProducerIdAlarm, AlarmMsgPack, MqttPublishPriority::Normal, 0);
 }
 
-void MQTTModule::loop() {
-    if (!cfgData.enabled) {
-        if (state != MQTTState::Disabled) {
-            stopClient_(true);
-            setState(MQTTState::Disabled);
-        }
-        vTaskDelay(pdMS_TO_TICKS(Limits::Mqtt::Timing::DisabledDelayMs));
-        return;
+MqttBuildResult MQTTModule::buildAckStatic_(void* ctx, uint16_t messageId, MqttBuildContext& buildCtx)
+{
+    MQTTModule* self = static_cast<MQTTModule*>(ctx);
+    return self ? self->buildAck_(messageId, buildCtx) : MqttBuildResult::PermanentError;
+}
+
+void MQTTModule::onAckPublishedStatic_(void* ctx, uint16_t messageId)
+{
+    MQTTModule* self = static_cast<MQTTModule*>(ctx);
+    if (self) self->onAckPublished_(messageId);
+}
+
+void MQTTModule::onAckDroppedStatic_(void* ctx, uint16_t messageId)
+{
+    MQTTModule* self = static_cast<MQTTModule*>(ctx);
+    if (self) self->onAckDropped_(messageId);
+}
+
+MqttBuildResult MQTTModule::buildStatusStatic_(void* ctx, uint16_t messageId, MqttBuildContext& buildCtx)
+{
+    MQTTModule* self = static_cast<MQTTModule*>(ctx);
+    return self ? self->buildStatus_(messageId, buildCtx) : MqttBuildResult::PermanentError;
+}
+
+MqttBuildResult MQTTModule::buildAlarmStatic_(void* ctx, uint16_t messageId, MqttBuildContext& buildCtx)
+{
+    MQTTModule* self = static_cast<MQTTModule*>(ctx);
+    return self ? self->buildAlarm_(messageId, buildCtx) : MqttBuildResult::PermanentError;
+}
+
+MqttBuildResult MQTTModule::buildAck_(uint16_t messageId, MqttBuildContext& ctx)
+{
+    for (uint8_t i = 0; i < MaxAckMessages; ++i) {
+        const AckMessage& msg = ackMessages_[i];
+        if (!msg.used || msg.messageId != messageId) continue;
+
+        const int tw = snprintf(ctx.topic, ctx.topicCapacity, "%s/%s/%s", cfgData_.baseTopic, deviceId_, msg.topicSuffix);
+        if (!(tw > 0 && (uint16_t)tw < ctx.topicCapacity)) return MqttBuildResult::PermanentError;
+
+        const int pw = snprintf(ctx.payload, ctx.payloadCapacity, "%s", msg.payload);
+        if (!(pw > 0 && (uint16_t)pw < ctx.payloadCapacity)) return MqttBuildResult::PermanentError;
+
+        ctx.topicLen = (uint16_t)tw;
+        ctx.payloadLen = (uint16_t)pw;
+        ctx.qos = msg.qos;
+        ctx.retain = msg.retain;
+        return MqttBuildResult::Ready;
     }
+    return MqttBuildResult::NoLongerNeeded;
+}
 
-    switch (state) {
-    case MQTTState::Disabled: setState(MQTTState::WaitingNetwork); break;
-    case MQTTState::WaitingNetwork:
-        if (!_startupReady) break;
-        if (!_netReady) break;
-        if (millis() - _netReadyTs >= Limits::Mqtt::Timing::NetWarmupMs) connectMqtt();
-        break;
-    case MQTTState::Connecting:
-        logRuntimeDiag_(millis());
-        if (millis() - stateTs > Limits::Mqtt::Timing::ConnectTimeoutMs) {
-            LOGW("Connect timeout");
-            stopClient_(true);
-            setState(MQTTState::ErrorWait);
-        }
-        break;
-    case MQTTState::Connected: {
-        uint32_t now = millis();
-        logRuntimeDiag_(now);
-        RxMsg m;
-        while (xQueueReceive(rxQ, &m, 0) == pdTRUE) processRx(m);
-        now = millis();
-        drainTx_();
-
-        const bool alarmRetryDue =
-            (alarmsRetryNextMs_ == 0U) || ((int32_t)(now - alarmsRetryNextMs_) >= 0);
-        bool alarmAttempted = false;
-        bool alarmFailed = false;
-
-        if (alarmRetryDue) {
-            if (alarmsFullSyncPending_ && alarmSvc && alarmSvc->listIds) {
-                AlarmId ids[Limits::Alarm::MaxAlarms]{};
-                const uint8_t n = alarmSvc->listIds(alarmSvc->ctx, ids, (uint8_t)Limits::Alarm::MaxAlarms);
-                bool okAll = true;
-                for (uint8_t i = 0; i < n; ++i) {
-                    alarmAttempted = true;
-                    if (!publishAlarmState_(ids[i])) {
-                        okAll = false;
-                        alarmFailed = true;
-                        break;
-                    }
-                }
-                if (!alarmFailed) {
-                    alarmAttempted = true;
-                    if (!publishAlarmMeta_()) {
-                        okAll = false;
-                        alarmFailed = true;
-                    }
-                }
-                if (okAll) {
-                    alarmsFullSyncPending_ = false;
-                    alarmsMetaPending_ = false;
-                }
-            } else {
-                AlarmId pendingIds[PendingAlarmIdsMax]{};
-                const uint8_t nPending = takePendingAlarmIds_(pendingIds, PendingAlarmIdsMax);
-                for (uint8_t i = 0; i < nPending; ++i) {
-                    alarmAttempted = true;
-                    if (!publishAlarmState_(pendingIds[i])) {
-                        enqueuePendingAlarmId_(pendingIds[i]);
-                        for (uint8_t j = (uint8_t)(i + 1U); j < nPending; ++j) {
-                            enqueuePendingAlarmId_(pendingIds[j]);
-                        }
-                        alarmFailed = true;
-                        break;
-                    }
-                }
-                if (!alarmFailed && alarmsMetaPending_) {
-                    alarmAttempted = true;
-                    if (publishAlarmMeta_()) {
-                        alarmsMetaPending_ = false;
-                    } else {
-                        alarmFailed = true;
-                    }
-                }
-            }
-            if (!alarmFailed && alarmsPackPending_) {
-                alarmAttempted = true;
-                if (publishAlarmPack_()) {
-                    alarmsPackPending_ = false;
-                } else {
-                    alarmFailed = true;
-                }
-            }
-
-            if (alarmFailed) {
-                constexpr uint32_t kAlarmRetryBackoffMinMs = 500U;
-                constexpr uint32_t kAlarmRetryBackoffMaxMs = 10000U;
-                uint32_t nextBackoff = alarmsRetryBackoffMs_;
-                if (nextBackoff == 0U) {
-                    nextBackoff = kAlarmRetryBackoffMinMs;
-                } else if (nextBackoff >= (kAlarmRetryBackoffMaxMs / 2U)) {
-                    nextBackoff = kAlarmRetryBackoffMaxMs;
-                } else {
-                    nextBackoff *= 2U;
-                }
-                alarmsRetryBackoffMs_ = nextBackoff;
-                alarmsRetryNextMs_ = now + nextBackoff;
-            } else if (alarmAttempted) {
-                alarmsRetryBackoffMs_ = 0U;
-                alarmsRetryNextMs_ = 0U;
-            }
-        }
-        if (_pendingPublish) {
-            _pendingPublish = false;
-            if (cfgRampActive_) cfgRampRestartRequested_ = true;
-            else beginConfigRamp_(now);
-        }
-        processPendingCfgBranches_();
-        runConfigRamp_(now);
-        runTimeSchedulerSlots_(now);
-        for (uint8_t i = 0; i < publisherCount; ++i) {
-            RuntimePublisher& p = publishers[i];
-            if (!p.topic || !p.build) continue;
-            if (p.periodMs == 0) continue;
-            if ((uint32_t)(now - p.lastMs) < p.periodMs) continue;
-            p.lastMs = now;
-            if (p.build(this, publishBuf, sizeof(publishBuf))) {
-                publish(p.topic, publishBuf, p.qos, p.retain);
-            } else if (!p.allowNoPayload) {
-                LOGW("runtime snapshot build failed topic=%s (buffer=%u)", p.topic, (unsigned)sizeof(publishBuf));
-            }
-        }
-
-        if (statusOnlinePending_ && (int32_t)(now - statusOnlineNextTryMs_) >= 0) {
-            const bool burstDone =
-                !_pendingPublish &&
-                !cfgRampActive_ &&
-                !cfgRampRestartRequested_ &&
-                (pendingCfgBranchCount_ == 0U) &&
-                !schedCfgActive_ &&
-                !schedCfgRootPending_ &&
-                !alarmsMetaPending_ &&
-                !alarmsFullSyncPending_ &&
-                !alarmsPackPending_ &&
-                (pendingAlarmCount_ == 0U);
-            const bool deadlineReached =
-                (statusOnlineDeadlineMs_ != 0U) && ((int32_t)(now - statusOnlineDeadlineMs_) >= 0);
-
-            if (burstDone || deadlineReached) {
-                const bool statusOk = publish(topicStatus, "{\"online\":true}", 1, true);
-                if (statusOk) {
-                    statusOnlinePending_ = false;
-                    statusOnlineDeadlineMs_ = 0;
-                    statusOnlineNextTryMs_ = 0;
-                    MQTT_DLOG("status publish online ok topic=%s deferred=%d", MqttTopics::SuffixStatus, deadlineReached ? 1 : 0);
-                } else {
-                    const uint32_t freeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-                    const uint32_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-                    const int outboxBytes = client_ ? esp_mqtt_client_get_outbox_size(client_) : -1;
-                    LOGW("status publish online failed free=%lu largest=%lu outbox=%d deferred=%d",
-                         (unsigned long)freeHeap,
-                         (unsigned long)largest,
-                         outboxBytes,
-                         deadlineReached ? 1 : 0);
-                    statusOnlineNextTryMs_ = now + 1000U;
-                }
-            }
-        }
-        drainTx_();
-        break;
-    }
-    case MQTTState::ErrorWait:
-        logRuntimeDiag_(millis());
-        if (!_netReady) {
-            setState(MQTTState::WaitingNetwork);
+void MQTTModule::onAckPublished_(uint16_t messageId)
+{
+    for (uint8_t i = 0; i < MaxAckMessages; ++i) {
+        AckMessage& msg = ackMessages_[i];
+        if (msg.used && msg.messageId == messageId) {
+            msg.used = false;
             break;
         }
-        if (millis() - stateTs >= _retryDelayMs) {
-            _retryCount++;
-            uint32_t next = _retryDelayMs;
+    }
+}
 
-            if      (next < Limits::Mqtt::Backoff::Step1Ms)   next = Limits::Mqtt::Backoff::Step1Ms;
-            else if (next < Limits::Mqtt::Backoff::Step2Ms)   next = Limits::Mqtt::Backoff::Step2Ms;
-            else if (next < Limits::Mqtt::Backoff::Step3Ms)   next = Limits::Mqtt::Backoff::Step3Ms;
-            else if (next < Limits::Mqtt::Backoff::Step4Ms)   next = Limits::Mqtt::Backoff::Step4Ms;
-            else                                               next = Limits::Mqtt::Backoff::MaxMs;
+void MQTTModule::onAckDropped_(uint16_t messageId)
+{
+    onAckPublished_(messageId);
+}
 
-            next = clampU32(next, Limits::Mqtt::Backoff::MinMs, Limits::Mqtt::Backoff::MaxMs);
-            _retryDelayMs = jitterMs(next, Limits::Mqtt::Backoff::JitterPct);
-            setState(MQTTState::WaitingNetwork);
-        }
-        break;
+MqttBuildResult MQTTModule::buildStatus_(uint16_t messageId, MqttBuildContext& ctx)
+{
+    if (messageId == StatusMsgOnline) {
+        const int tw = snprintf(ctx.topic, ctx.topicCapacity, "%s", topicStatus_);
+        if (!(tw > 0 && (uint16_t)tw < ctx.topicCapacity)) return MqttBuildResult::PermanentError;
+
+        static const char kOnlinePayload[] = "{\"online\":true}";
+        const int pw = snprintf(ctx.payload, ctx.payloadCapacity, "%s", kOnlinePayload);
+        if (!(pw > 0 && (uint16_t)pw < ctx.payloadCapacity)) return MqttBuildResult::PermanentError;
+
+        ctx.topicLen = (uint16_t)tw;
+        ctx.payloadLen = (uint16_t)pw;
+        ctx.qos = 1;
+        ctx.retain = true;
+        return MqttBuildResult::Ready;
     }
 
-    vTaskDelay(pdMS_TO_TICKS(Limits::Mqtt::Timing::LoopDelayMs));
+    if (messageId >= StatusMsgRuntimeBase) {
+        const uint8_t idx = (uint8_t)(messageId - StatusMsgRuntimeBase);
+        if (idx >= runtimePublisherCount_) return MqttBuildResult::NoLongerNeeded;
+
+        RuntimePublisher& p = runtimePublishers_[idx];
+        if (!p.used || !p.topic || !p.build) return MqttBuildResult::NoLongerNeeded;
+
+        const int tw = snprintf(ctx.topic, ctx.topicCapacity, "%s", p.topic);
+        if (!(tw > 0 && (uint16_t)tw < ctx.topicCapacity)) return MqttBuildResult::PermanentError;
+
+        const bool ok = p.build(this, ctx.payload, ctx.payloadCapacity);
+        if (!ok) {
+            return p.allowNoPayload ? MqttBuildResult::NoLongerNeeded : MqttBuildResult::RetryLater;
+        }
+
+        ctx.topicLen = (uint16_t)tw;
+        ctx.payloadLen = (uint16_t)strnlen(ctx.payload, ctx.payloadCapacity);
+        ctx.qos = p.qos;
+        ctx.retain = p.retain;
+        return MqttBuildResult::Ready;
+    }
+
+    return MqttBuildResult::NoLongerNeeded;
 }
 
-void MQTTModule::onEventStatic(const Event& e, void* user)
+MqttBuildResult MQTTModule::buildAlarm_(uint16_t messageId, MqttBuildContext& ctx)
 {
-    static_cast<MQTTModule*>(user)->onEvent(e);
+    if (!alarmSvc_) return MqttBuildResult::RetryLater;
+
+    if (messageId == AlarmMsgMeta) {
+        if (!alarmSvc_->activeCount || !alarmSvc_->highestSeverity) return MqttBuildResult::PermanentError;
+
+        const int tw = snprintf(ctx.topic, ctx.topicCapacity, "%s/%s/rt/alarms/m", cfgData_.baseTopic, deviceId_);
+        if (!(tw > 0 && (uint16_t)tw < ctx.topicCapacity)) return MqttBuildResult::PermanentError;
+
+        const uint8_t active = alarmSvc_->activeCount(alarmSvc_->ctx);
+        const AlarmSeverity highest = alarmSvc_->highestSeverity(alarmSvc_->ctx);
+        const int pw = snprintf(ctx.payload,
+                                ctx.payloadCapacity,
+                                "{\"a\":%u,\"h\":%u,\"ts\":%lu}",
+                                (unsigned)active,
+                                (unsigned)((uint8_t)highest),
+                                (unsigned long)millis());
+        if (!(pw > 0 && (uint16_t)pw < ctx.payloadCapacity)) return MqttBuildResult::PermanentError;
+
+        ctx.topicLen = (uint16_t)tw;
+        ctx.payloadLen = (uint16_t)pw;
+        ctx.qos = 0;
+        ctx.retain = false;
+        return MqttBuildResult::Ready;
+    }
+
+    if (messageId == AlarmMsgPack) {
+        if (!alarmSvc_->buildPacked) return MqttBuildResult::PermanentError;
+
+        const int tw = snprintf(ctx.topic, ctx.topicCapacity, "%s/%s/rt/alarms/p", cfgData_.baseTopic, deviceId_);
+        if (!(tw > 0 && (uint16_t)tw < ctx.topicCapacity)) return MqttBuildResult::PermanentError;
+
+        if (!alarmSvc_->buildPacked(alarmSvc_->ctx, ctx.payload, ctx.payloadCapacity, 8)) {
+            return MqttBuildResult::RetryLater;
+        }
+
+        ctx.topicLen = (uint16_t)tw;
+        ctx.payloadLen = (uint16_t)strnlen(ctx.payload, ctx.payloadCapacity);
+        ctx.qos = 0;
+        ctx.retain = false;
+        return MqttBuildResult::Ready;
+    }
+
+    if (messageId >= AlarmMsgStateBase) {
+        if (!alarmSvc_->buildAlarmState) return MqttBuildResult::PermanentError;
+
+        const AlarmId id = (AlarmId)(messageId - AlarmMsgStateBase);
+
+        const int tw = snprintf(ctx.topic,
+                                ctx.topicCapacity,
+                                "%s/%s/rt/alarms/id%u",
+                                cfgData_.baseTopic,
+                                deviceId_,
+                                (unsigned)((uint16_t)id));
+        if (!(tw > 0 && (uint16_t)tw < ctx.topicCapacity)) return MqttBuildResult::PermanentError;
+
+        if (!alarmSvc_->buildAlarmState(alarmSvc_->ctx, id, ctx.payload, ctx.payloadCapacity)) {
+            return MqttBuildResult::RetryLater;
+        }
+
+        ctx.topicLen = (uint16_t)tw;
+        ctx.payloadLen = (uint16_t)strnlen(ctx.payload, ctx.payloadCapacity);
+        ctx.qos = 0;
+        ctx.retain = false;
+        return MqttBuildResult::Ready;
+    }
+
+    return MqttBuildResult::NoLongerNeeded;
 }
 
-void MQTTModule::onEvent(const Event& e)
+void MQTTModule::onEventStatic_(const Event& e, void* user)
+{
+    MQTTModule* self = static_cast<MQTTModule*>(user);
+    if (self) self->onEvent_(e);
+}
+
+void MQTTModule::onEvent_(const Event& e)
 {
     if (e.id == EventId::DataChanged) {
         const DataChangedPayload* p = (const DataChangedPayload*)e.payload;
         if (!p) return;
-        if (p->id != DATAKEY_WIFI_READY) return;
-        if (!dataStore) return;
 
-        bool ready = wifiReady(*dataStore);
-        if (ready == _netReady) return;
+        if (p->id == DATAKEY_WIFI_READY) {
+            if (!dataStore_) return;
 
-        _netReady = ready;
-        _netReadyTs = millis();
+            const bool ready = wifiReady(*dataStore_);
+            if (ready == netReady_) return;
 
-        if (_netReady) {
-            LOGI("DataStore networkReady=true -> warmup");
-            if (state != MQTTState::Connected) setState(MQTTState::WaitingNetwork);
-        } else {
-            LOGI("DataStore networkReady=false -> disconnect and wait");
-            stopClient_(true);
-            setState(MQTTState::WaitingNetwork);
+            netReady_ = ready;
+            netReadyTs_ = millis();
+
+            if (netReady_) {
+                if (state_ != MQTTState::Connected) setState_(MQTTState::WaitingNetwork);
+            } else {
+                stopClient_(true);
+                setState_(MQTTState::WaitingNetwork);
+            }
+            return;
         }
+
+        runtimeProducerCore_.onDataChanged(p->id);
         return;
     }
 
@@ -1699,26 +1138,13 @@ void MQTTModule::onEvent(const Event& e)
         if (!p) return;
 
         const char* key = p->nvsKey;
-        if (!key || key[0] == '\0') return;
-
-        if (isMqttConnKey(key)) {
-            LOGI("MQTT config changed (%s) -> reconnect", key);
+        if (key && key[0] != '\0' && isMqttConnKey(key)) {
             clientConfigDirty_ = true;
             stopClient_(true);
-            _netReadyTs = millis();
-            setState(MQTTState::WaitingNetwork);
+            netReadyTs_ = millis();
+            setState_(MQTTState::WaitingNetwork);
         }
 
-        const uint16_t branchId = p->branchId;
-        if (branchId == (uint16_t)ConfigBranchId::Unknown) {
-            _pendingPublish = true;
-            return;
-        }
-        enqueueCfgBranch_(branchId);
-        if (branchId == (uint16_t)ConfigBranchId::Time) {
-            // Scheduler JSON shape depends on week/day policy carried by cfg/time.
-            enqueueCfgBranch_((uint16_t)ConfigBranchId::TimeScheduler);
-        }
         return;
     }
 
@@ -1729,12 +1155,232 @@ void MQTTModule::onEvent(const Event& e)
         e.id == EventId::AlarmConditionChanged) {
         const AlarmPayload* p = (const AlarmPayload*)e.payload;
         if (p && e.len >= sizeof(AlarmPayload)) {
-            enqueuePendingAlarmId_((AlarmId)p->alarmId);
+            (void)enqueue(ProducerIdAlarm,
+                          (uint16_t)(AlarmMsgStateBase + (uint16_t)p->alarmId),
+                          MqttPublishPriority::High,
+                          0);
         } else {
-            alarmsFullSyncPending_ = true;
+            enqueueAlarmFullSync_();
+            return;
         }
-        alarmsMetaPending_ = true;
-        alarmsPackPending_ = true;
+
+        (void)enqueue(ProducerIdAlarm, AlarmMsgMeta, MqttPublishPriority::Normal, 0);
+        (void)enqueue(ProducerIdAlarm, AlarmMsgPack, MqttPublishPriority::Normal, 0);
         return;
     }
+}
+
+void MQTTModule::init(ConfigStore& cfg, ServiceRegistry& services)
+{
+    constexpr uint8_t kCfgModuleId = (uint8_t)ConfigModuleId::Mqtt;
+    constexpr uint8_t kCfgBranchId = kMqttCfgBranch;
+    cfg.registerVar(hostVar_, kCfgModuleId, kCfgBranchId);
+    cfg.registerVar(portVar_, kCfgModuleId, kCfgBranchId);
+    cfg.registerVar(userVar_, kCfgModuleId, kCfgBranchId);
+    cfg.registerVar(passVar_, kCfgModuleId, kCfgBranchId);
+    cfg.registerVar(baseTopicVar_, kCfgModuleId, kCfgBranchId);
+    cfg.registerVar(enabledVar_, kCfgModuleId, kCfgBranchId);
+
+    wifiSvc_ = services.get<WifiService>("wifi");
+    cmdSvc_ = services.get<CommandService>("cmd");
+    cfgSvc_ = services.get<ConfigStoreService>("config");
+    timeSchedSvc_ = services.get<TimeSchedulerService>("time.scheduler");
+    alarmSvc_ = services.get<AlarmService>("alarms");
+    logHub_ = services.get<LogHubService>("loghub");
+    (void)logHub_;
+
+    const EventBusService* ebSvc = services.get<EventBusService>("eventbus");
+    eventBus_ = ebSvc ? ebSvc->bus : nullptr;
+
+    const DataStoreService* dsSvc = services.get<DataStoreService>("datastore");
+    dataStore_ = dsSvc ? dsSvc->store : nullptr;
+
+    rxDropCount_ = 0;
+    parseFailCount_ = 0;
+    handlerFailCount_ = 0;
+    oversizeDropCount_ = 0;
+    syncRxMetrics_();
+
+    mqttSvc_.enqueue = MQTTModule::svcEnqueue_;
+    mqttSvc_.registerProducer = MQTTModule::svcRegisterProducer_;
+    mqttSvc_.formatTopic = MQTTModule::svcFormatTopic_;
+    mqttSvc_.isConnected = MQTTModule::svcIsConnected_;
+    mqttSvc_.ctx = this;
+    (void)services.add("mqtt", &mqttSvc_);
+
+    if (!cfgProducer_) {
+        cfgProducer_ = new (std::nothrow) MqttConfigRouteProducer();
+    }
+    if (cfgProducer_) {
+        cfgProducer_->configure(this,
+                                ProducerIdConfig,
+                                kMqttCfgRoutes,
+                                (uint8_t)(sizeof(kMqttCfgRoutes) / sizeof(kMqttCfgRoutes[0])),
+                                services);
+    }
+    runtimeProducerCore_.configure(&mqttSvc_);
+
+    ackProducerDesc_ = MqttPublishProducer{};
+    ackProducerDesc_.producerId = ProducerIdAck;
+    ackProducerDesc_.ctx = this;
+    ackProducerDesc_.buildMessage = MQTTModule::buildAckStatic_;
+    ackProducerDesc_.onMessagePublished = MQTTModule::onAckPublishedStatic_;
+    ackProducerDesc_.onMessageDropped = MQTTModule::onAckDroppedStatic_;
+
+    statusProducerDesc_ = MqttPublishProducer{};
+    statusProducerDesc_.producerId = ProducerIdStatus;
+    statusProducerDesc_.ctx = this;
+    statusProducerDesc_.buildMessage = MQTTModule::buildStatusStatic_;
+
+    runtimeProducerDesc_ = MqttPublishProducer{};
+    runtimeProducerDesc_.producerId = ProducerIdRuntime;
+    runtimeProducerDesc_.ctx = &runtimeProducerCore_;
+    runtimeProducerDesc_.buildMessage = [](void* ctx, uint16_t messageId, MqttBuildContext& buildCtx) -> MqttBuildResult {
+        RuntimeProducer* p = static_cast<RuntimeProducer*>(ctx);
+        return p ? p->buildMessage(messageId, buildCtx) : MqttBuildResult::PermanentError;
+    };
+    runtimeProducerDesc_.onMessagePublished = [](void* ctx, uint16_t messageId) {
+        RuntimeProducer* p = static_cast<RuntimeProducer*>(ctx);
+        if (p) p->onMessagePublished(messageId);
+    };
+    runtimeProducerDesc_.onMessageDropped = [](void* ctx, uint16_t messageId) {
+        RuntimeProducer* p = static_cast<RuntimeProducer*>(ctx);
+        if (p) p->onMessageDropped(messageId);
+    };
+
+    alarmProducerDesc_ = MqttPublishProducer{};
+    alarmProducerDesc_.producerId = ProducerIdAlarm;
+    alarmProducerDesc_.ctx = this;
+    alarmProducerDesc_.buildMessage = MQTTModule::buildAlarmStatic_;
+
+    (void)registerProducer(&ackProducerDesc_);
+    (void)registerProducer(&statusProducerDesc_);
+    (void)registerProducer(&runtimeProducerDesc_);
+    (void)registerProducer(&alarmProducerDesc_);
+
+    if (eventBus_) {
+        eventBus_->subscribe(EventId::DataChanged, &MQTTModule::onEventStatic_, this);
+        eventBus_->subscribe(EventId::ConfigChanged, &MQTTModule::onEventStatic_, this);
+        eventBus_->subscribe(EventId::AlarmRaised, &MQTTModule::onEventStatic_, this);
+        eventBus_->subscribe(EventId::AlarmCleared, &MQTTModule::onEventStatic_, this);
+        eventBus_->subscribe(EventId::AlarmAcked, &MQTTModule::onEventStatic_, this);
+        eventBus_->subscribe(EventId::AlarmSilenceChanged, &MQTTModule::onEventStatic_, this);
+        eventBus_->subscribe(EventId::AlarmConditionChanged, &MQTTModule::onEventStatic_, this);
+    }
+
+    makeDeviceId(deviceId_, sizeof(deviceId_));
+    buildTopics_();
+
+    const size_t rxItemSize = sizeof(RxMsg);
+    const size_t rxQueueStorageLen = ((size_t)Limits::Mqtt::Capacity::RxQueueLen) * rxItemSize;
+    rxQueueStorage_ = static_cast<uint8_t*>(heap_caps_malloc(rxQueueStorageLen, MALLOC_CAP_8BIT));
+    if (rxQueueStorage_) {
+        rxQ_ = xQueueCreateStatic(Limits::Mqtt::Capacity::RxQueueLen,
+                                  rxItemSize,
+                                  rxQueueStorage_,
+                                  &rxQueueStruct_);
+    } else {
+        rxQ_ = nullptr;
+    }
+
+    netReady_ = dataStore_ ? wifiReady(*dataStore_) : false;
+    netReadyTs_ = millis();
+    retryCount_ = 0;
+    retryDelayMs_ = Limits::Mqtt::Backoff::MinMs;
+
+    setState_(cfgData_.enabled ? MQTTState::WaitingNetwork : MQTTState::Disabled);
+}
+
+void MQTTModule::onConfigLoaded(ConfigStore&, ServiceRegistry& services)
+{
+    if (!cfgProducer_) {
+        cfgProducer_ = new (std::nothrow) MqttConfigRouteProducer();
+    }
+    if (cfgProducer_) {
+        cfgProducer_->configure(this,
+                                ProducerIdConfig,
+                                kMqttCfgRoutes,
+                                (uint8_t)(sizeof(kMqttCfgRoutes) / sizeof(kMqttCfgRoutes[0])),
+                                services);
+    }
+    runtimeProducerCore_.configure(&mqttSvc_);
+    runtimeProducerCore_.rebuildRoutes();
+}
+
+void MQTTModule::loop()
+{
+    if (!cfgData_.enabled) {
+        if (state_ != MQTTState::Disabled) {
+            stopClient_(true);
+            setState_(MQTTState::Disabled);
+        }
+        vTaskDelay(pdMS_TO_TICKS(Limits::Mqtt::Timing::DisabledDelayMs));
+        return;
+    }
+
+    switch (state_) {
+        case MQTTState::Disabled:
+            setState_(MQTTState::WaitingNetwork);
+            break;
+
+        case MQTTState::WaitingNetwork:
+            if (!startupReady_) break;
+            if (!netReady_) break;
+            if ((millis() - netReadyTs_) >= Limits::Mqtt::Timing::NetWarmupMs) {
+                connectMqtt_();
+            }
+            break;
+
+        case MQTTState::Connecting:
+            if ((millis() - stateTs_) > Limits::Mqtt::Timing::ConnectTimeoutMs) {
+                stopClient_(true);
+                setState_(MQTTState::ErrorWait);
+            }
+            break;
+
+        case MQTTState::Connected: {
+            if (rxQ_) {
+                RxMsg msg{};
+                while (xQueueReceive(rxQ_, &msg, 0) == pdTRUE) {
+                    processRx_(msg);
+                }
+            }
+
+            const uint32_t now = millis();
+            for (uint8_t i = 0; i < runtimePublisherCount_; ++i) {
+                RuntimePublisher& p = runtimePublishers_[i];
+                if (!p.used || p.periodMs == 0U) continue;
+                if ((int32_t)(now - p.nextDueMs) < 0) continue;
+
+                p.nextDueMs = now + p.periodMs;
+                (void)enqueue(ProducerIdStatus, p.messageId, MqttPublishPriority::Normal, 0);
+            }
+
+            processJobs_(now);
+            break;
+        }
+
+        case MQTTState::ErrorWait:
+            if (!netReady_) {
+                setState_(MQTTState::WaitingNetwork);
+                break;
+            }
+
+            if ((millis() - stateTs_) >= retryDelayMs_) {
+                ++retryCount_;
+                uint32_t next = retryDelayMs_;
+                if (next < Limits::Mqtt::Backoff::Step1Ms) next = Limits::Mqtt::Backoff::Step1Ms;
+                else if (next < Limits::Mqtt::Backoff::Step2Ms) next = Limits::Mqtt::Backoff::Step2Ms;
+                else if (next < Limits::Mqtt::Backoff::Step3Ms) next = Limits::Mqtt::Backoff::Step3Ms;
+                else if (next < Limits::Mqtt::Backoff::Step4Ms) next = Limits::Mqtt::Backoff::Step4Ms;
+                else next = Limits::Mqtt::Backoff::MaxMs;
+
+                next = clampU32(next, Limits::Mqtt::Backoff::MinMs, Limits::Mqtt::Backoff::MaxMs);
+                retryDelayMs_ = jitterMs(next, Limits::Mqtt::Backoff::JitterPct);
+                setState_(MQTTState::WaitingNetwork);
+            }
+            break;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(Limits::Mqtt::Timing::LoopDelayMs));
 }

@@ -1318,7 +1318,7 @@
       "type": "CharArray",
       "label": "Topic de base",
       "help": "Préfixe MQTT pour les topics de télémétrie/commande.",
-      "var": "baseTopicVar",
+      "var": "baseTopicVar_",
       "source": "cfgdoc"
     },
     "mqtt/enabled": {
@@ -1327,7 +1327,7 @@
       "type": "Bool",
       "label": "MQTT actif",
       "help": "Active ou désactive le client MQTT.",
-      "var": "enabledVar",
+      "var": "enabledVar_",
       "source": "cfgdoc"
     },
     "mqtt/host": {
@@ -1336,7 +1336,7 @@
       "type": "CharArray",
       "label": "Hôte MQTT",
       "help": "Adresse du broker MQTT (DNS ou IP).",
-      "var": "hostVar",
+      "var": "hostVar_",
       "source": "cfgdoc"
     },
     "mqtt/pass": {
@@ -1345,7 +1345,7 @@
       "type": "CharArray",
       "label": "Mot de passe MQTT",
       "help": "Mot de passe pour l'authentification MQTT.",
-      "var": "passVar",
+      "var": "passVar_",
       "source": "cfgdoc"
     },
     "mqtt/port": {
@@ -1354,7 +1354,7 @@
       "type": "Int32",
       "label": "Port MQTT",
       "help": "Port TCP utilisé pour la connexion au broker.",
-      "var": "portVar",
+      "var": "portVar_",
       "source": "cfgdoc"
     },
     "mqtt/user": {
@@ -1363,7 +1363,7 @@
       "type": "CharArray",
       "label": "Utilisateur MQTT",
       "help": "Nom d'utilisateur pour l'authentification MQTT.",
-      "var": "userVar",
+      "var": "userVar_",
       "source": "cfgdoc"
     },
     "poollogic/air_temp_io_id": {

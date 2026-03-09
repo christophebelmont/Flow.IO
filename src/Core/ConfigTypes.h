@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "Core/SystemLimits.h"
+#include "Core/ConfigBranchRef.h"
 
 // Max NVS key length for Preferences (excluding null terminator).
 // Always wrap literal NVS keys with NVS_KEY("...") to enforce length at compile time.
@@ -45,8 +46,8 @@ struct ConfigVariable {
     T* value;
     ConfigPersistence persistence;
     uint16_t size; // for char[]
-    uint8_t moduleId = 0; // 0 = unknown, set by module via ConfigStore::registerVar(var, moduleId, branchId)
-    uint16_t branchId = 0; // 0 = unknown, set by module via ConfigStore::registerVar(var, moduleId, branchId)
+    uint8_t moduleId = 0; // 0 = unknown, set by module via ConfigStore::registerVar(var, moduleId, localBranchId)
+    uint8_t localBranchId = 0; // 0 = unknown, set by module via ConfigStore::registerVar(var, moduleId, localBranchId)
 
     /** @brief Change handler entry. */
     struct Handler { ConfigCallback<T> cb; void* ctx; };
@@ -77,5 +78,5 @@ struct ConfigMeta {
     void* valuePtr;
     uint16_t size;
     uint8_t moduleId = 0; // 0 = unknown
-    uint16_t branchId = 0; // 0 = unknown
+    uint8_t localBranchId = 0; // 0 = unknown
 };

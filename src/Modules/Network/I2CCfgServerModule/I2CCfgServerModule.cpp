@@ -12,6 +12,7 @@
 #include "Core/ModuleLog.h"
 
 #include <WiFi.h>
+#include <new>
 #include <stdlib.h>
 #include <string.h>
 
@@ -21,6 +22,11 @@
 
 namespace {
 constexpr uint8_t kInterlinkBus = 1;  // Interlink is fixed on I2C controller 1 (Wire1 on ESP32).
+constexpr uint8_t kI2cServerCfgProducerId = 50;
+constexpr uint8_t kI2cServerCfgBranch = 1;
+static constexpr MqttConfigRouteProducer::Route kI2cServerCfgRoutes[] = {
+    {1, {(uint8_t)ConfigModuleId::I2cCfg, kI2cServerCfgBranch}, "i2c/cfg/server", "i2c/cfg/server", (uint8_t)MqttPublishPriority::Normal, nullptr},
+};
 
 size_t tokenLenToSlash_(const char* s)
 {
@@ -87,7 +93,7 @@ bool ipToText_(const IpV4& ip, char* out, size_t outLen)
 void I2CCfgServerModule::init(ConfigStore& cfg, ServiceRegistry& services)
 {
     constexpr uint8_t kCfgModuleId = (uint8_t)ConfigModuleId::I2cCfg;
-    constexpr uint16_t kCfgBranchId = (uint16_t)ConfigBranchId::I2cCfgServer;
+    constexpr uint8_t kCfgBranchId = kI2cServerCfgBranch;
 
     cfg.registerVar(enabledVar_, kCfgModuleId, kCfgBranchId);
     cfg.registerVar(sdaVar_, kCfgModuleId, kCfgBranchId);
@@ -107,8 +113,18 @@ void I2CCfgServerModule::init(ConfigStore& cfg, ServiceRegistry& services)
     LOGI("I2C cfg server config registered");
 }
 
-void I2CCfgServerModule::onConfigLoaded(ConfigStore&, ServiceRegistry&)
+void I2CCfgServerModule::onConfigLoaded(ConfigStore&, ServiceRegistry& services)
 {
+    if (!cfgMqttPub_) {
+        cfgMqttPub_ = new (std::nothrow) MqttConfigRouteProducer();
+    }
+    if (cfgMqttPub_) {
+        cfgMqttPub_->configure(this,
+                               kI2cServerCfgProducerId,
+                               kI2cServerCfgRoutes,
+                               (uint8_t)(sizeof(kI2cServerCfgRoutes) / sizeof(kI2cServerCfgRoutes[0])),
+                               services);
+    }
     startLink_();
 }
 

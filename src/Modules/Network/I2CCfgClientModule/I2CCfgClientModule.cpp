@@ -13,6 +13,11 @@
 
 namespace {
 constexpr uint8_t kInterlinkBus = 1;  // Interlink is fixed on I2C controller 1 (Wire1 on ESP32).
+constexpr uint8_t kI2cClientCfgProducerId = 51;
+constexpr uint8_t kI2cClientCfgBranch = 2;
+static constexpr MqttConfigRouteProducer::Route kI2cClientCfgRoutes[] = {
+    {1, {(uint8_t)ConfigModuleId::I2cCfg, kI2cClientCfgBranch}, "i2c/cfg/client", "i2c/cfg/client", (uint8_t)MqttPublishPriority::Normal, nullptr},
+};
 
 const char* opName(uint8_t op)
 {
@@ -52,7 +57,7 @@ const char* statusName(uint8_t st)
 void I2CCfgClientModule::init(ConfigStore& cfg, ServiceRegistry& services)
 {
     constexpr uint8_t kCfgModuleId = (uint8_t)ConfigModuleId::I2cCfg;
-    constexpr uint16_t kCfgBranchId = (uint16_t)ConfigBranchId::I2cCfgClient;
+    constexpr uint8_t kCfgBranchId = kI2cClientCfgBranch;
 
     cfg.registerVar(enabledVar_, kCfgModuleId, kCfgBranchId);
     cfg.registerVar(sdaVar_, kCfgModuleId, kCfgBranchId);
@@ -72,8 +77,14 @@ void I2CCfgClientModule::init(ConfigStore& cfg, ServiceRegistry& services)
     (void)logHub_;
 }
 
-void I2CCfgClientModule::onConfigLoaded(ConfigStore&, ServiceRegistry&)
+void I2CCfgClientModule::onConfigLoaded(ConfigStore&, ServiceRegistry& services)
 {
+    cfgMqttPub_.configure(this,
+                          kI2cClientCfgProducerId,
+                          kI2cClientCfgRoutes,
+                          (uint8_t)(sizeof(kI2cClientCfgRoutes) / sizeof(kI2cClientCfgRoutes[0])),
+                          services);
+
     LOGI("onConfigLoaded enabled=%s bus=%u sda=%ld scl=%ld freq=%ld target=0x%02X",
          cfgData_.enabled ? "true" : "false",
          (unsigned)kInterlinkBus,

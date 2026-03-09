@@ -17,7 +17,7 @@
 
 #ifndef FLOW_WIRDEF_MQ_HOST
 #if defined(FLOW_WOKWI_DEFAULT_OVERRIDES)
-#define FLOW_WIRDEF_MQ_HOST "flowio.cloud.shiftr.io"
+#define FLOW_WIRDEF_MQ_HOST "192.168.86.250"
 #else
 #define FLOW_WIRDEF_MQ_HOST "flowio.cloud.shiftr.io"
 #endif

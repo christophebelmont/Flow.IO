@@ -4,6 +4,7 @@
  * @brief Module that hosts the LogHub and sink registry.
  */
 #include "Core/ModulePassive.h"
+#include "Modules/Network/MQTTModule/MqttConfigRouteProducer.h"
 #include "Core/ServiceRegistry.h"
 #include "Core/LogHub.h"
 #include "Core/LogSinkRegistry.h"
@@ -19,6 +20,7 @@ public:
 
     /** @brief Initialize log hub and register services. */
     void init(ConfigStore& cfg, ServiceRegistry& services) override;
+    void onConfigLoaded(ConfigStore&, ServiceRegistry& services) override;
 
 private:
     LogHub hub;
@@ -26,4 +28,5 @@ private:
 
     LogSinkRegistry sinks;
     LogSinkRegistryService sinksSvc{};
+    MqttConfigRouteProducer* cfgMqttPub_ = nullptr;
 };

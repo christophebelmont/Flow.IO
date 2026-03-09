@@ -5,6 +5,7 @@
  */
 
 #include "Core/Module.h"
+#include "Modules/Network/MQTTModule/MqttConfigRouteProducer.h"
 #include "Core/NvsKeys.h"
 #include "Core/SystemLimits.h"
 #include "Core/Services/Services.h"
@@ -128,4 +129,5 @@ private:
 
     mutable portMUX_TYPE slotsMux_ = portMUX_INITIALIZER_UNLOCKED;
     AlarmSlot slots_[Limits::Alarm::MaxAlarms]{};
+    MqttConfigRouteProducer* cfgMqttPub_ = nullptr;
 };

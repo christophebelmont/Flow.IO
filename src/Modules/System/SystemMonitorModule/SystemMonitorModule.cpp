@@ -6,10 +6,18 @@
 #include "Core/ModuleManager.h"   ///< required for iteration
 #include <Arduino.h>
 #include <WiFi.h>                ///< only for RSSI (optional)
+#include <new>
 #include <string.h>
 #define LOG_MODULE_ID ((LogModuleId)LogModuleIdValue::SystemMonitorModule)
 #include "Core/ModuleLog.h"
 
+namespace {
+static constexpr uint8_t kSysMonCfgProducerId = 45;
+static constexpr uint8_t kSysMonCfgBranch = 1;
+static constexpr MqttConfigRouteProducer::Route kSysMonCfgRoutes[] = {
+    {1, {(uint8_t)ConfigModuleId::SystemMonitor, kSysMonCfgBranch}, "sysmon", "sysmon", (uint8_t)MqttPublishPriority::Normal, nullptr},
+};
+}
 
 const char* SystemMonitorModule::wifiStateStr(WifiState st) {
     switch (st) {
@@ -24,7 +32,7 @@ const char* SystemMonitorModule::wifiStateStr(WifiState st) {
 
 void SystemMonitorModule::init(ConfigStore& cfg, ServiceRegistry& services) {
     constexpr uint8_t kCfgModuleId = (uint8_t)ConfigModuleId::SystemMonitor;
-    constexpr uint16_t kCfgBranchId = (uint16_t)ConfigBranchId::SystemMonitor;
+    constexpr uint8_t kCfgBranchId = kSysMonCfgBranch;
     cfgStore_ = &cfg;
     cfg.registerVar(tracePeriodVar_, kCfgModuleId, kCfgBranchId);
 
@@ -103,6 +111,16 @@ void SystemMonitorModule::registerHaEntities_(ServiceRegistry& services)
 
 void SystemMonitorModule::onConfigLoaded(ConfigStore&, ServiceRegistry& services)
 {
+    if (!cfgMqttPub_) {
+        cfgMqttPub_ = new (std::nothrow) MqttConfigRouteProducer();
+    }
+    if (cfgMqttPub_) {
+        cfgMqttPub_->configure(this,
+                               kSysMonCfgProducerId,
+                               kSysMonCfgRoutes,
+                               (uint8_t)(sizeof(kSysMonCfgRoutes) / sizeof(kSysMonCfgRoutes[0])),
+                               services);
+    }
     registerHaEntities_(services);
 }
 

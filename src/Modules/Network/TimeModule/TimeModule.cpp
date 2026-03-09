@@ -13,8 +13,19 @@
 #include <cstring>
 #include <cstdio>
 #include <cctype>
+#include <new>
 #define LOG_MODULE_ID ((LogModuleId)LogModuleIdValue::TimeModule)
 #include "Core/ModuleLog.h"
+
+namespace {
+static constexpr uint8_t kTimeCfgProducerId = 43;
+static constexpr uint8_t kTimeCfgBranch = 1;
+static constexpr uint8_t kTimeSchedulerCfgBranch = 2;
+static constexpr MqttConfigRouteProducer::Route kTimeCfgRoutes[] = {
+    {1, {(uint8_t)ConfigModuleId::Time, kTimeCfgBranch}, "time", "time", (uint8_t)MqttPublishPriority::Normal, nullptr},
+    {2, {(uint8_t)ConfigModuleId::Time, kTimeSchedulerCfgBranch}, "time/scheduler", "time/scheduler", (uint8_t)MqttPublishPriority::Normal, nullptr},
+};
+}
 
 // Fast-clock test mode:
 // Uncomment the line below to simulate time from 2026-01-01 00:00:00.
@@ -354,9 +365,8 @@ void TimeModule::applySystemSlots_(SchedulerSlotRuntime* slots, size_t count) co
 
 void TimeModule::init(ConfigStore& cfg, ServiceRegistry& services) {
     constexpr uint8_t kCfgModuleId = (uint8_t)ConfigModuleId::Time;
-    constexpr uint8_t kSchedCfgModuleId = (uint8_t)ConfigModuleId::TimeScheduler;
-    constexpr uint16_t kCfgBranchId = (uint16_t)ConfigBranchId::Time;
-    constexpr uint16_t kSchedCfgBranchId = (uint16_t)ConfigBranchId::TimeScheduler;
+    constexpr uint8_t kCfgBranchId = kTimeCfgBranch;
+    constexpr uint8_t kSchedCfgBranchId = kTimeSchedulerCfgBranch;
     cfgStore = &cfg;
 
     cfg.registerVar(server1Var, kCfgModuleId, kCfgBranchId);
@@ -364,7 +374,7 @@ void TimeModule::init(ConfigStore& cfg, ServiceRegistry& services) {
     cfg.registerVar(tzVar, kCfgModuleId, kCfgBranchId);
     cfg.registerVar(enabledVar, kCfgModuleId, kCfgBranchId);
     cfg.registerVar(weekStartMondayVar, kCfgModuleId, kCfgBranchId);
-    cfg.registerVar(scheduleBlobVar, kSchedCfgModuleId, kSchedCfgBranchId);
+    cfg.registerVar(scheduleBlobVar, kCfgModuleId, kSchedCfgBranchId);
 
     logHub = services.get<LogHubService>("loghub");
 
@@ -432,8 +442,19 @@ void TimeModule::init(ConfigStore& cfg, ServiceRegistry& services) {
     setState(cfgData.enabled ? TimeSyncState::WaitingNetwork : TimeSyncState::Disabled);
 }
 
-void TimeModule::onConfigLoaded(ConfigStore&, ServiceRegistry&)
+void TimeModule::onConfigLoaded(ConfigStore&, ServiceRegistry& services)
 {
+    if (!cfgMqttPub_) {
+        cfgMqttPub_ = new (std::nothrow) MqttConfigRouteProducer();
+    }
+    if (cfgMqttPub_) {
+        cfgMqttPub_->configure(this,
+                               kTimeCfgProducerId,
+                               kTimeCfgRoutes,
+                               (uint8_t)(sizeof(kTimeCfgRoutes) / sizeof(kTimeCfgRoutes[0])),
+                               services);
+    }
+
     // Ensure runtime scheduler table mirrors persisted blob before other modules
     // start mutating slots in their own onConfigLoaded hooks.
     (void)loadScheduleFromBlob_();
@@ -890,8 +911,8 @@ void TimeModule::onEvent(const Event& e)
     if (e.id == EventId::ConfigChanged) {
         if (!e.payload || e.len < sizeof(ConfigChangedPayload)) return;
         const ConfigChangedPayload* p = (const ConfigChangedPayload*)e.payload;
-        const ConfigBranchId branchId = (ConfigBranchId)p->branchId;
-        if (branchId == ConfigBranchId::TimeScheduler || branchId == ConfigBranchId::Time) {
+        if (p->moduleId == (uint8_t)ConfigModuleId::Time &&
+            (p->localBranchId == kTimeSchedulerCfgBranch || p->localBranchId == kTimeCfgBranch)) {
             schedNeedsReload_ = true;
         }
         return;

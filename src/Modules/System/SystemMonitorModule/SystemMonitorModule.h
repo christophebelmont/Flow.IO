@@ -4,6 +4,7 @@
  * @brief Periodic system health/metrics reporting module.
  */
 #include "Core/Module.h"
+#include "Modules/Network/MQTTModule/MqttConfigRouteProducer.h"
 #include "Core/NvsKeys.h"
 #include "Core/Services/Services.h"
 #include "Core/SystemStats.h"
@@ -58,6 +59,7 @@ private:
     uint32_t lastJsonDumpMs = 0;
     uint32_t lastTraceLogMs = 0;
     bool bootInfoLogged_ = false;
+    MqttConfigRouteProducer* cfgMqttPub_ = nullptr;
 
     void logBootInfo();
     void logHeapStats();

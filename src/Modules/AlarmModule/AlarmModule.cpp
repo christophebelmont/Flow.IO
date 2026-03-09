@@ -9,10 +9,19 @@
 #include "Core/ErrorCodes.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <new>
 #include <string.h>
 
 #define LOG_MODULE_ID ((LogModuleId)LogModuleIdValue::AlarmModule)
 #include "Core/ModuleLog.h"
+
+namespace {
+static constexpr uint8_t kAlarmCfgProducerId = 46;
+static constexpr uint8_t kAlarmCfgBranch = 1;
+static constexpr MqttConfigRouteProducer::Route kAlarmCfgRoutes[] = {
+    {1, {(uint8_t)ConfigModuleId::Alarms, kAlarmCfgBranch}, "alarms", "alarms", (uint8_t)MqttPublishPriority::Normal, nullptr},
+};
+}
 
 static uint32_t clampEvalPeriodMs_(int32_t inMs)
 {
@@ -617,7 +626,7 @@ bool AlarmModule::cmdAckAll_(void* userCtx, const CommandRequest&, char* reply, 
 void AlarmModule::init(ConfigStore& cfg, ServiceRegistry& services)
 {
     constexpr uint8_t kCfgModuleId = (uint8_t)ConfigModuleId::Alarms;
-    constexpr uint16_t kCfgBranchId = (uint16_t)ConfigBranchId::Alarms;
+    constexpr uint8_t kCfgBranchId = kAlarmCfgBranch;
     cfg.registerVar(enabledVar_, kCfgModuleId, kCfgBranchId);
     cfg.registerVar(evalPeriodVar_, kCfgModuleId, kCfgBranchId);
 
@@ -667,6 +676,16 @@ void AlarmModule::registerHaEntities_(ServiceRegistry& services)
 
 void AlarmModule::onConfigLoaded(ConfigStore&, ServiceRegistry& services)
 {
+    if (!cfgMqttPub_) {
+        cfgMqttPub_ = new (std::nothrow) MqttConfigRouteProducer();
+    }
+    if (cfgMqttPub_) {
+        cfgMqttPub_->configure(this,
+                               kAlarmCfgProducerId,
+                               kAlarmCfgRoutes,
+                               (uint8_t)(sizeof(kAlarmCfgRoutes) / sizeof(kAlarmCfgRoutes[0])),
+                               services);
+    }
     evalPeriodMsCfg_ = (int32_t)clampEvalPeriodMs_(evalPeriodMsCfg_);
     registerHaEntities_(services);
 }

@@ -47,7 +47,7 @@ bool LogHub::registerConfigVar_(ModuleRegistration& slot)
     slot.minLevelVar.persistence = ConfigPersistence::Persistent;
     slot.minLevelVar.size = 0;
 
-    cfg_->registerVar(slot.minLevelVar, cfgModuleId_, cfgBranchId_);
+    cfg_->registerVar(slot.minLevelVar, cfgModuleId_, cfgLocalBranchId_);
     slot.cfgRegistered = true;
     return true;
 }
@@ -66,11 +66,11 @@ bool LogHub::dequeue(LogEntry& out, TickType_t waitTicks) {
     return xQueueReceive(q, &out, waitTicks) == pdTRUE;
 }
 
-void LogHub::attachConfig(ConfigStore* cfg, uint8_t cfgModuleId, uint16_t cfgBranchId)
+void LogHub::attachConfig(ConfigStore* cfg, uint8_t cfgModuleId, uint8_t cfgLocalBranchId)
 {
     cfg_ = cfg;
     cfgModuleId_ = cfgModuleId;
-    cfgBranchId_ = cfgBranchId;
+    cfgLocalBranchId_ = cfgLocalBranchId;
     if (!cfg_) return;
 
     for (uint8_t i = 0; i < moduleCount_; ++i) {

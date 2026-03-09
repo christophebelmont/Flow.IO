@@ -7,9 +7,9 @@
 #include "Modules/Network/HAModule/HARuntime.h"
 #include "Core/MqttTopics.h"
 #include "Core/SystemLimits.h"
-#include <esp_heap_caps.h>
 #include <esp_system.h>
 #include <ctype.h>
+#include <new>
 #include <stdarg.h>
 #include <string.h>
 
@@ -20,7 +20,14 @@
 #define FIRMW "unknown"
 #endif
 
-static void buildAvailabilityField(const MqttService* mqttSvc,
+namespace {
+static constexpr uint8_t kHaCfgBranch = 1;
+static constexpr MqttConfigRouteProducer::Route kHaCfgRoutes[] = {
+    {1, {(uint8_t)ConfigModuleId::Ha, kHaCfgBranch}, "ha", "ha", (uint8_t)MqttPublishPriority::Normal, nullptr},
+};
+}
+
+static void buildAvailabilityField(const MqttService* mqttSvc_,
                                    char* out,
                                    size_t outLen,
                                    const char* stateTopic = nullptr,
@@ -28,10 +35,10 @@ static void buildAvailabilityField(const MqttService* mqttSvc,
 {
     if (!out || outLen == 0) return;
     out[0] = '\0';
-    if (!mqttSvc || !mqttSvc->formatTopic) return;
+    if (!mqttSvc_ || !mqttSvc_->formatTopic) return;
 
     char availabilityTopic[192] = {0};
-    mqttSvc->formatTopic(mqttSvc->ctx, MqttTopics::SuffixStatus, availabilityTopic, sizeof(availabilityTopic));
+    mqttSvc_->formatTopic(mqttSvc_->ctx, MqttTopics::SuffixStatus, availabilityTopic, sizeof(availabilityTopic));
     const bool hasStateAvailability =
         stateTopic && stateTopic[0] != '\0' &&
         stateAvailabilityTemplate && stateAvailabilityTemplate[0] != '\0';
@@ -302,65 +309,43 @@ bool HAModule::buildUniqueId(const char* objectId, const char* name, char* out, 
     char cleanName[96] = {0};
     sanitizeId(name ? name : "", cleanName, sizeof(cleanName));
     if (cleanName[0] != '\0') {
-        snprintf(out, outLen, "%s_%s_%s", deviceId, objectId, cleanName);
+        snprintf(out, outLen, "%s_%s_%s", deviceId_, objectId, cleanName);
     } else {
-        snprintf(out, outLen, "%s_%s", deviceId, objectId);
+        snprintf(out, outLen, "%s_%s", deviceId_, objectId);
     }
     return out[0] != '\0';
 }
 
-bool HAModule::publishDiscovery(const char* component, const char* objectId, const char* payload)
+bool HAModule::publishDiscovery(const char* component, const char* objectId, MqttBuildContext& outCtx)
 {
-    if (!component || !objectId || !payload || !mqttSvc || !mqttSvc->publish) return false;
-    lastDiscoveryFailureRetryable_ = false;
-
-    constexpr uint32_t kMinFreeHeapForPublish = Limits::NetworkPublish::MinFreeHeapBytes;
-    constexpr uint32_t kMinLargestBlockForPublish = Limits::NetworkPublish::MinLargestBlockBytes;
-    const uint32_t freeHeap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-    const uint32_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-    if (freeHeap < kMinFreeHeapForPublish || largest < kMinLargestBlockForPublish) {
-        lastDiscoveryFailureRetryable_ = true;
-        const uint32_t now = millis();
-        if ((now - lastLowHeapLogMs_) >= 2000U) {
-            lastLowHeapLogMs_ = now;
-            LOGW("Skip HA discovery publish (low heap free=%lu largest=%lu need_free=%lu need_largest=%lu)",
-                 (unsigned long)freeHeap,
-                 (unsigned long)largest,
-                 (unsigned long)kMinFreeHeapForPublish,
-                 (unsigned long)kMinLargestBlockForPublish);
-        }
-        return false;
-    }
-
-    if (!formatChecked(topicBuf, sizeof(topicBuf), "%s/%s/%s/%s/config", cfgData.discoveryPrefix, component, nodeTopicId, objectId)) {
+    if (!component || !objectId) return false;
+    if (!outCtx.topic || outCtx.topicCapacity == 0 || !outCtx.payload || outCtx.payloadCapacity == 0) return false;
+    if (!formatChecked(outCtx.topic,
+                       outCtx.topicCapacity,
+                       "%s/%s/%s/%s/config",
+                       cfgData_.discoveryPrefix,
+                       component,
+                       nodeTopicId_,
+                       objectId)) {
         LOGW("HA discovery topic truncated component=%s object=%s", component, objectId);
         return false;
     }
-    // QoS0 lowers transient heap pressure while keeping retained discovery on broker.
-    bool ok = false;
-    if (mqttSvc->publishPrio) {
-        ok = mqttSvc->publishPrio(mqttSvc->ctx,
-                                  topicBuf,
-                                  payload,
-                                  0,
-                                  true,
-                                  (uint8_t)MqttPublishPriority::Low);
-    } else {
-        ok = mqttSvc->publish(mqttSvc->ctx, topicBuf, payload, 0, true);
-    }
-    if (!ok) {
-        // MQTT layer may reject due to transient low heap / link state; resume from this entity.
-        lastDiscoveryFailureRetryable_ = true;
-    }
-    return ok;
+    outCtx.topicLen = (uint16_t)strnlen(outCtx.topic, outCtx.topicCapacity);
+    outCtx.payloadLen = (uint16_t)strnlen(outCtx.payload, outCtx.payloadCapacity);
+    outCtx.qos = 0;
+    outCtx.retain = true;
+    return true;
 }
 
 bool HAModule::publishSensor(const char* objectId, const char* name,
                              const char* stateTopic, const char* valueTemplate,
                              const char* entityCategory, const char* icon, const char* unit,
                              bool hasEntityName,
-                             const char* availabilityTemplate)
+                             const char* availabilityTemplate,
+                             MqttBuildContext* outCtx)
 {
+    if (!outCtx) return false;
+    MqttBuildContext& buildCtx = *outCtx;
     if (!objectId || !name || !stateTopic || !valueTemplate) return false;
 
     char unitField[64] = {0};
@@ -382,9 +367,9 @@ bool HAModule::publishSensor(const char* objectId, const char* name,
     char uniqueId[256] = {0};
     if (!buildUniqueId(objectId, name, uniqueId, sizeof(uniqueId))) return false;
     char availabilityField[768] = {0};
-    buildAvailabilityField(mqttSvc, availabilityField, sizeof(availabilityField), stateTopic, availabilityTemplate);
+    buildAvailabilityField(mqttSvc_, availabilityField, sizeof(availabilityField), stateTopic, availabilityTemplate);
 
-    if (!formatChecked(payloadBuf, sizeof(payloadBuf),
+    if (!formatChecked(buildCtx.payload, buildCtx.payloadCapacity,
              "{\"name\":\"%s\",\"object_id\":\"%s\",\"default_entity_id\":\"%s\",\"unique_id\":\"%s\","
              "\"state_topic\":\"%s\",\"value_template\":\"%s\",\"state_class\":\"measurement\"%s%s%s%s%s,"
              "\"origin\":{\"name\":\"Flow.IO\"},"
@@ -393,19 +378,22 @@ bool HAModule::publishSensor(const char* objectId, const char* name,
              name, objectId, defaultEntityId, uniqueId,
              stateTopic, valueTemplate,
              entityCategoryField, iconField, unitField, hasEntityNameField, availabilityField,
-             deviceIdent, cfgData.vendor, cfgData.vendor, cfgData.model, FIRMW)) {
+             deviceIdent_, cfgData_.vendor, cfgData_.vendor, cfgData_.model, FIRMW)) {
         LOGW("HA sensor payload truncated object=%s", objectId);
         return false;
     }
 
-    return publishDiscovery("sensor", objectId, payloadBuf);
+    return publishDiscovery("sensor", objectId, buildCtx);
 }
 
 bool HAModule::publishBinarySensor(const char* objectId, const char* name,
                                    const char* stateTopic, const char* valueTemplate,
                                    const char* deviceClass, const char* entityCategory,
-                                   const char* icon)
+                                   const char* icon,
+                                   MqttBuildContext* outCtx)
 {
+    if (!outCtx) return false;
+    MqttBuildContext& buildCtx = *outCtx;
     if (!objectId || !name || !stateTopic || !valueTemplate) return false;
 
     char defaultEntityId[224] = {0};
@@ -413,7 +401,7 @@ bool HAModule::publishBinarySensor(const char* objectId, const char* name,
     char uniqueId[256] = {0};
     if (!buildUniqueId(objectId, name, uniqueId, sizeof(uniqueId))) return false;
     char availabilityField[384] = {0};
-    buildAvailabilityField(mqttSvc, availabilityField, sizeof(availabilityField));
+    buildAvailabilityField(mqttSvc_, availabilityField, sizeof(availabilityField));
     char deviceClassField[64] = {0};
     if (deviceClass && deviceClass[0] != '\0') {
         snprintf(deviceClassField, sizeof(deviceClassField), ",\"device_class\":\"%s\"", deviceClass);
@@ -427,7 +415,7 @@ bool HAModule::publishBinarySensor(const char* objectId, const char* name,
         snprintf(iconField, sizeof(iconField), ",\"icon\":\"%s\"", icon);
     }
 
-    if (!formatChecked(payloadBuf, sizeof(payloadBuf),
+    if (!formatChecked(buildCtx.payload, buildCtx.payloadCapacity,
              "{\"name\":\"%s\",\"object_id\":\"%s\",\"default_entity_id\":\"%s\",\"unique_id\":\"%s\","
              "\"state_topic\":\"%s\",\"value_template\":\"%s\",\"payload_on\":\"True\",\"payload_off\":\"False\","
              "\"has_entity_name\":false%s%s%s%s,"
@@ -436,12 +424,12 @@ bool HAModule::publishBinarySensor(const char* objectId, const char* name,
              "\"manufacturer\":\"%s\",\"model\":\"%s\",\"sw_version\":\"%s\"}}",
              name, objectId, defaultEntityId, uniqueId, stateTopic, valueTemplate,
              deviceClassField, entityCategoryField, iconField, availabilityField,
-             deviceIdent, cfgData.vendor, cfgData.vendor, cfgData.model, FIRMW)) {
+             deviceIdent_, cfgData_.vendor, cfgData_.vendor, cfgData_.model, FIRMW)) {
         LOGW("HA binary_sensor payload truncated object=%s", objectId);
         return false;
     }
 
-    return publishDiscovery("binary_sensor", objectId, payloadBuf);
+    return publishDiscovery("binary_sensor", objectId, buildCtx);
 }
 
 bool HAModule::publishSwitch(const char* objectId, const char* name,
@@ -449,22 +437,25 @@ bool HAModule::publishSwitch(const char* objectId, const char* name,
                              const char* commandTopic,
                              const char* payloadOn, const char* payloadOff,
                              const char* icon,
-                             const char* entityCategory)
+                             const char* entityCategory,
+                             MqttBuildContext* outCtx)
 {
+    if (!outCtx) return false;
+    MqttBuildContext& buildCtx = *outCtx;
     if (!objectId || !name || !stateTopic || !valueTemplate || !commandTopic || !payloadOn || !payloadOff) return false;
     char defaultEntityId[224] = {0};
     if (!buildDefaultEntityId("switch", objectId, defaultEntityId, sizeof(defaultEntityId))) return false;
     char uniqueId[256] = {0};
     if (!buildUniqueId(objectId, name, uniqueId, sizeof(uniqueId))) return false;
     char availabilityField[384] = {0};
-    buildAvailabilityField(mqttSvc, availabilityField, sizeof(availabilityField));
+    buildAvailabilityField(mqttSvc_, availabilityField, sizeof(availabilityField));
     char entityCategoryField[64] = {0};
     if (entityCategory && entityCategory[0] != '\0') {
         snprintf(entityCategoryField, sizeof(entityCategoryField), ",\"entity_category\":\"%s\"", entityCategory);
     }
 
     if (icon && icon[0] != '\0') {
-        if (!formatChecked(payloadBuf, sizeof(payloadBuf),
+        if (!formatChecked(buildCtx.payload, buildCtx.payloadCapacity,
                  "{\"name\":\"%s\",\"object_id\":\"%s\",\"default_entity_id\":\"%s\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
                  "\"value_template\":\"%s\",\"state_on\":\"ON\",\"state_off\":\"OFF\","
                  "\"command_topic\":\"%s\",\"payload_on\":\"%s\",\"payload_off\":\"%s\","
@@ -475,12 +466,12 @@ bool HAModule::publishSwitch(const char* objectId, const char* name,
                  name, objectId, defaultEntityId, uniqueId, stateTopic, valueTemplate,
                  commandTopic, payloadOn, payloadOff, icon,
                  entityCategoryField, availabilityField,
-                 deviceIdent, cfgData.vendor, cfgData.vendor, cfgData.model, FIRMW)) {
+                 deviceIdent_, cfgData_.vendor, cfgData_.vendor, cfgData_.model, FIRMW)) {
             LOGW("HA switch payload truncated object=%s", objectId);
             return false;
         }
     } else {
-        if (!formatChecked(payloadBuf, sizeof(payloadBuf),
+        if (!formatChecked(buildCtx.payload, buildCtx.payloadCapacity,
                  "{\"name\":\"%s\",\"object_id\":\"%s\",\"default_entity_id\":\"%s\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
                  "\"value_template\":\"%s\",\"state_on\":\"ON\",\"state_off\":\"OFF\","
                  "\"command_topic\":\"%s\",\"payload_on\":\"%s\",\"payload_off\":\"%s\"%s%s,"
@@ -489,27 +480,30 @@ bool HAModule::publishSwitch(const char* objectId, const char* name,
                  "\"manufacturer\":\"%s\",\"model\":\"%s\",\"sw_version\":\"%s\"}}",
                  name, objectId, defaultEntityId, uniqueId, stateTopic, valueTemplate,
                  commandTopic, payloadOn, payloadOff, entityCategoryField, availabilityField,
-                 deviceIdent, cfgData.vendor, cfgData.vendor, cfgData.model, FIRMW)) {
+                 deviceIdent_, cfgData_.vendor, cfgData_.vendor, cfgData_.model, FIRMW)) {
             LOGW("HA switch payload truncated object=%s", objectId);
             return false;
         }
     }
-    return publishDiscovery("switch", objectId, payloadBuf);
+    return publishDiscovery("switch", objectId, buildCtx);
 }
 
 bool HAModule::publishNumber(const char* objectId, const char* name,
                              const char* stateTopic, const char* valueTemplate,
                              const char* commandTopic, const char* commandTemplate,
                              float minValue, float maxValue, float step,
-                             const char* mode, const char* entityCategory, const char* icon, const char* unit)
+                             const char* mode, const char* entityCategory, const char* icon, const char* unit,
+                             MqttBuildContext* outCtx)
 {
+    if (!outCtx) return false;
+    MqttBuildContext& buildCtx = *outCtx;
     if (!objectId || !name || !stateTopic || !valueTemplate || !commandTopic || !commandTemplate) return false;
     char defaultEntityId[224] = {0};
     if (!buildDefaultEntityId("number", objectId, defaultEntityId, sizeof(defaultEntityId))) return false;
     char uniqueId[256] = {0};
     if (!buildUniqueId(objectId, name, uniqueId, sizeof(uniqueId))) return false;
     char availabilityField[384] = {0};
-    buildAvailabilityField(mqttSvc, availabilityField, sizeof(availabilityField));
+    buildAvailabilityField(mqttSvc_, availabilityField, sizeof(availabilityField));
 
     char unitField[48] = {0};
     if (unit && unit[0] != '\0') {
@@ -521,7 +515,7 @@ bool HAModule::publishNumber(const char* objectId, const char* name,
     }
 
     if (icon && icon[0] != '\0') {
-        if (!formatChecked(payloadBuf, sizeof(payloadBuf),
+        if (!formatChecked(buildCtx.payload, buildCtx.payloadCapacity,
                  "{\"name\":\"%s\",\"object_id\":\"%s\",\"default_entity_id\":\"%s\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
                  "\"value_template\":\"%s\",\"command_topic\":\"%s\",\"command_template\":\"%s\","
                  "\"min\":%.3f,\"max\":%.3f,\"step\":%.3f,\"mode\":\"%s\",\"icon\":\"%s\"%s%s%s,"
@@ -530,12 +524,12 @@ bool HAModule::publishNumber(const char* objectId, const char* name,
                  "\"manufacturer\":\"%s\",\"model\":\"%s\",\"sw_version\":\"%s\"}}",
                  name, objectId, defaultEntityId, uniqueId, stateTopic, valueTemplate, commandTopic, commandTemplate,
                  (double)minValue, (double)maxValue, (double)step, mode ? mode : "slider", icon, entityCategoryField, unitField, availabilityField,
-                 deviceIdent, cfgData.vendor, cfgData.vendor, cfgData.model, FIRMW)) {
+                 deviceIdent_, cfgData_.vendor, cfgData_.vendor, cfgData_.model, FIRMW)) {
             LOGW("HA number payload truncated object=%s", objectId);
             return false;
         }
     } else {
-        if (!formatChecked(payloadBuf, sizeof(payloadBuf),
+        if (!formatChecked(buildCtx.payload, buildCtx.payloadCapacity,
                  "{\"name\":\"%s\",\"object_id\":\"%s\",\"default_entity_id\":\"%s\",\"unique_id\":\"%s\",\"state_topic\":\"%s\","
                  "\"value_template\":\"%s\",\"command_topic\":\"%s\",\"command_template\":\"%s\","
                  "\"min\":%.3f,\"max\":%.3f,\"step\":%.3f,\"mode\":\"%s\"%s%s%s,"
@@ -544,32 +538,35 @@ bool HAModule::publishNumber(const char* objectId, const char* name,
                  "\"manufacturer\":\"%s\",\"model\":\"%s\",\"sw_version\":\"%s\"}}",
                  name, objectId, defaultEntityId, uniqueId, stateTopic, valueTemplate, commandTopic, commandTemplate,
                  (double)minValue, (double)maxValue, (double)step, mode ? mode : "slider", entityCategoryField, unitField, availabilityField,
-                 deviceIdent, cfgData.vendor, cfgData.vendor, cfgData.model, FIRMW)) {
+                 deviceIdent_, cfgData_.vendor, cfgData_.vendor, cfgData_.model, FIRMW)) {
             LOGW("HA number payload truncated object=%s", objectId);
             return false;
         }
     }
-    return publishDiscovery("number", objectId, payloadBuf);
+    return publishDiscovery("number", objectId, buildCtx);
 }
 
 bool HAModule::publishButton(const char* objectId, const char* name,
                              const char* commandTopic, const char* payloadPress,
-                             const char* entityCategory, const char* icon)
+                             const char* entityCategory, const char* icon,
+                             MqttBuildContext* outCtx)
 {
+    if (!outCtx) return false;
+    MqttBuildContext& buildCtx = *outCtx;
     if (!objectId || !name || !commandTopic || !payloadPress) return false;
     char defaultEntityId[224] = {0};
     if (!buildDefaultEntityId("button", objectId, defaultEntityId, sizeof(defaultEntityId))) return false;
     char uniqueId[256] = {0};
     if (!buildUniqueId(objectId, name, uniqueId, sizeof(uniqueId))) return false;
     char availabilityField[384] = {0};
-    buildAvailabilityField(mqttSvc, availabilityField, sizeof(availabilityField));
+    buildAvailabilityField(mqttSvc_, availabilityField, sizeof(availabilityField));
     char entityCategoryField[64] = {0};
     if (entityCategory && entityCategory[0] != '\0') {
         snprintf(entityCategoryField, sizeof(entityCategoryField), ",\"entity_category\":\"%s\"", entityCategory);
     }
 
     if (icon && icon[0] != '\0') {
-        if (!formatChecked(payloadBuf, sizeof(payloadBuf),
+        if (!formatChecked(buildCtx.payload, buildCtx.payloadCapacity,
                  "{\"name\":\"%s\",\"object_id\":\"%s\",\"default_entity_id\":\"%s\",\"unique_id\":\"%s\","
                  "\"command_topic\":\"%s\",\"payload_press\":\"%s\",\"icon\":\"%s\"%s%s,"
                  "\"origin\":{\"name\":\"Flow.IO\"},"
@@ -578,12 +575,12 @@ bool HAModule::publishButton(const char* objectId, const char* name,
                  name, objectId, defaultEntityId, uniqueId,
                  commandTopic, payloadPress, icon,
                  entityCategoryField, availabilityField,
-                 deviceIdent, cfgData.vendor, cfgData.vendor, cfgData.model, FIRMW)) {
+                 deviceIdent_, cfgData_.vendor, cfgData_.vendor, cfgData_.model, FIRMW)) {
             LOGW("HA button payload truncated object=%s", objectId);
             return false;
         }
     } else {
-        if (!formatChecked(payloadBuf, sizeof(payloadBuf),
+        if (!formatChecked(buildCtx.payload, buildCtx.payloadCapacity,
                  "{\"name\":\"%s\",\"object_id\":\"%s\",\"default_entity_id\":\"%s\",\"unique_id\":\"%s\","
                  "\"command_topic\":\"%s\",\"payload_press\":\"%s\"%s%s,"
                  "\"origin\":{\"name\":\"Flow.IO\"},"
@@ -592,232 +589,209 @@ bool HAModule::publishButton(const char* objectId, const char* name,
                  name, objectId, defaultEntityId, uniqueId,
                  commandTopic, payloadPress,
                  entityCategoryField, availabilityField,
-                 deviceIdent, cfgData.vendor, cfgData.vendor, cfgData.model, FIRMW)) {
+                 deviceIdent_, cfgData_.vendor, cfgData_.vendor, cfgData_.model, FIRMW)) {
             LOGW("HA button payload truncated object=%s", objectId);
             return false;
         }
     }
 
-    return publishDiscovery("button", objectId, payloadBuf);
-}
-
-bool HAModule::publishAutoconfig()
-{
-    return publishRegisteredEntities();
+    return publishDiscovery("button", objectId, buildCtx);
 }
 
 void HAModule::setStartupReady(bool ready)
 {
     startupReady_ = ready;
     if (ready) {
-        signalAutoconfigCheck();
+        (void)enqueuePending_(MqttPublishPriority::Low);
     }
-}
-
-bool HAModule::publishRegisteredEntities()
-{
-    if (!mqttSvc || !mqttSvc->formatTopic) return false;
-
-    const TickType_t stepDelay = pdMS_TO_TICKS(Limits::Ha::Timing::DiscoveryStepMs);
-    auto advanceCursor = [this]() {
-        ++discoveryCursorIndex_;
-        switch (discoveryCursorSection_) {
-        case DiscoveryCursorSection::Sensors:
-            if (discoveryCursorIndex_ >= sensorCount_) {
-                discoveryCursorSection_ = DiscoveryCursorSection::BinarySensors;
-                discoveryCursorIndex_ = 0;
-            }
-            break;
-        case DiscoveryCursorSection::BinarySensors:
-            if (discoveryCursorIndex_ >= binarySensorCount_) {
-                discoveryCursorSection_ = DiscoveryCursorSection::Switches;
-                discoveryCursorIndex_ = 0;
-            }
-            break;
-        case DiscoveryCursorSection::Switches:
-            if (discoveryCursorIndex_ >= switchCount_) {
-                discoveryCursorSection_ = DiscoveryCursorSection::Numbers;
-                discoveryCursorIndex_ = 0;
-            }
-            break;
-        case DiscoveryCursorSection::Numbers:
-            if (discoveryCursorIndex_ >= numberCount_) {
-                discoveryCursorSection_ = DiscoveryCursorSection::Buttons;
-                discoveryCursorIndex_ = 0;
-            }
-            break;
-        case DiscoveryCursorSection::Buttons:
-            if (discoveryCursorIndex_ >= buttonCount_) {
-                discoveryCursorSection_ = DiscoveryCursorSection::Done;
-                discoveryCursorIndex_ = 0;
-            }
-            break;
-        case DiscoveryCursorSection::Done:
-            discoveryCursorIndex_ = 0;
-            break;
-        }
-    };
-
-    while (discoveryCursorSection_ != DiscoveryCursorSection::Done) {
-        bool attempted = false;
-        bool ok = false;
-        lastDiscoveryFailureRetryable_ = false;
-
-        switch (discoveryCursorSection_) {
-        case DiscoveryCursorSection::Sensors: {
-            if (discoveryCursorIndex_ >= sensorCount_) {
-                discoveryCursorSection_ = DiscoveryCursorSection::BinarySensors;
-                discoveryCursorIndex_ = 0;
-                continue;
-            }
-            const HASensorEntry& e = sensors_[discoveryCursorIndex_];
-            attempted = true;
-            if (buildObjectId(e.objectSuffix, objectIdBuf, sizeof(objectIdBuf))) {
-                mqttSvc->formatTopic(mqttSvc->ctx, e.stateTopicSuffix, stateTopicBuf, sizeof(stateTopicBuf));
-                ok = publishSensor(objectIdBuf, e.name, stateTopicBuf, e.valueTemplate,
-                                  e.entityCategory, e.icon, e.unit, e.hasEntityName, e.availabilityTemplate);
-            }
-            break;
-        }
-        case DiscoveryCursorSection::BinarySensors: {
-            if (discoveryCursorIndex_ >= binarySensorCount_) {
-                discoveryCursorSection_ = DiscoveryCursorSection::Switches;
-                discoveryCursorIndex_ = 0;
-                continue;
-            }
-            const HABinarySensorEntry& e = binarySensors_[discoveryCursorIndex_];
-            attempted = true;
-            if (buildObjectId(e.objectSuffix, objectIdBuf, sizeof(objectIdBuf))) {
-                mqttSvc->formatTopic(mqttSvc->ctx, e.stateTopicSuffix, stateTopicBuf, sizeof(stateTopicBuf));
-                ok = publishBinarySensor(objectIdBuf, e.name, stateTopicBuf, e.valueTemplate, e.deviceClass, e.entityCategory, e.icon);
-            }
-            break;
-        }
-        case DiscoveryCursorSection::Switches: {
-            if (discoveryCursorIndex_ >= switchCount_) {
-                discoveryCursorSection_ = DiscoveryCursorSection::Numbers;
-                discoveryCursorIndex_ = 0;
-                continue;
-            }
-            const HASwitchEntry& e = switches_[discoveryCursorIndex_];
-            attempted = true;
-            if (buildObjectId(e.objectSuffix, objectIdBuf, sizeof(objectIdBuf))) {
-                mqttSvc->formatTopic(mqttSvc->ctx, e.stateTopicSuffix, stateTopicBuf, sizeof(stateTopicBuf));
-                mqttSvc->formatTopic(mqttSvc->ctx, e.commandTopicSuffix, commandTopicBuf, sizeof(commandTopicBuf));
-                ok = publishSwitch(objectIdBuf, e.name, stateTopicBuf, e.valueTemplate,
-                                  commandTopicBuf, e.payloadOn, e.payloadOff, e.icon, e.entityCategory);
-            }
-            break;
-        }
-        case DiscoveryCursorSection::Numbers: {
-            if (discoveryCursorIndex_ >= numberCount_) {
-                discoveryCursorSection_ = DiscoveryCursorSection::Buttons;
-                discoveryCursorIndex_ = 0;
-                continue;
-            }
-            const HANumberEntry& e = numbers_[discoveryCursorIndex_];
-            attempted = true;
-            if (buildObjectId(e.objectSuffix, objectIdBuf, sizeof(objectIdBuf))) {
-                mqttSvc->formatTopic(mqttSvc->ctx, e.stateTopicSuffix, stateTopicBuf, sizeof(stateTopicBuf));
-                mqttSvc->formatTopic(mqttSvc->ctx, e.commandTopicSuffix, commandTopicBuf, sizeof(commandTopicBuf));
-                ok = publishNumber(objectIdBuf, e.name, stateTopicBuf, e.valueTemplate,
-                                  commandTopicBuf, e.commandTemplate,
-                                  e.minValue, e.maxValue, e.step,
-                                  e.mode, e.entityCategory, e.icon, e.unit);
-            }
-            break;
-        }
-        case DiscoveryCursorSection::Buttons: {
-            if (discoveryCursorIndex_ >= buttonCount_) {
-                discoveryCursorSection_ = DiscoveryCursorSection::Done;
-                discoveryCursorIndex_ = 0;
-                continue;
-            }
-            const HAButtonEntry& e = buttons_[discoveryCursorIndex_];
-            attempted = true;
-            if (buildObjectId(e.objectSuffix, objectIdBuf, sizeof(objectIdBuf))) {
-                mqttSvc->formatTopic(mqttSvc->ctx, e.commandTopicSuffix, commandTopicBuf, sizeof(commandTopicBuf));
-                ok = publishButton(objectIdBuf, e.name, commandTopicBuf, e.payloadPress, e.entityCategory, e.icon);
-            }
-            break;
-        }
-        case DiscoveryCursorSection::Done:
-            break;
-        }
-
-        if (attempted && stepDelay > 0) vTaskDelay(stepDelay);
-
-        if (ok) {
-            advanceCursor();
-            continue;
-        }
-
-        if (lastDiscoveryFailureRetryable_) {
-            return false;
-        }
-
-        LOGW("HA discovery entity skipped (non-retryable) section=%u index=%u object=%s",
-             (unsigned)discoveryCursorSection_,
-             (unsigned)discoveryCursorIndex_,
-             objectIdBuf[0] ? objectIdBuf : "?");
-        advanceCursor();
-    }
-
-    return true;
 }
 
 void HAModule::refreshIdentityFromConfig()
 {
-    if (cfgData.deviceId[0] != '\0') {
-        strncpy(deviceId, cfgData.deviceId, sizeof(deviceId) - 1);
-        deviceId[sizeof(deviceId) - 1] = '\0';
+    if (cfgData_.deviceId[0] != '\0') {
+        strncpy(deviceId_, cfgData_.deviceId, sizeof(deviceId_) - 1);
+        deviceId_[sizeof(deviceId_) - 1] = '\0';
     } else {
-        makeHexNodeId(deviceId, sizeof(deviceId));
+        makeHexNodeId(deviceId_, sizeof(deviceId_));
     }
-    sanitizeId(deviceId, nodeTopicId, sizeof(nodeTopicId));
-    if (nodeTopicId[0] == '\0') {
-        snprintf(nodeTopicId, sizeof(nodeTopicId), "flowio");
+    sanitizeId(deviceId_, nodeTopicId_, sizeof(nodeTopicId_));
+    if (nodeTopicId_[0] == '\0') {
+        snprintf(nodeTopicId_, sizeof(nodeTopicId_), "flowio");
     }
-    snprintf(deviceIdent, sizeof(deviceIdent), "%s-%s", cfgData.vendor, deviceId);
-    entityHash3_ = hash3Digits(deviceId);
+    snprintf(deviceIdent_, sizeof(deviceIdent_), "%s-%s", cfgData_.vendor, deviceId_);
+    entityHash3_ = hash3Digits(deviceId_);
 }
 
-void HAModule::tryPublishAutoconfig()
+uint16_t HAModule::entityCount_() const
 {
-    if (published && !refreshRequested) return;
-    if (!startupReady_) return;
-    refreshIdentityFromConfig();
-    if (!cfgData.enabled) return;
-    if (!mqttSvc || !mqttSvc->isConnected || !dsSvc || !dsSvc->store) return;
-    if (!mqttSvc->isConnected(mqttSvc->ctx)) return;
-    if (!mqttReady(*dsSvc->store)) return;
+    return (uint16_t)sensorCount_ +
+           (uint16_t)binarySensorCount_ +
+           (uint16_t)switchCount_ +
+           (uint16_t)numberCount_ +
+           (uint16_t)buttonCount_;
+}
 
-    setHaVendor(*dsSvc->store, cfgData.vendor);
-    setHaDeviceId(*dsSvc->store, deviceId);
+bool HAModule::isPending_(uint16_t messageId) const
+{
+    if (messageId >= MAX_HA_ENTITIES) return false;
+    const uint16_t word = (uint16_t)(messageId / 32U);
+    const uint16_t bit = (uint16_t)(messageId % 32U);
+    return (pendingBits_[word] & (1UL << bit)) != 0UL;
+}
 
-    if (publishAutoconfig()) {
-        published = true;
-        refreshRequested = false;
-        resetDiscoveryCursor_();
-        retryAfterMs_ = 0;
-        retryDelayMs_ = RETRY_DELAY_MS;
-        setHaAutoconfigPublished(*dsSvc->store, true);
-        LOGI("Home Assistant auto-discovery published (sensor=%u switch=%u number=%u button=%u)",
-             (unsigned)sensorCount_, (unsigned)switchCount_, (unsigned)numberCount_, (unsigned)buttonCount_);
-    } else {
-        setHaAutoconfigPublished(*dsSvc->store, false);
-        uint32_t delayMs = retryDelayMs_;
-        if (delayMs < RETRY_DELAY_MS) delayMs = RETRY_DELAY_MS;
-        if (delayMs > RETRY_DELAY_MAX_MS) delayMs = RETRY_DELAY_MAX_MS;
-        retryAfterMs_ = millis() + delayMs;
-        if (delayMs >= (RETRY_DELAY_MAX_MS / 2U)) {
-            retryDelayMs_ = RETRY_DELAY_MAX_MS;
-        } else {
-            retryDelayMs_ = delayMs * 2U;
+void HAModule::setPending_(uint16_t messageId, bool pending)
+{
+    if (messageId >= MAX_HA_ENTITIES) return;
+    const uint16_t word = (uint16_t)(messageId / 32U);
+    const uint16_t bit = (uint16_t)(messageId % 32U);
+    const uint32_t mask = (1UL << bit);
+    if (pending) pendingBits_[word] |= mask;
+    else pendingBits_[word] &= ~mask;
+}
+
+void HAModule::markAllPending_()
+{
+    memset(pendingBits_, 0, sizeof(pendingBits_));
+    const uint16_t count = entityCount_();
+    for (uint16_t i = 0; i < count; ++i) {
+        setPending_(i, true);
+    }
+}
+
+bool HAModule::anyPending_() const
+{
+    const uint16_t words = (uint16_t)(sizeof(pendingBits_) / sizeof(pendingBits_[0]));
+    for (uint16_t i = 0; i < words; ++i) {
+        if (pendingBits_[i] != 0U) return true;
+    }
+    return false;
+}
+
+bool HAModule::enqueuePending_(MqttPublishPriority prio)
+{
+    if (!mqttSvc_ || !mqttSvc_->enqueue) return false;
+    if (!startupReady_) return false;
+
+    bool any = false;
+    const uint16_t count = entityCount_();
+    for (uint16_t i = 0; i < count; ++i) {
+        if (!isPending_(i)) continue;
+        any = mqttSvc_->enqueue(mqttSvc_->ctx, ProducerId, i, (uint8_t)prio, 0) || any;
+    }
+    return any;
+}
+
+MqttBuildResult HAModule::producerBuildStatic_(void* ctx, uint16_t messageId, MqttBuildContext& buildCtx)
+{
+    HAModule* self = static_cast<HAModule*>(ctx);
+    return self ? self->buildMessage_(messageId, buildCtx) : MqttBuildResult::PermanentError;
+}
+
+void HAModule::producerPublishedStatic_(void* ctx, uint16_t messageId)
+{
+    HAModule* self = static_cast<HAModule*>(ctx);
+    if (self) self->onMessagePublished_(messageId);
+}
+
+void HAModule::producerDroppedStatic_(void* ctx, uint16_t messageId)
+{
+    HAModule* self = static_cast<HAModule*>(ctx);
+    if (self) self->onMessageDropped_(messageId);
+}
+
+bool HAModule::buildEntityMessage_(uint16_t messageId, MqttBuildContext& buildCtx)
+{
+    bool ok = false;
+    uint16_t cursor = 0;
+
+    if (messageId < (uint16_t)(cursor + sensorCount_)) {
+        const HASensorEntry& e = sensors_[messageId - cursor];
+        if (buildObjectId(e.objectSuffix, objectIdBuf_, sizeof(objectIdBuf_))) {
+            mqttSvc_->formatTopic(mqttSvc_->ctx, e.stateTopicSuffix, stateTopicBuf_, sizeof(stateTopicBuf_));
+            ok = publishSensor(objectIdBuf_, e.name, stateTopicBuf_, e.valueTemplate,
+                               e.entityCategory, e.icon, e.unit, e.hasEntityName, e.availabilityTemplate, &buildCtx);
         }
-        autoconfigPending = true;
-        LOGW("Home Assistant auto-discovery publish failed (retry in %lu ms)",
-             (unsigned long)delayMs);
+    } else {
+        cursor = (uint16_t)(cursor + sensorCount_);
+        if (messageId < (uint16_t)(cursor + binarySensorCount_)) {
+            const HABinarySensorEntry& e = binarySensors_[messageId - cursor];
+            if (buildObjectId(e.objectSuffix, objectIdBuf_, sizeof(objectIdBuf_))) {
+                mqttSvc_->formatTopic(mqttSvc_->ctx, e.stateTopicSuffix, stateTopicBuf_, sizeof(stateTopicBuf_));
+                ok = publishBinarySensor(objectIdBuf_, e.name, stateTopicBuf_, e.valueTemplate, e.deviceClass, e.entityCategory, e.icon, &buildCtx);
+            }
+        } else {
+            cursor = (uint16_t)(cursor + binarySensorCount_);
+            if (messageId < (uint16_t)(cursor + switchCount_)) {
+                const HASwitchEntry& e = switches_[messageId - cursor];
+                if (buildObjectId(e.objectSuffix, objectIdBuf_, sizeof(objectIdBuf_))) {
+                    mqttSvc_->formatTopic(mqttSvc_->ctx, e.stateTopicSuffix, stateTopicBuf_, sizeof(stateTopicBuf_));
+                    mqttSvc_->formatTopic(mqttSvc_->ctx, e.commandTopicSuffix, commandTopicBuf_, sizeof(commandTopicBuf_));
+                    ok = publishSwitch(objectIdBuf_, e.name, stateTopicBuf_, e.valueTemplate,
+                                       commandTopicBuf_, e.payloadOn, e.payloadOff, e.icon, e.entityCategory, &buildCtx);
+                }
+            } else {
+                cursor = (uint16_t)(cursor + switchCount_);
+                if (messageId < (uint16_t)(cursor + numberCount_)) {
+                    const HANumberEntry& e = numbers_[messageId - cursor];
+                    if (buildObjectId(e.objectSuffix, objectIdBuf_, sizeof(objectIdBuf_))) {
+                        mqttSvc_->formatTopic(mqttSvc_->ctx, e.stateTopicSuffix, stateTopicBuf_, sizeof(stateTopicBuf_));
+                        mqttSvc_->formatTopic(mqttSvc_->ctx, e.commandTopicSuffix, commandTopicBuf_, sizeof(commandTopicBuf_));
+                        ok = publishNumber(objectIdBuf_, e.name, stateTopicBuf_, e.valueTemplate,
+                                           commandTopicBuf_, e.commandTemplate,
+                                           e.minValue, e.maxValue, e.step,
+                                           e.mode, e.entityCategory, e.icon, e.unit, &buildCtx);
+                    }
+                } else {
+                    cursor = (uint16_t)(cursor + numberCount_);
+                    if (messageId < (uint16_t)(cursor + buttonCount_)) {
+                        const HAButtonEntry& e = buttons_[messageId - cursor];
+                        if (buildObjectId(e.objectSuffix, objectIdBuf_, sizeof(objectIdBuf_))) {
+                            mqttSvc_->formatTopic(mqttSvc_->ctx, e.commandTopicSuffix, commandTopicBuf_, sizeof(commandTopicBuf_));
+                            ok = publishButton(objectIdBuf_, e.name, commandTopicBuf_, e.payloadPress, e.entityCategory, e.icon, &buildCtx);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (!ok) return false;
+    return true;
+}
+
+MqttBuildResult HAModule::buildMessage_(uint16_t messageId, MqttBuildContext& buildCtx)
+{
+    if (!startupReady_) return MqttBuildResult::RetryLater;
+    if (!cfgData_.enabled) return MqttBuildResult::NoLongerNeeded;
+    if (!mqttSvc_ || !mqttSvc_->formatTopic) return MqttBuildResult::PermanentError;
+    if (!dsSvc_ || !dsSvc_->store) return MqttBuildResult::RetryLater;
+    if (!wifiReady(*dsSvc_->store)) return MqttBuildResult::RetryLater;
+    if (!mqttReady(*dsSvc_->store)) return MqttBuildResult::RetryLater;
+    if (!isPending_(messageId)) return MqttBuildResult::NoLongerNeeded;
+
+    refreshIdentityFromConfig();
+    setHaVendor(*dsSvc_->store, cfgData_.vendor);
+    setHaDeviceId(*dsSvc_->store, deviceId_);
+
+    if (!buildEntityMessage_(messageId, buildCtx)) return MqttBuildResult::PermanentError;
+    return MqttBuildResult::Ready;
+}
+
+void HAModule::onMessagePublished_(uint16_t messageId)
+{
+    setPending_(messageId, false);
+    if (dsSvc_ && dsSvc_->store) {
+        const bool done = !anyPending_();
+        setHaAutoconfigPublished(*dsSvc_->store, done);
+    }
+    published_ = !anyPending_();
+}
+
+void HAModule::onMessageDropped_(uint16_t messageId)
+{
+    setPending_(messageId, false);
+    if (dsSvc_ && dsSvc_->store) {
+        setHaAutoconfigPublished(*dsSvc_->store, !anyPending_());
     }
 }
 
@@ -832,96 +806,94 @@ void HAModule::onEvent(const Event& e)
     if (e.id != EventId::DataChanged) return;
     const DataChangedPayload* payload = static_cast<const DataChangedPayload*>(e.payload);
     if (!payload) return;
-    if (!dsSvc || !dsSvc->store) return;
+    if (!dsSvc_ || !dsSvc_->store) return;
 
     if (payload->id == DATAKEY_WIFI_READY) {
-        if (wifiReady(*dsSvc->store)) {
-            signalAutoconfigCheck();
+        if (wifiReady(*dsSvc_->store) && mqttReady(*dsSvc_->store)) {
+            (void)enqueuePending_(MqttPublishPriority::Low);
         }
         return;
     }
 
     if (payload->id == DATAKEY_MQTT_READY) {
-        if (wifiReady(*dsSvc->store)) {
-            signalAutoconfigCheck();
+        if (wifiReady(*dsSvc_->store) && mqttReady(*dsSvc_->store)) {
+            (void)enqueuePending_(MqttPublishPriority::Low);
         }
         return;
     }
 }
 
-void HAModule::signalAutoconfigCheck()
-{
-    autoconfigPending = true;
-    TaskHandle_t th = getTaskHandle();
-    if (th) {
-        xTaskNotifyGive(th);
-    }
-}
-
 void HAModule::requestAutoconfigRefresh()
 {
-    published = false;
-    refreshRequested = true;
-    resetDiscoveryCursor_();
-    if (dsSvc && dsSvc->store) {
-        setHaAutoconfigPublished(*dsSvc->store, false);
+    published_ = false;
+    markAllPending_();
+    if (dsSvc_ && dsSvc_->store) {
+        setHaAutoconfigPublished(*dsSvc_->store, false);
     }
-    signalAutoconfigCheck();
-}
-
-void HAModule::resetDiscoveryCursor_()
-{
-    discoveryCursorSection_ = DiscoveryCursorSection::Sensors;
-    discoveryCursorIndex_ = 0;
-    lastDiscoveryFailureRetryable_ = false;
+    (void)enqueuePending_(MqttPublishPriority::Low);
 }
 
 void HAModule::loop()
 {
-    if (!autoconfigPending) {
-        (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(250));
+    vTaskDelay(pdMS_TO_TICKS(250));
+}
+
+void HAModule::onConfigLoaded(ConfigStore&, ServiceRegistry& services)
+{
+    if (!cfgMqttPub_) {
+        cfgMqttPub_ = new (std::nothrow) MqttConfigRouteProducer();
     }
-    if (!autoconfigPending) return;
-    const uint32_t now = millis();
-    if (retryAfterMs_ != 0 && (int32_t)(now - retryAfterMs_) < 0) {
-        return;
+    if (cfgMqttPub_) {
+        cfgMqttPub_->configure(this,
+                               ProducerIdCfg,
+                               kHaCfgRoutes,
+                               (uint8_t)(sizeof(kHaCfgRoutes) / sizeof(kHaCfgRoutes[0])),
+                               services);
     }
-    autoconfigPending = false;
-    tryPublishAutoconfig();
 }
 
 void HAModule::init(ConfigStore& cfg, ServiceRegistry& services)
 {
     constexpr uint8_t kCfgModuleId = (uint8_t)ConfigModuleId::Ha;
-    constexpr uint16_t kCfgBranchId = (uint16_t)ConfigBranchId::Ha;
+    constexpr uint8_t kCfgBranchId = kHaCfgBranch;
     cfg.registerVar(enabledVar, kCfgModuleId, kCfgBranchId);
     cfg.registerVar(vendorVar, kCfgModuleId, kCfgBranchId);
     cfg.registerVar(deviceIdVar, kCfgModuleId, kCfgBranchId);
     cfg.registerVar(prefixVar, kCfgModuleId, kCfgBranchId);
     cfg.registerVar(modelVar, kCfgModuleId, kCfgBranchId);
 
-    eventBusSvc = services.get<EventBusService>("eventbus");
-    dsSvc = services.get<DataStoreService>("datastore");
-    mqttSvc = services.get<MqttService>("mqtt");
+    eventBusSvc_ = services.get<EventBusService>("eventbus");
+    dsSvc_ = services.get<DataStoreService>("datastore");
+    mqttSvc_ = services.get<MqttService>("mqtt");
 
-    haSvc.addSensor = HAModule::svcAddSensor;
-    haSvc.addBinarySensor = HAModule::svcAddBinarySensor;
-    haSvc.addSwitch = HAModule::svcAddSwitch;
-    haSvc.addNumber = HAModule::svcAddNumber;
-    haSvc.addButton = HAModule::svcAddButton;
-    haSvc.requestRefresh = HAModule::svcRequestRefresh;
-    haSvc.ctx = this;
-    services.add("ha", &haSvc);
+    haSvc_.addSensor = HAModule::svcAddSensor;
+    haSvc_.addBinarySensor = HAModule::svcAddBinarySensor;
+    haSvc_.addSwitch = HAModule::svcAddSwitch;
+    haSvc_.addNumber = HAModule::svcAddNumber;
+    haSvc_.addButton = HAModule::svcAddButton;
+    haSvc_.requestRefresh = HAModule::svcRequestRefresh;
+    haSvc_.ctx = this;
+    services.add("ha", &haSvc_);
 
-    if (dsSvc && dsSvc->store) {
-        setHaAutoconfigPublished(*dsSvc->store, false);
+    producer_.producerId = ProducerId;
+    producer_.ctx = this;
+    producer_.buildMessage = HAModule::producerBuildStatic_;
+    producer_.onMessagePublished = HAModule::producerPublishedStatic_;
+    producer_.onMessageDropped = HAModule::producerDroppedStatic_;
+    if (mqttSvc_ && mqttSvc_->registerProducer) {
+        producerRegistered_ = mqttSvc_->registerProducer(mqttSvc_->ctx, &producer_);
     }
 
-    if (eventBusSvc && eventBusSvc->bus) {
-        eventBusSvc->bus->subscribe(EventId::DataChanged, &HAModule::onEventStatic, this);
+    if (dsSvc_ && dsSvc_->store) {
+        setHaAutoconfigPublished(*dsSvc_->store, false);
     }
 
-    if (dsSvc && dsSvc->store && wifiReady(*dsSvc->store)) {
-        signalAutoconfigCheck();
+    if (eventBusSvc_ && eventBusSvc_->bus) {
+        eventBusSvc_->bus->subscribe(EventId::DataChanged, &HAModule::onEventStatic, this);
+    }
+
+    markAllPending_();
+    if (dsSvc_ && dsSvc_->store && wifiReady(*dsSvc_->store) && mqttReady(*dsSvc_->store)) {
+        (void)enqueuePending_(MqttPublishPriority::Low);
     }
 }

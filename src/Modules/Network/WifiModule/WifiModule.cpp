@@ -10,10 +10,16 @@
 #include <esp_wifi.h>
 #include <esp_err.h>
 #include <ctype.h>
+#include <new>
 #include <string.h>
 
 namespace {
 WifiModule* gWifiModuleInstance = nullptr;
+static constexpr uint8_t kWifiCfgProducerId = 42;
+static constexpr uint8_t kWifiCfgBranch = 1;
+static constexpr MqttConfigRouteProducer::Route kWifiCfgRoutes[] = {
+    {1, {(uint8_t)ConfigModuleId::Wifi, kWifiCfgBranch}, "wifi", "wifi", (uint8_t)MqttPublishPriority::Normal, nullptr},
+};
 
 const char* espErrName_(esp_err_t err)
 {
@@ -566,7 +572,7 @@ void WifiModule::init(ConfigStore& cfg,
                       ServiceRegistry& services)
 {
     constexpr uint8_t kCfgModuleId = (uint8_t)ConfigModuleId::Wifi;
-    constexpr uint16_t kCfgBranchId = (uint16_t)ConfigBranchId::Wifi;
+    constexpr uint8_t kCfgBranchId = kWifiCfgBranch;
     /// récupérer service loghub (log async)
     logHub = services.get<LogHubService>("loghub");
 
@@ -618,8 +624,19 @@ void WifiModule::init(ConfigStore& cfg,
     setState(WifiState::Idle);
 }
 
-void WifiModule::onConfigLoaded(ConfigStore&, ServiceRegistry&)
+void WifiModule::onConfigLoaded(ConfigStore&, ServiceRegistry& services)
 {
+    if (!cfgMqttPub_) {
+        cfgMqttPub_ = new (std::nothrow) MqttConfigRouteProducer();
+    }
+    if (cfgMqttPub_) {
+        cfgMqttPub_->configure(this,
+                               kWifiCfgProducerId,
+                               kWifiCfgRoutes,
+                               (uint8_t)(sizeof(kWifiCfgRoutes) / sizeof(kWifiCfgRoutes[0])),
+                               services);
+    }
+
     applyProfileMdnsHost_();
     logConfigSummary_();
     if (!cfgData.enabled) {

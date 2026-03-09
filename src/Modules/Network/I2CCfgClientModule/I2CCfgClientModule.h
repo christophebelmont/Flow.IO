@@ -11,6 +11,7 @@
 #include "Core/ModulePassive.h"
 #include "Core/I2cLink.h"
 #include "Core/I2cCfgProtocol.h"
+#include "Modules/Network/MQTTModule/MqttConfigRouteProducer.h"
 #include "Core/ConfigTypes.h"
 #include "Core/NvsKeys.h"
 #include "Core/Services/Services.h"
@@ -71,6 +72,7 @@ private:
     I2cLink link_{};
     bool ready_ = false;
     uint8_t seq_ = 1;
+    MqttConfigRouteProducer cfgMqttPub_{};
 
     FlowCfgRemoteService svc_{
         svcIsReady_,

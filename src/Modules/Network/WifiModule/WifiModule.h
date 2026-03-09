@@ -4,6 +4,7 @@
  * @brief WiFi connectivity module.
  */
 #include "Core/Module.h"
+#include "Modules/Network/MQTTModule/MqttConfigRouteProducer.h"
 #include "Core/NvsKeys.h"
 #include "Core/Services/Services.h"
 #include <WiFi.h>
@@ -99,6 +100,7 @@ private:
     uint16_t scanGeneration_ = 0;
     WifiScanEntry scanEntries_[kScanMaxResults] = {};
     portMUX_TYPE scanMux_ = portMUX_INITIALIZER_UNLOCKED;
+    MqttConfigRouteProducer* cfgMqttPub_ = nullptr;
     
     // Config variables
     // CFGDOC: {"label":"WiFi active","help":"Active ou désactive la connexion WiFi en mode station."}

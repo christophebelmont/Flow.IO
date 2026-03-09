@@ -15,11 +15,30 @@
 #include <Arduino.h>
 #include <cstring>
 #include <ArduinoJson.h>
+#include <new>
 #include <stdlib.h>
 #include <cmath>
 
 #define LOG_MODULE_ID ((LogModuleId)LogModuleIdValue::PoolLogicModule)
 #include "Core/ModuleLog.h"
+
+namespace {
+static constexpr uint8_t kPoolLogicCfgProducerId = 44;
+static constexpr uint8_t kCfgBranchMode = 1;
+static constexpr uint8_t kCfgBranchFiltration = 2;
+static constexpr uint8_t kCfgBranchSensors = 3;
+static constexpr uint8_t kCfgBranchPid = 4;
+static constexpr uint8_t kCfgBranchDelay = 5;
+static constexpr uint8_t kCfgBranchDevice = 6;
+static constexpr MqttConfigRouteProducer::Route kPoolLogicCfgRoutes[] = {
+    {1, {(uint8_t)ConfigModuleId::PoolLogic, kCfgBranchMode}, "poollogic/mode", "poollogic/mode", (uint8_t)MqttPublishPriority::Normal, nullptr},
+    {2, {(uint8_t)ConfigModuleId::PoolLogic, kCfgBranchFiltration}, "poollogic/filtration", "poollogic/filtration", (uint8_t)MqttPublishPriority::Normal, nullptr},
+    {3, {(uint8_t)ConfigModuleId::PoolLogic, kCfgBranchSensors}, "poollogic/sensors", "poollogic/sensors", (uint8_t)MqttPublishPriority::Normal, nullptr},
+    {4, {(uint8_t)ConfigModuleId::PoolLogic, kCfgBranchPid}, "poollogic/pid", "poollogic/pid", (uint8_t)MqttPublishPriority::Normal, nullptr},
+    {5, {(uint8_t)ConfigModuleId::PoolLogic, kCfgBranchDelay}, "poollogic/delay", "poollogic/delay", (uint8_t)MqttPublishPriority::Normal, nullptr},
+    {6, {(uint8_t)ConfigModuleId::PoolLogic, kCfgBranchDevice}, "poollogic/device", "poollogic/device", (uint8_t)MqttPublishPriority::Normal, nullptr},
+};
+}
 
 static bool parseCmdArgsObject_(const CommandRequest& req, JsonObjectConst& outObj)
 {
@@ -81,12 +100,6 @@ static void writeCmdError_(char* reply, size_t replyLen, const char* where, Erro
 void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
 {
     constexpr uint8_t kCfgModuleId = (uint8_t)ConfigModuleId::PoolLogic;
-    constexpr uint16_t kCfgBranchMode = (uint16_t)ConfigBranchId::PoolLogicMode;
-    constexpr uint16_t kCfgBranchFiltration = (uint16_t)ConfigBranchId::PoolLogicFiltration;
-    constexpr uint16_t kCfgBranchSensors = (uint16_t)ConfigBranchId::PoolLogicSensors;
-    constexpr uint16_t kCfgBranchPid = (uint16_t)ConfigBranchId::PoolLogicPid;
-    constexpr uint16_t kCfgBranchDelay = (uint16_t)ConfigBranchId::PoolLogicDelay;
-    constexpr uint16_t kCfgBranchDevice = (uint16_t)ConfigBranchId::PoolLogicDevice;
     static constexpr const char* kCfgModuleMode = "poollogic/mode";
     static constexpr const char* kCfgModuleFiltration = "poollogic/filtration";
     static constexpr const char* kCfgModuleSensors = "poollogic/sensors";
@@ -498,8 +511,19 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
     (void)logHub_;
 }
 
-void PoolLogicModule::onConfigLoaded(ConfigStore&, ServiceRegistry&)
+void PoolLogicModule::onConfigLoaded(ConfigStore&, ServiceRegistry& services)
 {
+    if (!cfgMqttPub_) {
+        cfgMqttPub_ = new (std::nothrow) MqttConfigRouteProducer();
+    }
+    if (cfgMqttPub_) {
+        cfgMqttPub_->configure(this,
+                               kPoolLogicCfgProducerId,
+                               kPoolLogicCfgRoutes,
+                               (uint8_t)(sizeof(kPoolLogicCfgRoutes) / sizeof(kPoolLogicCfgRoutes[0])),
+                               services);
+    }
+
     if (!enabled_) return;
 
     LOGI("PoolLogic pH dosing mode=%s", phDosePlus_ ? "pH+" : "pH-");

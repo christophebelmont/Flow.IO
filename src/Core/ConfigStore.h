@@ -57,7 +57,7 @@ public:
     void registerVar(ConfigVariable<T, H>& var);
     /** @brief Register a config variable with explicit module/branch ids. */
     template<typename T, size_t H>
-    void registerVar(ConfigVariable<T, H>& var, uint8_t moduleId, uint16_t branchId);
+    void registerVar(ConfigVariable<T, H>& var, uint8_t moduleId, uint8_t localBranchId);
 
     /** @brief Set a typed config value and persist if needed. */
     template<typename T, size_t H>
@@ -100,7 +100,7 @@ private:
     uint16_t _metaCount = 0;
     bool _metaNearCapacityWarned = false;
 
-    void notifyChanged(const char* nvsKey, const char* moduleName, uint8_t moduleId, uint16_t branchId);
+    void notifyChanged(const char* nvsKey, const char* moduleName, uint8_t moduleId, uint8_t localBranchId);
     bool writePersistent(const ConfigMeta& m);
     void recordNvsWrite_(size_t bytesWritten);
     bool putInt_(const char* key, int32_t value);
@@ -160,14 +160,14 @@ void ConfigStore::registerVar(ConfigVariable<T, H>& var)
     m.valuePtr    = (void*)var.value;
     m.size        = var.size;
     m.moduleId    = var.moduleId;
-    m.branchId    = var.branchId;
+    m.localBranchId = var.localBranchId;
 }
 
 template<typename T, size_t H>
-void ConfigStore::registerVar(ConfigVariable<T, H>& var, uint8_t moduleId, uint16_t branchId)
+void ConfigStore::registerVar(ConfigVariable<T, H>& var, uint8_t moduleId, uint8_t localBranchId)
 {
     var.moduleId = moduleId;
-    var.branchId = branchId;
+    var.localBranchId = localBranchId;
     registerVar(var);
 }
 
@@ -213,7 +213,7 @@ bool ConfigStore::set(ConfigVariable<T, H>& var, const T& value)
     var.notify();
 
     // EventBus
-    notifyChanged(var.nvsKey, var.moduleName, var.moduleId, var.branchId);
+    notifyChanged(var.nvsKey, var.moduleName, var.moduleId, var.localBranchId);
 
     return true;
 }
@@ -244,6 +244,6 @@ bool ConfigStore::set(ConfigVariable<char, H>& var, const char* str)
     }
 
     var.notify();
-    notifyChanged(var.nvsKey, var.moduleName, var.moduleId, var.branchId);
+    notifyChanged(var.nvsKey, var.moduleName, var.moduleId, var.localBranchId);
     return true;
 }

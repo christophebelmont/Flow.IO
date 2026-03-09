@@ -5,6 +5,7 @@
  */
 
 #include "Core/Module.h"
+#include "Modules/Network/MQTTModule/MqttConfigRouteProducer.h"
 #include "Core/RuntimeSnapshotProvider.h"
 #include "Core/ConfigTypes.h"
 #include "Core/NvsKeys.h"
@@ -180,6 +181,7 @@ private:
     const CommandService* cmdSvc_ = nullptr;
     const AlarmService* alarmSvc_ = nullptr;
     const LogHubService* logHub_ = nullptr;
+    MqttConfigRouteProducer* cfgMqttPub_ = nullptr;
 
     // CFGDOC: {"label":"PoolLogic actif","help":"Active ou désactive les automatismes PoolLogic."}
     ConfigVariable<bool,0> enabledVar_{NVS_KEY(NvsKeys::PoolLogic::Enabled), "enabled", "poollogic", ConfigType::Bool,

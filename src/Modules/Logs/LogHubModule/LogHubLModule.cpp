@@ -4,14 +4,22 @@
  */
 #include "LogHubModule.h"
 #include "Core/Log.h"
-#include "Core/ConfigBranchIds.h"
 #include "Core/EventBus/EventPayloads.h"
 #include "Core/LogModuleIds.h"
 #include "Core/SystemLimits.h"
+#include <new>
+
+namespace {
+static constexpr uint8_t kLogHubCfgProducerId = 52;
+static constexpr uint8_t kLogLevelsCfgBranch = 1;
+static constexpr MqttConfigRouteProducer::Route kLogCfgRoutes[] = {
+    {1, {(uint8_t)ConfigModuleId::Log, kLogLevelsCfgBranch}, "log/levels", "log/levels", (uint8_t)MqttPublishPriority::Normal, nullptr},
+};
+}
 
 void LogHubModule::init(ConfigStore& cfg, ServiceRegistry& services) {
     hub.init(Limits::LogQueueLen);
-    hub.attachConfig(&cfg, (uint8_t)ConfigModuleId::Log, (uint16_t)ConfigBranchId::LogLevels);
+    hub.attachConfig(&cfg, (uint8_t)ConfigModuleId::Log, kLogLevelsCfgBranch);
 
     /// expose loghub service
     hubSvc.enqueue = [](void* ctx, const LogEntry& e) -> bool {
@@ -51,4 +59,18 @@ void LogHubModule::init(ConfigStore& cfg, ServiceRegistry& services) {
 
     Log::setHub(&hubSvc);
     (void)Log::registerModule((LogModuleId)LogModuleIdValue::LogHub, moduleId());
+}
+
+void LogHubModule::onConfigLoaded(ConfigStore&, ServiceRegistry& services)
+{
+    if (!cfgMqttPub_) {
+        cfgMqttPub_ = new (std::nothrow) MqttConfigRouteProducer();
+    }
+    if (cfgMqttPub_) {
+        cfgMqttPub_->configure(this,
+                               kLogHubCfgProducerId,
+                               kLogCfgRoutes,
+                               (uint8_t)(sizeof(kLogCfgRoutes) / sizeof(kLogCfgRoutes[0])),
+                               services);
+    }
 }

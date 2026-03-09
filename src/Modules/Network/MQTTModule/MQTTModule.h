@@ -1,14 +1,19 @@
 #pragma once
 /**
  * @file MQTTModule.h
- * @brief MQTT client module.
+ * @brief Unified MQTT module with job-based TX core.
  */
+
 #include "Core/Module.h"
 #include "Core/NvsKeys.h"
+#include "Core/ConfigTypes.h"
 #include "Core/ErrorCodes.h"
 #include "Core/SystemLimits.h"
 #include "Core/WokwiDefaultOverrides.h"
+#include "Core/RuntimeSnapshotProvider.h"
+#include "Modules/Network/MQTTModule/MqttConfigRouteProducer.h"
 #include "Core/Services/Services.h"
+#include "Modules/Network/MQTTModule/RuntimeProducer.h"
 #include <mqtt_client.h>
 
 /** @brief MQTT configuration values. */
@@ -19,25 +24,17 @@ struct MQTTConfig {
     char user[Limits::Mqtt::Buffers::User] = FLOW_WIRDEF_MQ_USER;
     char pass[Limits::Mqtt::Buffers::Pass] = FLOW_WIRDEF_MQ_PASS;
     char baseTopic[Limits::Mqtt::Buffers::BaseTopic] = FLOW_WIRDEF_MQ_BASE;
-    // reserved for future runtime publisher config
 };
 
 /** @brief MQTT connection state. */
 enum class MQTTState : uint8_t { Disabled, WaitingNetwork, Connecting, Connected, ErrorWait };
 
-/**
- * @brief Active module that manages the MQTT client connection.
- */
 class MQTTModule : public Module {
 public:
-    /** @brief Module id. */
     const char* moduleId() const override { return "mqtt"; }
-    /** @brief Task name. */
     const char* taskName() const override { return "mqtt"; }
-    /** @brief Pin network module on core 0. */
     BaseType_t taskCore() const override { return 0; }
 
-    /** @brief MQTT depends on log hub, WiFi, command service, time service and alarms service. */
     uint8_t dependencyCount() const override { return 5; }
     const char* dependency(uint8_t i) const override {
         if (i == 0) return "loghub";
@@ -48,261 +45,275 @@ public:
         return nullptr;
     }
 
-    /** @brief Initialize MQTT config/services. */
     void init(ConfigStore& cfg, ServiceRegistry& services) override;
-    /** @brief MQTT task loop. */
+    void onConfigLoaded(ConfigStore& cfg, ServiceRegistry& services) override;
     void loop() override;
-    /** @brief Extra stack for MQTT processing (JSON + snprintf heavy path). */
     uint16_t taskStackSize() const override { return Limits::Mqtt::TaskStackSize; }
 
+    bool addRuntimePublisher(const char* topic,
+                             uint32_t periodMs,
+                             int qos,
+                             bool retain,
+                             bool (*build)(MQTTModule* self, char* out, size_t outLen),
+                             bool allowNoPayload = false);
+
+    bool registerRuntimeProvider(const IRuntimeSnapshotProvider* provider);
+    bool enqueue(uint8_t producerId, uint16_t messageId, MqttPublishPriority priority, uint8_t flags = 0);
+    bool registerProducer(const MqttPublishProducer* producer);
+
+    void formatTopic(char* out, size_t outLen, const char* suffix) const;
+    bool isConnected() const { return state_ == MQTTState::Connected; }
+    void setStartupReady(bool ready) { startupReady_ = ready; }
+    DataStore* dataStorePtr() const { return dataStore_; }
+
+private:
+    struct RxMsg {
+        char topic[Limits::Mqtt::Buffers::RxTopic];
+        char payload[Limits::Mqtt::Buffers::RxPayload];
+    };
+
     struct RuntimePublisher {
+        bool used = false;
+        uint16_t messageId = 0;
         const char* topic = nullptr;
         uint32_t periodMs = 0;
-        int qos = 0;
+        uint32_t nextDueMs = 0;
+        uint8_t qos = 0;
         bool retain = false;
-        uint32_t lastMs = 0;
         bool (*build)(MQTTModule* self, char* out, size_t outLen) = nullptr;
         bool allowNoPayload = false;
     };
 
-    bool addRuntimePublisher(const char* topic, uint32_t periodMs, int qos, bool retain,
-                             bool (*build)(MQTTModule* self, char* out, size_t outLen),
-                             bool allowNoPayload = false);
-    bool publish(const char* topic, const char* payload, int qos = 0, bool retain = false);
-    bool publishWithPriority(const char* topic, const char* payload, int qos, bool retain, uint8_t prio);
-    void formatTopic(char* out, size_t outLen, const char* suffix) const;
-    bool isConnected() const { return state == MQTTState::Connected; }
-    void setStartupReady(bool ready) { _startupReady = ready; }
-    DataStore* dataStorePtr() const { return dataStore; }
+    struct AckMessage {
+        bool used = false;
+        uint16_t messageId = 0;
+        uint8_t qos = 0;
+        bool retain = false;
+        char topicSuffix[16] = {0};
+        char payload[Limits::Mqtt::Buffers::Reply] = {0};
+    };
 
-private:
-    MQTTConfig cfgData;
-    MQTTState state = MQTTState::WaitingNetwork;
-    uint32_t stateTs = 0;
+    struct Job {
+        bool used = false;
+        bool queued = false;
+        bool processing = false;
+        bool requeueAfterProcess = false;
+        uint8_t producerId = 0;
+        uint16_t messageId = 0;
+        uint8_t priority = 0;
+        uint8_t flags = 0;
+        uint8_t retryCount = 0;
+        uint32_t notBeforeMs = 0;
+        uint8_t queuedPrio = 0;
+        uint16_t queueToken = 0;
+    };
+
+    struct JobQueueItem {
+        uint8_t slot = 0;
+        uint16_t token = 0;
+    };
+
+    template <size_t N>
+    struct JobRing {
+        JobQueueItem items[N]{};
+        uint16_t head = 0;
+        uint16_t tail = 0;
+        uint16_t count = 0;
+    };
+
+    static constexpr uint8_t ProducerIdAck = 1;
+    static constexpr uint8_t ProducerIdStatus = 2;
+    static constexpr uint8_t ProducerIdConfig = 41;
+    static constexpr uint8_t ProducerIdRuntime = RuntimeProducer::ProducerId;
+    static constexpr uint8_t ProducerIdAlarm = 5;
+
+    static constexpr uint16_t StatusMsgOnline = 1;
+    static constexpr uint16_t StatusMsgRuntimeBase = 32;
+
+    static constexpr uint16_t AlarmMsgMeta = 1;
+    static constexpr uint16_t AlarmMsgPack = 2;
+    static constexpr uint16_t AlarmMsgStateBase = 100;
+
+    static constexpr uint8_t MaxProducers = 24;
+    static constexpr uint8_t MaxAckMessages = 2;
+    static constexpr uint8_t MaxJobs = 80;
+    static constexpr uint16_t RetryMinMs = 250;
+    static constexpr uint16_t RetryMaxMs = 10000;
+    static constexpr uint8_t ProcessBudgetPerTick = 8;
+
+    static constexpr uint16_t HighQueueCap = 80;
+    static constexpr uint16_t NormalQueueCap = 80;
+    static constexpr uint16_t LowQueueCap = 60;
+
+    MQTTConfig cfgData_{};
+    // CFGDOC: {"label":"Hôte MQTT","help":"Adresse du broker MQTT (DNS ou IP)."}
+    ConfigVariable<char,0> hostVar_{
+        NVS_KEY(NvsKeys::Mqtt::Host), "host", "mqtt", ConfigType::CharArray,
+        (char*)cfgData_.host, ConfigPersistence::Persistent, sizeof(cfgData_.host)
+    };
+    // CFGDOC: {"label":"Port MQTT","help":"Port TCP utilisé pour la connexion au broker."}
+    ConfigVariable<int32_t,0> portVar_{
+        NVS_KEY(NvsKeys::Mqtt::Port), "port", "mqtt", ConfigType::Int32,
+        &cfgData_.port, ConfigPersistence::Persistent, 0
+    };
+    // CFGDOC: {"label":"Utilisateur MQTT","help":"Nom d'utilisateur pour l'authentification MQTT."}
+    ConfigVariable<char,0> userVar_{
+        NVS_KEY(NvsKeys::Mqtt::User), "user", "mqtt", ConfigType::CharArray,
+        (char*)cfgData_.user, ConfigPersistence::Persistent, sizeof(cfgData_.user)
+    };
+    // CFGDOC: {"label":"Mot de passe MQTT","help":"Mot de passe pour l'authentification MQTT."}
+    ConfigVariable<char,0> passVar_{
+        NVS_KEY(NvsKeys::Mqtt::Pass), "pass", "mqtt", ConfigType::CharArray,
+        (char*)cfgData_.pass, ConfigPersistence::Persistent, sizeof(cfgData_.pass)
+    };
+    // CFGDOC: {"label":"Topic de base","help":"Préfixe MQTT pour les topics de télémétrie/commande."}
+    ConfigVariable<char,0> baseTopicVar_{
+        NVS_KEY(NvsKeys::Mqtt::BaseTopic), "baseTopic", "mqtt", ConfigType::CharArray,
+        (char*)cfgData_.baseTopic, ConfigPersistence::Persistent, sizeof(cfgData_.baseTopic)
+    };
+    // CFGDOC: {"label":"MQTT actif","help":"Active ou désactive le client MQTT."}
+    ConfigVariable<bool,0> enabledVar_{
+        NVS_KEY(NvsKeys::Mqtt::Enabled), "enabled", "mqtt", ConfigType::Bool,
+        &cfgData_.enabled, ConfigPersistence::Persistent, 0
+    };
+
+    MQTTState state_ = MQTTState::WaitingNetwork;
+    uint32_t stateTs_ = 0;
 
     esp_mqtt_client_handle_t client_ = nullptr;
     bool clientStarted_ = false;
     bool clientConfigDirty_ = true;
     bool suppressDisconnectEvent_ = false;
 
-    const WifiService* wifiSvc = nullptr;
-    const CommandService* cmdSvc = nullptr;
-    const ConfigStoreService* cfgSvc = nullptr;
-    const TimeSchedulerService* timeSchedSvc = nullptr;
-    const AlarmService* alarmSvc = nullptr;
-    const LogHubService* logHub = nullptr;
-    EventBus* eventBus = nullptr;
-    DataStore* dataStore = nullptr;
+    const WifiService* wifiSvc_ = nullptr;
+    const CommandService* cmdSvc_ = nullptr;
+    const ConfigStoreService* cfgSvc_ = nullptr;
+    const TimeSchedulerService* timeSchedSvc_ = nullptr;
+    const AlarmService* alarmSvc_ = nullptr;
+    const LogHubService* logHub_ = nullptr;
+    EventBus* eventBus_ = nullptr;
+    DataStore* dataStore_ = nullptr;
 
-    char deviceId[Limits::Mqtt::Buffers::DeviceId] = {0};
-    char topicCmd[Limits::Mqtt::Buffers::Topic] = {0};
-    char topicAck[Limits::Mqtt::Buffers::Topic] = {0};
-    char topicStatus[Limits::Mqtt::Buffers::Topic] = {0};
-    char topicCfgSet[Limits::Mqtt::Buffers::Topic] = {0};
-    char topicCfgAck[Limits::Mqtt::Buffers::Topic] = {0};
-    char topicRtAlarmsMeta[Limits::Mqtt::Buffers::Topic] = {0};
-    char topicRtAlarmsPack[Limits::Mqtt::Buffers::Topic] = {0};
+    char deviceId_[Limits::Mqtt::Buffers::DeviceId] = {0};
+    char topicCmd_[Limits::Mqtt::Buffers::Topic] = {0};
+    char topicStatus_[Limits::Mqtt::Buffers::Topic] = {0};
+    char topicCfgSet_[Limits::Mqtt::Buffers::Topic] = {0};
     char brokerUri_[Limits::Mqtt::Buffers::DynamicTopic] = {0};
-    RuntimePublisher publishers[Limits::Mqtt::Capacity::MaxPublishers] = {};
-    uint8_t publisherCount = 0;
-    const char* cfgModules[Limits::Mqtt::Capacity::CfgTopicMax] = {nullptr};
-    uint8_t cfgModuleCount = 0;
 
-    struct RxMsg {
-        char topic[Limits::Mqtt::Buffers::RxTopic];
-        char payload[Limits::Mqtt::Buffers::RxPayload];
-    };
+    QueueHandle_t rxQ_ = nullptr;
+    StaticQueue_t rxQueueStruct_{};
+    uint8_t* rxQueueStorage_ = nullptr;
 
-    enum class TxPriority : uint8_t {
-        High = 0,
-        Normal = 1,
-        Low = 2
-    };
+    MqttService mqttSvc_{};
 
-    static constexpr size_t TxSmallPayloadMax = 384;
-    static constexpr size_t TxLowLargePayloadMax = 2048;
+    const MqttPublishProducer* producers_[MaxProducers]{};
+    uint8_t producerCount_ = 0;
+    portMUX_TYPE producerMux_ = portMUX_INITIALIZER_UNLOCKED;
 
-    struct TxMsg {
-        uint8_t qos = 0;
-        uint8_t retain = 0;
-        uint16_t topicLen = 0;
-        uint16_t payloadLen = 0;
-        char topic[Limits::Mqtt::Buffers::Topic] = {0};
-        char payload[TxSmallPayloadMax] = {0};
-    };
+    Job jobs_[MaxJobs]{};
+    JobRing<HighQueueCap> highQ_{};
+    JobRing<NormalQueueCap> normalQ_{};
+    JobRing<LowQueueCap> lowQ_{};
+    portMUX_TYPE jobsMux_ = portMUX_INITIALIZER_UNLOCKED;
 
-    struct LowLargeMsg {
-        bool pending = false;
-        uint8_t qos = 0;
-        uint8_t retain = 0;
-        char topic[Limits::Mqtt::Buffers::Topic] = {0};
-        char payload[TxLowLargePayloadMax] = {0};
-    };
+    char topicBuf_[Limits::Mqtt::Buffers::DynamicTopic] = {0};
+    char payloadBuf_[Limits::Mqtt::Buffers::Publish] = {0};
+    char replyBuf_[Limits::Mqtt::Buffers::Reply] = {0};
 
-    static constexpr uint8_t TxHighQueueLen = 4;
-    static constexpr uint8_t TxNormalQueueLen = 12;
-    static constexpr uint8_t TxLowQueueLen = 2;
+    AckMessage ackMessages_[MaxAckMessages]{};
+    uint8_t ackWriteCursor_ = 0;
+    uint16_t ackNextMessageId_ = 1;
 
-    QueueHandle_t rxQ = nullptr;
-    QueueHandle_t txHighQ_ = nullptr;
-    QueueHandle_t txNormalQ_ = nullptr;
-    QueueHandle_t txLowQ_ = nullptr;
-    StaticQueue_t txHighQueueStruct_{};
-    StaticQueue_t txNormalQueueStruct_{};
-    StaticQueue_t txLowQueueStruct_{};
-    uint8_t* txHighQueueStorage_ = nullptr;
-    uint8_t* txNormalQueueStorage_ = nullptr;
-    uint8_t* txLowQueueStorage_ = nullptr;
-    LowLargeMsg* txLowLarge_ = nullptr;
-    portMUX_TYPE txLowLargeMux_ = portMUX_INITIALIZER_UNLOCKED;
+    RuntimePublisher runtimePublishers_[Limits::Mqtt::Capacity::MaxPublishers]{};
+    uint8_t runtimePublisherCount_ = 0;
+    MqttConfigRouteProducer* cfgProducer_ = nullptr;
+    RuntimeProducer runtimeProducerCore_{};
 
-    char replyBuf[Limits::Mqtt::Buffers::Reply] = {0};
-    // Shared scratch buffer for ACK, cfg payload serialization and runtime publishes.
-    char publishBuf[Limits::Mqtt::Buffers::Publish] = {0};
-    MqttService mqttSvc{ nullptr, nullptr, nullptr, nullptr, nullptr };
-
-    // CFGDOC: {"label":"Hôte MQTT","help":"Adresse du broker MQTT (DNS ou IP)."}
-    ConfigVariable<char,0> hostVar {
-        NVS_KEY(NvsKeys::Mqtt::Host),"host","mqtt",ConfigType::CharArray,
-        (char*)cfgData.host,ConfigPersistence::Persistent,sizeof(cfgData.host)
-    };
-    // CFGDOC: {"label":"Port MQTT","help":"Port TCP utilisé pour la connexion au broker."}
-    ConfigVariable<int32_t,0> portVar {
-        NVS_KEY(NvsKeys::Mqtt::Port),"port","mqtt",ConfigType::Int32,
-        &cfgData.port,ConfigPersistence::Persistent,0
-    };
-    // CFGDOC: {"label":"Utilisateur MQTT","help":"Nom d'utilisateur pour l'authentification MQTT."}
-    ConfigVariable<char,0> userVar {
-        NVS_KEY(NvsKeys::Mqtt::User),"user","mqtt",ConfigType::CharArray,
-        (char*)cfgData.user,ConfigPersistence::Persistent,sizeof(cfgData.user)
-    };
-    // CFGDOC: {"label":"Mot de passe MQTT","help":"Mot de passe pour l'authentification MQTT."}
-    ConfigVariable<char,0> passVar {
-        NVS_KEY(NvsKeys::Mqtt::Pass),"pass","mqtt",ConfigType::CharArray,
-        (char*)cfgData.pass,ConfigPersistence::Persistent,sizeof(cfgData.pass)
-    };
-    // CFGDOC: {"label":"Topic de base","help":"Préfixe MQTT pour les topics de télémétrie/commande."}
-    ConfigVariable<char,0> baseTopicVar {
-        NVS_KEY(NvsKeys::Mqtt::BaseTopic),"baseTopic","mqtt",ConfigType::CharArray,
-        (char*)cfgData.baseTopic,ConfigPersistence::Persistent,sizeof(cfgData.baseTopic)
-    };
-    // CFGDOC: {"label":"MQTT actif","help":"Active ou désactive le client MQTT."}
-    ConfigVariable<bool,0> enabledVar {
-        NVS_KEY(NvsKeys::Mqtt::Enabled),"enabled","mqtt",ConfigType::Bool,
-        &cfgData.enabled,ConfigPersistence::Persistent,0
-    };
-    void setState(MQTTState s);
-    void buildTopics();
-    void refreshConfigModules();
-    void connectMqtt();
-    void processRx(const RxMsg& msg);
-    void publishConfigBlocks(bool retained);
-    bool publishConfigModuleAt(size_t idx, bool retained);
-    bool publishConfigBlocksFromPatch(const char* patchJson, bool retained);
-    void publishTimeSchedulerSlots(bool retained, const char* rootTopic);
-    void runTimeSchedulerSlots_(uint32_t nowMs);
-    bool buildCfgTopic_(const char* module, char* out, size_t outLen) const;
-    void enqueueCfgBranch_(uint16_t branchId);
-    uint8_t takePendingCfgBranches_(uint16_t* out, uint8_t maxItems);
-    void processPendingCfgBranches_();
-    void beginConfigRamp_(uint32_t nowMs);
-    void runConfigRamp_(uint32_t nowMs);
-
-    void onConnect_(bool sessionPresent);
-    void onDisconnect_(const esp_mqtt_error_codes_t* err);
-    void onMessage_(const char* topic, size_t topicLen,
-                    const char* payload, size_t len, size_t index, size_t total);
-    bool ensureClient_();
-    void stopClient_(bool intentional);
-    void destroyClient_();
-    static void mqttEventHandlerStatic_(void* handler_args,
-                                        esp_event_base_t base,
-                                        int32_t event_id,
-                                        void* event_data);
-
-    static void onEventStatic(const Event& e, void* user);
-    void onEvent(const Event& e);
-
-    static bool svcPublish(void* ctx, const char* topic, const char* payload, int qos, bool retain);
-    static bool svcPublishPrio(void* ctx, const char* topic, const char* payload, int qos, bool retain, uint8_t prio);
-    static void svcFormatTopic(void* ctx, const char* suffix, char* out, size_t outLen);
-    static bool svcIsConnected(void* ctx);
-
-    bool publishDirect_(const char* topic, const char* payload, int qos, bool retain);
-    bool txEnqueue_(const char* topic, const char* payload, int qos, bool retain, TxPriority prio);
-    bool txEnqueueSmall_(const TxMsg& msg, TxPriority prio);
-    bool txStoreLowLarge_(const char* topic, const char* payload, int qos, bool retain);
-    bool txTakeLowLarge_(LowLargeMsg& out);
-    void drainTx_();
-    void logRuntimeDiag_(uint32_t nowMs, bool force = false);
-
-    // ---- network warmup ----
-    bool _netReady = false;
-    uint32_t _netReadyTs = 0;
-
-    // ---- retry backoff ----
-    uint8_t _retryCount = 0;
-    uint32_t _retryDelayMs = Limits::Mqtt::Backoff::MinMs;
-    bool _startupReady = false;
-    volatile bool _pendingPublish = false;
-    static constexpr uint8_t PendingCfgBranchesMax = 24;
-    uint16_t pendingCfgBranches_[PendingCfgBranchesMax] = {0};
-    uint8_t pendingCfgBranchCount_ = 0;
-    portMUX_TYPE pendingCfgMux_ = portMUX_INITIALIZER_UNLOCKED;
-    bool cfgRampActive_ = false;
-    bool cfgRampRestartRequested_ = false;
-    uint8_t cfgRampIndex_ = 0;
-    uint32_t cfgRampNextMs_ = 0;
-    bool schedCfgActive_ = false;
-    bool schedCfgRootPending_ = false;
-    bool schedCfgRetained_ = true;
-    char schedCfgRootTopic_[Limits::Mqtt::Buffers::DynamicTopic] = {0};
-    uint8_t schedCfgSlotCursor_ = 0;
-    uint32_t schedCfgNextMs_ = 0;
-    uint32_t schedCfgRetryBackoffMs_ = 0;
-    uint16_t schedCfgKnownMask_ = 0;
-    uint16_t schedCfgUsedMask_ = 0;
-    static constexpr uint8_t PendingAlarmIdsMax = Limits::Alarm::MaxAlarms;
-    AlarmId pendingAlarmIds_[PendingAlarmIdsMax] = {};
-    uint8_t pendingAlarmCount_ = 0;
-    portMUX_TYPE pendingAlarmMux_ = portMUX_INITIALIZER_UNLOCKED;
-    bool alarmsMetaPending_ = false;
-    bool alarmsFullSyncPending_ = false;
-    bool alarmsPackPending_ = false;
-    bool statusOnlinePending_ = false;
-    uint32_t statusOnlineDeadlineMs_ = 0;
-    uint32_t statusOnlineNextTryMs_ = 0;
-    uint32_t alarmsRetryBackoffMs_ = 0;
-    uint32_t alarmsRetryNextMs_ = 0;
-    uint32_t lastLowHeapWarnMs_ = 0;
-    uint32_t lowHeapSinceMs_ = 0;
-    uint32_t lastOutboxWarnMs_ = 0;
-    uint32_t diagNextLogMs_ = 0;
-    uint32_t diagLastLowStackWarnMs_ = 0;
-    UBaseType_t diagMinStackHw_ = (UBaseType_t)0xFFFFFFFFUL;
+    bool netReady_ = false;
+    uint32_t netReadyTs_ = 0;
+    uint8_t retryCount_ = 0;
+    uint32_t retryDelayMs_ = Limits::Mqtt::Backoff::MinMs;
+    bool startupReady_ = false;
 
     uint32_t rxDropCount_ = 0;
     uint32_t parseFailCount_ = 0;
     uint32_t handlerFailCount_ = 0;
     uint32_t oversizeDropCount_ = 0;
-    uint32_t txQFullHighCount_ = 0;
-    uint32_t txQFullNormalCount_ = 0;
-    uint32_t txQFullLowCount_ = 0;
-    uint32_t txLowLargeOverwriteCount_ = 0;
-    uint32_t txDropHighCount_ = 0;
-    uint32_t txDropNormalCount_ = 0;
-    uint32_t txDropLowCount_ = 0;
 
+    MqttPublishProducer ackProducerDesc_{};
+    MqttPublishProducer statusProducerDesc_{};
+    MqttPublishProducer runtimeProducerDesc_{};
+    MqttPublishProducer alarmProducerDesc_{};
+
+    void setState_(MQTTState s);
+    void buildTopics_();
+    void enqueueAlarmFullSync_();
+
+    void connectMqtt_();
+    bool ensureClient_();
+    void stopClient_(bool intentional);
+    void destroyClient_();
+
+    void onConnect_(bool sessionPresent);
+    void onDisconnect_(const esp_mqtt_error_codes_t* err);
+    void onMessage_(const char* topic,
+                    size_t topicLen,
+                    const char* payload,
+                    size_t len,
+                    size_t index,
+                    size_t total);
+
+    void processRx_(const RxMsg& msg);
     void processRxCmd_(const RxMsg& msg);
     void processRxCfgSet_(const RxMsg& msg);
-    bool publishAlarmState_(AlarmId id);
-    bool publishAlarmMeta_();
-    bool publishAlarmPack_();
-    void enqueuePendingAlarmId_(AlarmId id);
-    uint8_t takePendingAlarmIds_(AlarmId* out, uint8_t maxItems);
-    bool publishConfigModuleByName_(const char* module, bool retained);
-    void publishRxError_(const char* ackTopic, ErrorCode code, const char* where, bool parseFailure);
+    void publishRxError_(const char* ackTopicSuffix, ErrorCode code, const char* where, bool parseFailure);
+
+    bool enqueueAck_(const char* topicSuffix,
+                     const char* payload,
+                     uint8_t qos,
+                     bool retain,
+                     MqttPublishPriority priority);
+
+    bool tryPublishNow_(const char* topic, const char* payload, uint8_t qos, bool retain);
+    void processJobs_(uint32_t nowMs);
+
+    bool enqueueJob_(uint8_t producerId, uint16_t messageId, uint8_t priority, uint8_t flags);
+    bool queuePush_(uint8_t prio, const JobQueueItem& item);
+    bool queuePop_(uint8_t prio, JobQueueItem& out);
+    bool queueSlot_(uint8_t slotIdx, uint8_t prio, bool invalidateOld);
+    bool dequeueNextJob_(uint32_t nowMs, uint8_t& slotIdx);
+    int16_t findJobSlot_(uint8_t producerId, uint16_t messageId) const;
+    int16_t allocJobSlot_();
+
+    const MqttPublishProducer* findProducer_(uint8_t producerId) const;
+
+    static void mqttEventHandlerStatic_(void* handler_args,
+                                        esp_event_base_t base,
+                                        int32_t event_id,
+                                        void* event_data);
+    static void onEventStatic_(const Event& e, void* user);
+    void onEvent_(const Event& e);
+
     void syncRxMetrics_();
     void countRxDrop_();
     void countOversizeDrop_();
+
+    static bool svcEnqueue_(void* ctx, uint8_t producerId, uint16_t messageId, uint8_t prio, uint8_t flags);
+    static bool svcRegisterProducer_(void* ctx, const MqttPublishProducer* producer);
+    static void svcFormatTopic_(void* ctx, const char* suffix, char* out, size_t outLen);
+    static bool svcIsConnected_(void* ctx);
+
+    static MqttBuildResult buildAckStatic_(void* ctx, uint16_t messageId, MqttBuildContext& buildCtx);
+    static void onAckPublishedStatic_(void* ctx, uint16_t messageId);
+    static void onAckDroppedStatic_(void* ctx, uint16_t messageId);
+
+    static MqttBuildResult buildStatusStatic_(void* ctx, uint16_t messageId, MqttBuildContext& buildCtx);
+    static MqttBuildResult buildAlarmStatic_(void* ctx, uint16_t messageId, MqttBuildContext& buildCtx);
+
+    MqttBuildResult buildAck_(uint16_t messageId, MqttBuildContext& buildCtx);
+    void onAckPublished_(uint16_t messageId);
+    void onAckDropped_(uint16_t messageId);
+
+    MqttBuildResult buildStatus_(uint16_t messageId, MqttBuildContext& buildCtx);
+    MqttBuildResult buildAlarm_(uint16_t messageId, MqttBuildContext& buildCtx);
 };

@@ -11,6 +11,7 @@
 #include "Core/ModulePassive.h"
 #include "Core/I2cLink.h"
 #include "Core/I2cCfgProtocol.h"
+#include "Modules/Network/MQTTModule/MqttConfigRouteProducer.h"
 #include "Core/ConfigTypes.h"
 #include "Core/NvsKeys.h"
 #include "Core/Services/Services.h"
@@ -106,6 +107,7 @@ private:
     uint8_t txFrame_[I2cCfgProtocol::MaxRespFrame] = {0};
     size_t txFrameLen_ = 0;
     portMUX_TYPE txMux_ = portMUX_INITIALIZER_UNLOCKED;
+    MqttConfigRouteProducer* cfgMqttPub_ = nullptr;
 
     static void onReceiveStatic_(void* ctx, const uint8_t* data, size_t len);
     static size_t onRequestStatic_(void* ctx, uint8_t* out, size_t maxLen);

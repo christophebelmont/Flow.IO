@@ -13,6 +13,44 @@
 #include <stdlib.h>
 #include <string.h>
 
+namespace {
+static constexpr uint8_t kIoCfgProducerId = 47;
+static constexpr uint8_t kCfgBranchIo = 1;
+static constexpr uint8_t kCfgBranchIoDebug = 2;
+static constexpr uint8_t kCfgBranchIoA0 = 3;
+static constexpr uint8_t kCfgBranchIoA1 = 4;
+static constexpr uint8_t kCfgBranchIoA2 = 5;
+static constexpr uint8_t kCfgBranchIoA3 = 6;
+static constexpr uint8_t kCfgBranchIoA4 = 7;
+static constexpr uint8_t kCfgBranchIoA5 = 8;
+static constexpr uint8_t kCfgBranchIoD0 = 9;
+static constexpr uint8_t kCfgBranchIoD1 = 10;
+static constexpr uint8_t kCfgBranchIoD2 = 11;
+static constexpr uint8_t kCfgBranchIoD3 = 12;
+static constexpr uint8_t kCfgBranchIoD4 = 13;
+static constexpr uint8_t kCfgBranchIoD5 = 14;
+static constexpr uint8_t kCfgBranchIoD6 = 15;
+static constexpr uint8_t kCfgBranchIoD7 = 16;
+static constexpr MqttConfigRouteProducer::Route kIoCfgRoutes[] = {
+    {1, {(uint8_t)ConfigModuleId::Io, kCfgBranchIo}, "io", "io", (uint8_t)MqttPublishPriority::Normal, nullptr},
+    {2, {(uint8_t)ConfigModuleId::Io, kCfgBranchIoDebug}, "io/debug", "io/debug", (uint8_t)MqttPublishPriority::Normal, nullptr},
+    {3, {(uint8_t)ConfigModuleId::Io, kCfgBranchIoA0}, "io/input/a0", "io/input/a0", (uint8_t)MqttPublishPriority::Normal, nullptr},
+    {4, {(uint8_t)ConfigModuleId::Io, kCfgBranchIoA1}, "io/input/a1", "io/input/a1", (uint8_t)MqttPublishPriority::Normal, nullptr},
+    {5, {(uint8_t)ConfigModuleId::Io, kCfgBranchIoA2}, "io/input/a2", "io/input/a2", (uint8_t)MqttPublishPriority::Normal, nullptr},
+    {6, {(uint8_t)ConfigModuleId::Io, kCfgBranchIoA3}, "io/input/a3", "io/input/a3", (uint8_t)MqttPublishPriority::Normal, nullptr},
+    {7, {(uint8_t)ConfigModuleId::Io, kCfgBranchIoA4}, "io/input/a4", "io/input/a4", (uint8_t)MqttPublishPriority::Normal, nullptr},
+    {8, {(uint8_t)ConfigModuleId::Io, kCfgBranchIoA5}, "io/input/a5", "io/input/a5", (uint8_t)MqttPublishPriority::Normal, nullptr},
+    {9, {(uint8_t)ConfigModuleId::Io, kCfgBranchIoD0}, "io/output/d0", "io/output/d0", (uint8_t)MqttPublishPriority::Normal, nullptr},
+    {10, {(uint8_t)ConfigModuleId::Io, kCfgBranchIoD1}, "io/output/d1", "io/output/d1", (uint8_t)MqttPublishPriority::Normal, nullptr},
+    {11, {(uint8_t)ConfigModuleId::Io, kCfgBranchIoD2}, "io/output/d2", "io/output/d2", (uint8_t)MqttPublishPriority::Normal, nullptr},
+    {12, {(uint8_t)ConfigModuleId::Io, kCfgBranchIoD3}, "io/output/d3", "io/output/d3", (uint8_t)MqttPublishPriority::Normal, nullptr},
+    {13, {(uint8_t)ConfigModuleId::Io, kCfgBranchIoD4}, "io/output/d4", "io/output/d4", (uint8_t)MqttPublishPriority::Normal, nullptr},
+    {14, {(uint8_t)ConfigModuleId::Io, kCfgBranchIoD5}, "io/output/d5", "io/output/d5", (uint8_t)MqttPublishPriority::Normal, nullptr},
+    {15, {(uint8_t)ConfigModuleId::Io, kCfgBranchIoD6}, "io/output/d6", "io/output/d6", (uint8_t)MqttPublishPriority::Normal, nullptr},
+    {16, {(uint8_t)ConfigModuleId::Io, kCfgBranchIoD7}, "io/output/d7", "io/output/d7", (uint8_t)MqttPublishPriority::Normal, nullptr},
+};
+}
+
 static bool hasDecimalSuffixLocal(const char* p)
 {
     if (!p || *p == '\0') return false;
@@ -1470,22 +1508,6 @@ bool IOModule::endpointIndexFromId_(const char* id, uint8_t& idxOut) const
 void IOModule::init(ConfigStore& cfg, ServiceRegistry& services)
 {
     constexpr uint8_t kCfgModuleId = (uint8_t)ConfigModuleId::Io;
-    constexpr uint16_t kCfgBranchIo = (uint16_t)ConfigBranchId::Io;
-    constexpr uint16_t kCfgBranchIoDebug = (uint16_t)ConfigBranchId::IoDebug;
-    constexpr uint16_t kCfgBranchIoA0 = (uint16_t)ConfigBranchId::IoInputA0;
-    constexpr uint16_t kCfgBranchIoA1 = (uint16_t)ConfigBranchId::IoInputA1;
-    constexpr uint16_t kCfgBranchIoA2 = (uint16_t)ConfigBranchId::IoInputA2;
-    constexpr uint16_t kCfgBranchIoA3 = (uint16_t)ConfigBranchId::IoInputA3;
-    constexpr uint16_t kCfgBranchIoA4 = (uint16_t)ConfigBranchId::IoInputA4;
-    constexpr uint16_t kCfgBranchIoA5 = (uint16_t)ConfigBranchId::IoInputA5;
-    constexpr uint16_t kCfgBranchIoD0 = (uint16_t)ConfigBranchId::IoOutputD0;
-    constexpr uint16_t kCfgBranchIoD1 = (uint16_t)ConfigBranchId::IoOutputD1;
-    constexpr uint16_t kCfgBranchIoD2 = (uint16_t)ConfigBranchId::IoOutputD2;
-    constexpr uint16_t kCfgBranchIoD3 = (uint16_t)ConfigBranchId::IoOutputD3;
-    constexpr uint16_t kCfgBranchIoD4 = (uint16_t)ConfigBranchId::IoOutputD4;
-    constexpr uint16_t kCfgBranchIoD5 = (uint16_t)ConfigBranchId::IoOutputD5;
-    constexpr uint16_t kCfgBranchIoD6 = (uint16_t)ConfigBranchId::IoOutputD6;
-    constexpr uint16_t kCfgBranchIoD7 = (uint16_t)ConfigBranchId::IoOutputD7;
     logHub_ = services.get<LogHubService>("loghub");
     haSvc_ = services.get<HAService>("ha");
     const DataStoreService* dsSvc = services.get<DataStoreService>("datastore");
@@ -1615,8 +1637,19 @@ void IOModule::init(ConfigStore& cfg, ServiceRegistry& services)
     (void)logHub_;
 }
 
-void IOModule::onConfigLoaded(ConfigStore&, ServiceRegistry&)
+void IOModule::onConfigLoaded(ConfigStore&, ServiceRegistry& services)
 {
+    if (!cfgMqttPub_) {
+        cfgMqttPub_ = new (std::nothrow) MqttConfigRouteProducer();
+    }
+    if (cfgMqttPub_) {
+        cfgMqttPub_->configure(this,
+                               kIoCfgProducerId,
+                               kIoCfgRoutes,
+                               (uint8_t)(sizeof(kIoCfgRoutes) / sizeof(kIoCfgRoutes[0])),
+                               services);
+    }
+
     LOGI("io.onConfigLoaded begin enabled=%s i2c_sda=%ld i2c_scl=%ld runtimeReady=%s",
          cfgData_.enabled ? "true" : "false",
          (long)cfgData_.i2cSda,

@@ -25,7 +25,7 @@ public:
     bool dequeue(LogEntry& out, TickType_t waitTicks);
 
     /** @brief Attach config store used to expose per-module minimum levels. */
-    void attachConfig(ConfigStore* cfg, uint8_t cfgModuleId, uint16_t cfgBranchId);
+    void attachConfig(ConfigStore* cfg, uint8_t cfgModuleId, uint8_t cfgLocalBranchId);
 
     /** @brief Register or update a module descriptor. */
     bool registerModule(LogModuleId moduleId, const char* moduleName);
@@ -60,5 +60,5 @@ private:
     uint8_t moduleCount_ = 0;
     ConfigStore* cfg_ = nullptr;
     uint8_t cfgModuleId_ = 0;
-    uint16_t cfgBranchId_ = 0;
+    uint8_t cfgLocalBranchId_ = 0;
 };

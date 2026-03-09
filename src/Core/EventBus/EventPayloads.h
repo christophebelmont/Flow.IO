@@ -4,7 +4,7 @@
  * @brief Payload types used by EventBus events.
  */
 #include <stdint.h>
-#include "Core/ConfigBranchIds.h"
+#include "Core/ConfigBranchRef.h"
 
 // Keep payloads small and trivially copyable.
 // EventBus will copy payload bytes into its queue buffer.
@@ -29,7 +29,7 @@ enum class ConfigModuleId : uint8_t {
 /** @brief Payload for ConfigChanged events. */
 struct ConfigChangedPayload {
     uint8_t moduleId = (uint8_t)ConfigModuleId::Unknown;
-    uint16_t branchId = (uint16_t)ConfigBranchId::Unknown;
+    uint8_t localBranchId = ConfigBranchRef::UnknownLocalBranch;
     char nvsKey[16];
     char module[24];
 };

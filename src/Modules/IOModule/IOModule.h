@@ -5,6 +5,7 @@
  */
 
 #include "Core/Module.h"
+#include "Modules/Network/MQTTModule/MqttConfigRouteProducer.h"
 #include "Core/NvsKeys.h"
 #include "Core/SystemLimits.h"
 #include "Core/WokwiDefaultOverrides.h"
@@ -277,6 +278,7 @@ private:
     const LogHubService* logHub_ = nullptr;
     const HAService* haSvc_ = nullptr;
     DataStore* dataStore_ = nullptr;
+    MqttConfigRouteProducer* cfgMqttPub_ = nullptr;
 
     IORegistry registry_{};
     IOScheduler scheduler_{};

@@ -23,7 +23,6 @@
 #include "Modules/Network/MQTTModule/MQTTModule.h"
 #include "Modules/Network/HAModule/HAModule.h"
 #include "Modules/Network/I2CCfgServerModule/I2CCfgServerModule.h"
-#include "Modules/Network/MqttRuntimeDispatchModule/MqttRuntimeDispatchModule.h"
 // Stores Modules
 #include "Modules/Stores/ConfigStoreModule/ConfigStoreModule.h"
 #include "Modules/Stores/DataStoreModule/DataStoreModule.h"
@@ -80,7 +79,6 @@ static CommandModule        commandModule;
 static ConfigStoreModule    configStoreModule;
 static DataStoreModule      dataStoreModule;
 static MQTTModule           mqttModule;
-static MqttRuntimeDispatchModule mqttRuntimeDispatchModule;
 static HAModule             haModule;
 static SystemModule         systemModule;
 static SystemMonitorModule  systemMonitorModule;
@@ -271,7 +269,6 @@ void setup() {
     moduleManager.add(&wifiModule);
     moduleManager.add(&timeModule);
     moduleManager.add(&mqttModule);
-    moduleManager.add(&mqttRuntimeDispatchModule);
     moduleManager.add(&haModule);
     moduleManager.add(&systemModule);
     moduleManager.add(&ioModule);
@@ -469,9 +466,9 @@ void setup() {
         requireSetup(poolDeviceModule.defineDevice(pd), "define pool device");
     }
 
-    requireSetup(mqttRuntimeDispatchModule.registerProvider(&ioModule), "register runtime provider io");
-    requireSetup(mqttRuntimeDispatchModule.registerProvider(&poolDeviceModule), "register runtime provider pooldev");
-    requireSetup(mqttRuntimeDispatchModule.registerProvider(&poolLogicModule), "register runtime provider poollogic");
+    requireSetup(mqttModule.registerRuntimeProvider(&ioModule), "register runtime provider io");
+    requireSetup(mqttModule.registerRuntimeProvider(&poolDeviceModule), "register runtime provider pooldev");
+    requireSetup(mqttModule.registerRuntimeProvider(&poolLogicModule), "register runtime provider poollogic");
 
     
     bool ok = moduleManager.initAll(registry, services);

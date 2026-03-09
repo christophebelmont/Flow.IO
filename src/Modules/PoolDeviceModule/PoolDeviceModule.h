@@ -5,6 +5,7 @@
  */
 
 #include "Core/Module.h"
+#include "Modules/Network/MQTTModule/MqttConfigRouteProducer.h"
 #include "Core/RuntimeSnapshotProvider.h"
 #include "Core/Services/Services.h"
 #include "Core/CommandRegistry.h"
@@ -180,6 +181,9 @@ private:
     char nvsMaxUptimeKey_[POOL_DEVICE_MAX][16]{};
     char nvsRuntimeKey_[POOL_DEVICE_MAX][16]{};
     char runtimePersistBuf_[POOL_DEVICE_MAX][192]{};
+    MqttConfigRouteProducer* cfgMqttPub_ = nullptr;
+    MqttConfigRouteProducer::Route* cfgRoutes_ = nullptr;
+    uint8_t cfgRouteCount_ = 0;
     // CFGDOC: {"label":"Activation appareil","help":"Active ou désactive l'appareil du pool concerne."}
     ConfigVariable<bool,0> cfgEnabledVar_[POOL_DEVICE_MAX]{};
     // CFGDOC: {"label":"Type appareil","help":"Type logique de l'appareil (0=filtration, 1=peristaltique, 2=relais standard)."}
