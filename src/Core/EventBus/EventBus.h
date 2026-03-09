@@ -44,7 +44,8 @@ using EventCallback = void(*)(const Event& e, void* user);
  */
 class EventBus {
 public:
-    static constexpr uint16_t MAX_SUBSCRIBERS = 24;
+    static constexpr uint16_t MAX_SUBSCRIBERS = Limits::EventSubscribersMax;
+    static constexpr uint8_t SUB_REJECT_RING_CAP = 8;
 
     // Maximum payload size copied into internal queue.
     static constexpr uint8_t MAX_PAYLOAD_SIZE = 48;
@@ -71,10 +72,25 @@ public:
     void dispatch(uint16_t maxEvents = 8);
 
 private:
+    enum class SubRejectReason : uint8_t {
+        None = 0,
+        NullCb = 1,
+        Capacity = 2,
+    };
+
     struct Subscriber {
         EventId id;
         EventCallback cb;
         void* user;
+    };
+
+    struct SubscribeRejectInfo {
+        uint32_t seq = 0;
+        uint32_t tsMs = 0;
+        uint16_t eventId = 0;
+        uintptr_t cbAddr = 0;
+        uintptr_t userAddr = 0;
+        uint8_t reason = (uint8_t)SubRejectReason::None;
     };
 
     struct QueuedEvent {
@@ -87,6 +103,24 @@ private:
     uint16_t _count = 0;
 
     QueueHandle_t _queue = nullptr;
+    portMUX_TYPE _statsMux = portMUX_INITIALIZER_UNLOCKED;
+    uint32_t _postOkTotal = 0;
+    uint32_t _postDropTotal = 0;
+    uint32_t _postDropFromIsrTotal = 0;
+    uint32_t _postDropTooLargeTotal = 0;
+    uint32_t _postDropNoQueueTotal = 0;
+    uint32_t _winStartMs = 0;
+    uint32_t _winDropCount = 0;
+    uint32_t _winCurrentDropBurst = 0;
+    uint32_t _winMaxDropBurst = 0;
+    uint32_t _subRejectTotal = 0;
+    uint32_t _subRejectNullCbTotal = 0;
+    uint32_t _subRejectCapacityTotal = 0;
+    uint32_t _subRejectReportedSeq = 0;
+    SubscribeRejectInfo _subRejectRing[SUB_REJECT_RING_CAP]{};
+    uint8_t _subRejectWriteIdx = 0;
 
     void dispatchOne(const QueuedEvent& qe);
+    void recordSubscribeReject_(EventId id, EventCallback cb, void* user, SubRejectReason reason);
+    static const char* subRejectReasonStr_(uint8_t reason);
 };

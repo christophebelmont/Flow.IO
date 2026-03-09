@@ -24,19 +24,80 @@
 
 namespace {
 static constexpr uint8_t kPoolLogicCfgProducerId = 44;
+static constexpr const char* kPoolLogicCfgTopicBase = "cfg/poollogic";
 static constexpr uint8_t kCfgBranchMode = 1;
 static constexpr uint8_t kCfgBranchFiltration = 2;
 static constexpr uint8_t kCfgBranchSensors = 3;
 static constexpr uint8_t kCfgBranchPid = 4;
 static constexpr uint8_t kCfgBranchDelay = 5;
 static constexpr uint8_t kCfgBranchDevice = 6;
+static constexpr const char* kCfgModuleMode = "poollogic/mode";
+static constexpr const char* kCfgModuleFiltration = "poollogic/filtration";
+static constexpr const char* kCfgModuleSensors = "poollogic/sensors";
+static constexpr const char* kCfgModulePid = "poollogic/pid";
+static constexpr const char* kCfgModuleDelay = "poollogic/delay";
+static constexpr const char* kCfgModuleDevice = "poollogic/device";
+
+enum : uint16_t {
+    kCfgMsgBase = 1,
+    kCfgMsgMode = 2,
+    kCfgMsgFiltration = 3,
+    kCfgMsgSensors = 4,
+    kCfgMsgPid = 5,
+    kCfgMsgDelay = 6,
+    kCfgMsgDevice = 7,
+};
+
 static constexpr MqttConfigRouteProducer::Route kPoolLogicCfgRoutes[] = {
-    {1, {(uint8_t)ConfigModuleId::PoolLogic, kCfgBranchMode}, "poollogic/mode", "poollogic/mode", (uint8_t)MqttPublishPriority::Normal, nullptr},
-    {2, {(uint8_t)ConfigModuleId::PoolLogic, kCfgBranchFiltration}, "poollogic/filtration", "poollogic/filtration", (uint8_t)MqttPublishPriority::Normal, nullptr},
-    {3, {(uint8_t)ConfigModuleId::PoolLogic, kCfgBranchSensors}, "poollogic/sensors", "poollogic/sensors", (uint8_t)MqttPublishPriority::Normal, nullptr},
-    {4, {(uint8_t)ConfigModuleId::PoolLogic, kCfgBranchPid}, "poollogic/pid", "poollogic/pid", (uint8_t)MqttPublishPriority::Normal, nullptr},
-    {5, {(uint8_t)ConfigModuleId::PoolLogic, kCfgBranchDelay}, "poollogic/delay", "poollogic/delay", (uint8_t)MqttPublishPriority::Normal, nullptr},
-    {6, {(uint8_t)ConfigModuleId::PoolLogic, kCfgBranchDevice}, "poollogic/device", "poollogic/device", (uint8_t)MqttPublishPriority::Normal, nullptr},
+    {kCfgMsgBase,
+     {(uint8_t)ConfigModuleId::PoolLogic, ConfigBranchRef::UnknownLocalBranch},
+     nullptr,
+     "",
+     (uint8_t)MqttPublishPriority::Normal,
+     &PoolLogicModule::buildCfgBaseStatic_,
+     kPoolLogicCfgTopicBase},
+    {kCfgMsgMode,
+     {(uint8_t)ConfigModuleId::PoolLogic, kCfgBranchMode},
+     kCfgModuleMode,
+     "mode",
+     (uint8_t)MqttPublishPriority::Normal,
+     nullptr,
+     kPoolLogicCfgTopicBase},
+    {kCfgMsgFiltration,
+     {(uint8_t)ConfigModuleId::PoolLogic, kCfgBranchFiltration},
+     kCfgModuleFiltration,
+     "filtration",
+     (uint8_t)MqttPublishPriority::Normal,
+     nullptr,
+     kPoolLogicCfgTopicBase},
+    {kCfgMsgSensors,
+     {(uint8_t)ConfigModuleId::PoolLogic, kCfgBranchSensors},
+     kCfgModuleSensors,
+     "sensors",
+     (uint8_t)MqttPublishPriority::Normal,
+     nullptr,
+     kPoolLogicCfgTopicBase},
+    {kCfgMsgPid,
+     {(uint8_t)ConfigModuleId::PoolLogic, kCfgBranchPid},
+     kCfgModulePid,
+     "pid",
+     (uint8_t)MqttPublishPriority::Normal,
+     nullptr,
+     kPoolLogicCfgTopicBase},
+    {kCfgMsgDelay,
+     {(uint8_t)ConfigModuleId::PoolLogic, kCfgBranchDelay},
+     kCfgModuleDelay,
+     "delay",
+     (uint8_t)MqttPublishPriority::Normal,
+     nullptr,
+     kPoolLogicCfgTopicBase},
+    {kCfgMsgDevice,
+     {(uint8_t)ConfigModuleId::PoolLogic, kCfgBranchDevice},
+     kCfgModuleDevice,
+     "device",
+     (uint8_t)MqttPublishPriority::Normal,
+     nullptr,
+     kPoolLogicCfgTopicBase},
 };
 }
 
@@ -97,16 +158,109 @@ static void writeCmdError_(char* reply, size_t replyLen, const char* where, Erro
     }
 }
 
+MqttBuildResult PoolLogicModule::buildCfgBaseStatic_(void* ctx, uint16_t, MqttBuildContext& buildCtx)
+{
+    PoolLogicModule* self = static_cast<PoolLogicModule*>(ctx);
+    return self ? self->buildCfgBase_(buildCtx) : MqttBuildResult::PermanentError;
+}
+
+MqttBuildResult PoolLogicModule::buildCfgBase_(MqttBuildContext& buildCtx)
+{
+    if (!cfgStore_) return MqttBuildResult::RetryLater;
+    if (!buildCtx.topic || buildCtx.topicCapacity == 0U || !buildCtx.payload || buildCtx.payloadCapacity == 0U) {
+        return MqttBuildResult::PermanentError;
+    }
+    if (!mqttSvc_ || !mqttSvc_->formatTopic) return MqttBuildResult::RetryLater;
+
+    char relativeTopic[Limits::Mqtt::Buffers::DynamicTopic] = {0};
+    size_t topicLen = 0U;
+    if (!MqttConfigRouteProducer::buildRelativeTopic(relativeTopic,
+                                                     sizeof(relativeTopic),
+                                                     kPoolLogicCfgTopicBase,
+                                                     "",
+                                                     topicLen)) {
+        return MqttBuildResult::PermanentError;
+    }
+    mqttSvc_->formatTopic(mqttSvc_->ctx, relativeTopic, buildCtx.topic, buildCtx.topicCapacity);
+    if (buildCtx.topic[0] == '\0') return MqttBuildResult::PermanentError;
+    topicLen = strnlen(buildCtx.topic, buildCtx.topicCapacity);
+
+    struct Entry {
+        const char* key;
+        const char* moduleName;
+    };
+    static constexpr Entry kEntries[] = {
+        {"mode", kCfgModuleMode},
+        {"filtration", kCfgModuleFiltration},
+        {"sensors", kCfgModuleSensors},
+        {"pid", kCfgModulePid},
+        {"delay", kCfgModuleDelay},
+        {"device", kCfgModuleDevice},
+    };
+
+    buildCtx.payload[0] = '{';
+    buildCtx.payload[1] = '\0';
+    size_t pos = 1U;
+    bool any = false;
+    bool truncatedPayload = false;
+
+    for (uint8_t i = 0; i < (uint8_t)(sizeof(kEntries) / sizeof(kEntries[0])); ++i) {
+        char moduleJson[640] = {0};
+        bool truncatedModule = false;
+        const bool hasAny = cfgStore_->toJsonModule(kEntries[i].moduleName,
+                                                    moduleJson,
+                                                    sizeof(moduleJson),
+                                                    &truncatedModule);
+        if (truncatedModule) {
+            truncatedPayload = true;
+            break;
+        }
+        if (!hasAny) continue;
+
+        const int w = snprintf(buildCtx.payload + pos,
+                               buildCtx.payloadCapacity - pos,
+                               "%s\"%s\":%s",
+                               any ? "," : "",
+                               kEntries[i].key,
+                               moduleJson);
+        if (!(w > 0 && (size_t)w < (buildCtx.payloadCapacity - pos))) {
+            truncatedPayload = true;
+            break;
+        }
+        pos += (size_t)w;
+        any = true;
+    }
+
+    if (truncatedPayload || pos + 2U > buildCtx.payloadCapacity) {
+        if (!writeErrorJson(buildCtx.payload, buildCtx.payloadCapacity, ErrorCode::CfgTruncated, "cfg/poollogic")) {
+            snprintf(buildCtx.payload, buildCtx.payloadCapacity, "{\"ok\":false}");
+        }
+        buildCtx.topicLen = (uint16_t)topicLen;
+        buildCtx.payloadLen = (uint16_t)strnlen(buildCtx.payload, buildCtx.payloadCapacity);
+        buildCtx.qos = 1;
+        buildCtx.retain = true;
+        return MqttBuildResult::Ready;
+    }
+
+    if (!any) {
+        LOGW("cfg base skipped: no data for %s", kPoolLogicCfgTopicBase);
+        return MqttBuildResult::NoLongerNeeded;
+    }
+
+    buildCtx.payload[pos++] = '}';
+    buildCtx.payload[pos] = '\0';
+    buildCtx.topicLen = (uint16_t)topicLen;
+    buildCtx.payloadLen = (uint16_t)pos;
+    buildCtx.qos = 1;
+    buildCtx.retain = true;
+    return MqttBuildResult::Ready;
+}
+
 void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
 {
     constexpr uint8_t kCfgModuleId = (uint8_t)ConfigModuleId::PoolLogic;
-    static constexpr const char* kCfgModuleMode = "poollogic/mode";
-    static constexpr const char* kCfgModuleFiltration = "poollogic/filtration";
-    static constexpr const char* kCfgModuleSensors = "poollogic/sensors";
-    static constexpr const char* kCfgModulePid = "poollogic/pid";
-    static constexpr const char* kCfgModuleDelay = "poollogic/delay";
-    static constexpr const char* kCfgModuleDevice = "poollogic/device";
     cfgStore_ = &cfg;
+    mqttSvc_ = services.get<MqttService>("mqtt");
 
     enabledVar_.moduleName = kCfgModuleMode;
     autoModeVar_.moduleName = kCfgModuleMode;
@@ -513,6 +667,7 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
 
 void PoolLogicModule::onConfigLoaded(ConfigStore&, ServiceRegistry& services)
 {
+    mqttSvc_ = services.get<MqttService>("mqtt");
     if (!cfgMqttPub_) {
         cfgMqttPub_ = new (std::nothrow) MqttConfigRouteProducer();
     }
@@ -1366,15 +1521,16 @@ void PoolLogicModule::runControlLoop_(uint32_t nowMs)
     portEXIT_CRITICAL(&pendingMux_);
 
     bool filtrationDesired = filtrationFsm_.on;
-    if (!autoMode_) {
+    if (psiError_) {
+        // Safety first: PSI alarms must stop filtration even in manual mode.
+        filtrationDesired = false;
+    } else if (!autoMode_) {
         // Legacy-like manual mode: when auto_mode is off, keep filtration fully manual.
         filtrationDesired = filtrationFsm_.on;
     } else {
         if (filtrationFsm_.on && haveAirTemp && airTemp <= freezeHoldTempC_) {
             // Freeze hold: once running, never stop under freeze-hold threshold.
             filtrationDesired = true;
-        } else if (psiError_) {
-            filtrationDesired = false;
         } else {
             const bool scheduleDemand = windowActive;
             const bool winterDemand = winterMode_ && haveAirTemp && (airTemp < winterStartTempC_);

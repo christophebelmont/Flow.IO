@@ -2,11 +2,13 @@
 
 ## Rôle
 
-Gateway MQTT principal:
-- connexion broker, reconnect/backoff
-- souscription commandes (`cmd`) et patch config (`cfg/set`)
-- publication ACK, status, config, alarmes
-- exposition de `MqttService`
+Cœur MQTT unifié (transport + scheduling TX):
+- connexion broker, souscriptions RX, reconnexion/backoff
+- chemin TX unique pour **toutes** les publications MQTT
+- files de jobs par priorité (`High`, `Normal`, `Low`)
+- build topic/payload **à la demande** dans le buffer central
+- dédup/coalescing par clé logique `(producerId, messageId)`
+- exposition du service `MqttService`
 
 Type: module actif.
 
@@ -20,16 +22,25 @@ Type: module actif.
 
 ## Affinité / cadence
 
-- core: 0
+- core: `0`
 - task: `mqtt`
-- loop delay: `Limits::Mqtt::Timing::LoopDelayMs` (50ms)
+- stack: `Limits::Mqtt::TaskStackSize` (`5712`)
+- loop delay: `Limits::Mqtt::Timing::LoopDelayMs` (`50 ms`)
 
 ## Services exposés
 
 - `mqtt` -> `MqttService`
-  - `publish`
-  - `formatTopic`
-  - `isConnected`
+  - `enqueue(ctx, producerId, messageId, prio, flags)`
+  - `registerProducer(ctx, producer)`
+  - `formatTopic(ctx, suffix, out, outLen)`
+  - `isConnected(ctx)`
+
+Contrat producteur (`MqttPublishProducer`):
+- `buildMessage(ctx, messageId, buildCtx)`
+- `onMessagePublished(...)`
+- `onMessageDeferred(...)`
+- `onMessageDropped(...)`
+- `onTransportTick(...)` (optionnel)
 
 ## Services consommés
 
@@ -43,40 +54,82 @@ Type: module actif.
 
 ## Config / NVS
 
-Branche `ConfigBranchId::Mqtt` (`module: mqtt`):
-- `host`, `port`, `user`, `pass`, `baseTopic`, `enabled`
+Module config: `mqtt`
+- `host`
+- `port`
+- `user`
+- `pass`
+- `baseTopic`
+- `topicDeviceId` (optionnel, segment `<deviceId>` des topics)
+- `enabled`
 
-## Topics majeurs
+Identité config interne:
+- `moduleId = ConfigModuleId::Mqtt`
+- `localBranchId = 1` (route cfg MQTT locale)
 
-- `<base>/<device>/cmd` (RX)
-- `<base>/<device>/ack` (TX)
-- `<base>/<device>/status` (TX + LWT)
-- `<base>/<device>/cfg/set` (RX)
-- `<base>/<device>/cfg/ack` (TX)
-- `<base>/<device>/cfg/<module>` (TX)
-- `<base>/<device>/rt/...` (TX runtime)
+## RX MQTT
 
-Détail complet: `../core/mqtt-topics.md`
+Topics souscrits:
+- `<base>/<device>/cmd` (QoS 0)
+- `<base>/<device>/cfg/set` (QoS 1)
 
-## Command path (`cmd`)
+Pipeline RX:
+1. callback IDF `MQTT_EVENT_DATA`
+2. copie vers queue RX bornée (`RxMsg`)
+3. traitement dans la task `mqtt`
+4. ACK/erreur sur `ack` ou `cfg/ack`
 
-Entrée JSON attendue:
-```json
-{"cmd":"...","args":{...}}
-```
-Traitement:
-1. parse JSON
-2. `cmdSvc->execute(...)`
-3. publish ACK sur `ack`
+Queue RX:
+- longueur: `Limits::Mqtt::Capacity::RxQueueLen` (`8`)
+- création: `xQueueCreateStatic(...)`
+- stockage: heap alloué une fois à l'init (`heap_caps_malloc`)
 
-## Config path (`cfg/set`)
+## TX unifié (jobs)
 
-Entrée JSON patch multi-modules.
-Traitement:
-1. validation JSON
-2. `cfgSvc->applyJson(...)`
-3. ACK sur `cfg/ack`
-4. publication config ciblée pilotée par événements `ConfigChanged`
+### Structure logique
+
+Un job ne contient pas de topic/payload persistants:
+- `producerId`
+- `messageId`
+- `priority`
+- `flags`
+- `retryCount`
+- `notBeforeMs`
+
+Capacités:
+- slots jobs globaux: `MaxJobs = 80`
+- ring `High`: `80`
+- ring `Normal`: `80`
+- ring `Low`: `60`
+
+Politique:
+- ordonnanceur priorité `High -> Normal -> Low`
+- budget de traitement: `ProcessBudgetPerTick = 8`
+- retry centralisé: backoff exponentiel `250 ms -> 10 s`
+- coalescing: un seul job vivant par `(producerId,messageId)`
+
+### Producteurs enregistrés (principaux)
+
+- ACK (`producerId=1`)
+- Status (`producerId=2`)
+- Runtime (`producerId=4`, via `RuntimeProducer`)
+- Alarm (`producerId=5`)
+- Config routes MQTT internes (`producerId=41`)
+- autres modules autoportés (HA, IO, PoolDevice, PoolLogic, Wifi, Time, etc.) via `MqttConfigRouteProducer`
+
+## Topics principaux
+
+- `<base>/<device>/status` (retain, LWT online/offline)
+- `<base>/<device>/ack`
+- `<base>/<device>/cfg/ack`
+- `<base>/<device>/cfg/*` (publiés par producteurs config module-owned)
+- `<base>/<device>/rt/*` (runtime producer + publishers périodiques)
+
+Référence détaillée: `../core/mqtt-topics.md`.
+
+Note:
+- si `mqtt.topicDeviceId` est vide, l'ID topic est auto-généré depuis la MAC (`ESP32-XXXXXX`)
+- si renseigné, il est utilisé pour `<base>/<deviceId>/...` et le `client_id` MQTT
 
 ## EventBus
 
@@ -86,26 +139,48 @@ Abonnements:
 - `AlarmRaised`, `AlarmCleared`, `AlarmAcked`, `AlarmSilenceChanged`, `AlarmConditionChanged`
 
 Effets:
-- `DataChanged` sur `MqttReady`: alimente la logique de reconnexion/état réseau MQTT
-- `ConfigChanged`: publication `cfg/<module>` ciblée, reconnect si clés MQTT de connexion modifiées
-- événements alarmes: publication `rt/alarms/id*` + `rt/alarms/m`
+- `DataChanged(DATAKEY_WIFI_READY)`: gating connexion MQTT
+- `ConfigChanged` sur clés de connexion MQTT: reconnect propre
+- événements alarmes: enqueue des jobs `rt/alarms/*`
 
 ## DataStore
 
-Écritures via `MQTTRuntime.h`:
-- `MqttReady` (notifié)
-- compteurs RX (`rxDrop`, `oversizeDrop`, `parseFail`, `handlerFail`) mis à jour en continu
+Écritures runtime:
+- `MqttReady`
+- compteurs RX: `rxDrop`, `oversizeDrop`, `parseFail`, `handlerFail`
 
-## Publication runtime
+## Signification des logs MQTT
 
-- les routes runtime métier (`rt/io/*`, `rt/pdm/*`, `rt/poollogic/*`) sont publiées par `MqttRuntimeDispatchModule`
-- `MQTTModule` conserve les publishers périodiques additionnels (`addRuntimePublisher`), par ex:
-  - `rt/network/state`
-  - `rt/system/state`
+### Occupation queues/jobs
 
-## Points clés robustesse
+`queue occ max/boot jobs=A/80 qh=B/80 qn=C/80 ql=D/60`
+- niveau log: `DEBUG` (métrologie uniquement, pas d'alerte à elle seule)
+- max observés depuis le boot (non remis à zéro)
+- `jobs`: slots jobs utilisés
+- `qh/qn/ql`: profondeur max des rings High/Normal/Low
 
-- backoff reconnect avec jitter
-- queue RX bornée
-- garde-fous overflow topic/payload
-- JSON statiques (ArduinoJson documents bornés)
+### Rejet enqueue (noyau)
+
+`enqueue reject reason=<slot_full|queue_full> producer=P msg=M prio=R jobs=...`
+- `slot_full`: plus de slot job libre (`80/80`)
+- `queue_full`: ring de priorité cible saturé
+- peut être silencé par flag `MqttEnqueueFlags::SilentRejectLog`
+
+### Métriques cfg route producer
+
+`cfgq p=.. e=.. rf=.. rt=.. ok=.. to=.. tf=.. tt=.. tk=.. tto=..`
+- `p`: routes cfg pending (global)
+- `e`: routes en attente de ré-enqueue transport
+- `rf`: refus enqueue fenêtre 5s
+- `rt`: tentatives retry fenêtre 5s
+- `ok`: retry acceptés fenêtre 5s
+- `to`: timeouts fenêtre 5s (route perdue après `10 s` de refus)
+- `tf/tt/tk/tto`: cumuls boot (`refus/tries/ok/timeouts`)
+- niveau log: `DEBUG` par défaut, `WARN` si `tto > 0` (au moins un timeout cumulé depuis le boot)
+
+### Logs IDF MQTT client
+
+Exemple:
+`MQTT_CLIENT: mqtt_message_receive: transport_read() error: errno=128`
+- erreur transport bas niveau TCP/TLS côté client IDF
+- déclenche en pratique une déconnexion puis le cycle de reconnexion/backoff du module

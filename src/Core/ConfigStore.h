@@ -142,13 +142,17 @@ void ConfigStore::registerVar(ConfigVariable<T, H>& var)
     ConfigMeta& m = _meta[_metaCount++];
 
     if (!_metaNearCapacityWarned) {
-        const uint16_t warnAt = (uint16_t)((MAX_CONFIG_VARS * 9U) / 10U);
+        const uint16_t warnMargin = 5U;
+        const uint16_t warnAt = (MAX_CONFIG_VARS > warnMargin)
+            ? (uint16_t)(MAX_CONFIG_VARS - warnMargin)
+            : 0U;
         if (_metaCount >= warnAt) {
             _metaNearCapacityWarned = true;
             Log::warn((LogModuleId)LogModuleIdValue::CoreConfigStore,
-                      "Config var usage high: %u/%u",
+                      "Config var capacity low headroom: %u/%u (remaining=%u)",
                       (unsigned)_metaCount,
-                      (unsigned)MAX_CONFIG_VARS);
+                      (unsigned)MAX_CONFIG_VARS,
+                      (unsigned)(MAX_CONFIG_VARS - _metaCount));
         }
     }
 

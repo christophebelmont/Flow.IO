@@ -31,4 +31,5 @@ Mais après wiring:
 
 ## MQTT
 
-Aucune publication directe. Le runtime MQTT est consommé via `MqttRuntimeDispatchModule` (`RuntimeDispatchCore` + sink MQTT).
+Aucune publication directe.
+Les changements runtime passent par `DataChanged` et sont consommés par le cœur MQTT unifié (`MQTTModule` + `RuntimeProducer`).

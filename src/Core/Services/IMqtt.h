@@ -20,6 +20,11 @@ enum class MqttBuildResult : uint8_t {
     PermanentError = 3,
 };
 
+enum class MqttEnqueueFlags : uint8_t {
+    None = 0x00,
+    SilentRejectLog = 0x01,
+};
+
 struct MqttBuildContext {
     char* topic = nullptr;
     uint16_t topicCapacity = 0;
@@ -38,6 +43,7 @@ struct MqttPublishProducer {
     void (*onMessagePublished)(void* ctx, uint16_t messageId) = nullptr;
     void (*onMessageDeferred)(void* ctx, uint16_t messageId) = nullptr;
     void (*onMessageDropped)(void* ctx, uint16_t messageId) = nullptr;
+    void (*onTransportTick)(void* ctx, uint32_t nowMs) = nullptr;
 };
 
 /** @brief Service wrapper exposed by MQTTModule. */

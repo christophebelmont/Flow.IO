@@ -141,9 +141,14 @@ Les valeurs ci-dessous correspondent au profil `Flow.IO` actuel (wiring et modul
 | HAModule - switches | 16 | 12 | `HAModule::MAX_HA_SWITCHES` ([src/Modules/Network/HAModule/HAModule.h](../src/Modules/Network/HAModule/HAModule.h)) |
 | HAModule - numbers | 16 | 13 | `HAModule::MAX_HA_NUMBERS` ([src/Modules/Network/HAModule/HAModule.h](../src/Modules/Network/HAModule/HAModule.h)) |
 | HAModule - buttons | 8 | 3 | `HAModule::MAX_HA_BUTTONS` ([src/Modules/Network/HAModule/HAModule.h](../src/Modules/Network/HAModule/HAModule.h)) |
-| MQTTModule - runtime publishers | 8 | 4 | `Limits::Mqtt::Capacity::MaxPublishers` ([include/Core/SystemLimits.h](../include/Core/SystemLimits.h)) |
-| Routes runtime multiplexées | 34 | 33 | `Limits::MaxRuntimeRoutes` ([include/Core/SystemLimits.h](../include/Core/SystemLimits.h)) |
-| ConfigStore - variables de config | 256 | 253 | `Limits::MaxConfigVars` / `ConfigStore::MAX_CONFIG_VARS` ([include/Core/SystemLimits.h](../include/Core/SystemLimits.h), [src/Core/ConfigStore.h](../src/Core/ConfigStore.h)) |
+| MQTTModule - runtime publishers | 8 | dépend du wiring (`main_flowio.cpp`) | `Limits::Mqtt::Capacity::MaxPublishers` ([include/Core/SystemLimits.h](../include/Core/SystemLimits.h)) |
+| Runtime routes MQTT (`RuntimeProducer`) | 36 | dépend des providers enregistrés | `Limits::MaxRuntimeRoutes` ([include/Core/SystemLimits.h](../include/Core/SystemLimits.h)) |
+| MQTT jobs (slots globaux) | 80 | max observé via log `queue occ max/boot` | `MQTTModule::MaxJobs` ([src/Modules/Network/MQTTModule/MQTTModule.h](../src/Modules/Network/MQTTModule/MQTTModule.h)) |
+| MQTT queue High / Normal / Low | 80 / 80 / 60 | max observé via log `queue occ max/boot` | `MQTTModule::HighQueueCap/NormalQueueCap/LowQueueCap` ([src/Modules/Network/MQTTModule/MQTTModule.h](../src/Modules/Network/MQTTModule/MQTTModule.h)) |
+| MQTT RX queue | 8 | occupation visible côté drops RX | `Limits::Mqtt::Capacity::RxQueueLen` ([include/Core/SystemLimits.h](../include/Core/SystemLimits.h)) |
+| EventBus queue length | 32 | occupation instantanée via `sub stats 5s` | `Limits::EventQueueLen` ([include/Core/SystemLimits.h](../include/Core/SystemLimits.h)) |
+| EventBus subscribers max | 50 | consommation via `sub stats 5s` | `Limits::EventSubscribersMax` ([include/Core/SystemLimits.h](../include/Core/SystemLimits.h)) |
+| ConfigStore - variables de config | 290 | dépend build/profil | `Limits::MaxConfigVars` / `ConfigStore::MAX_CONFIG_VARS` ([include/Core/SystemLimits.h](../include/Core/SystemLimits.h), [src/Core/ConfigStore.h](../src/Core/ConfigStore.h)) |
 
 Notes:
 - Le compteur "utilisés actuellement" reflète l'état de la configuration/module wiring actuel de Flow.IO.

@@ -149,6 +149,7 @@ private:
     void onMessageDropped_(uint16_t messageId);
 
     bool buildEntityMessage_(uint16_t messageId, MqttBuildContext& buildCtx);
+    bool resolveMqttTopicDeviceId_(char* out, size_t outLen) const;
 
     bool buildObjectId(const char* suffix, char* out, size_t outLen) const;
     bool buildDefaultEntityId(const char* component, const char* objectId, char* out, size_t outLen) const;

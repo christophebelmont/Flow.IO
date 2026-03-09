@@ -55,6 +55,14 @@
 #endif
 #endif
 
+#ifndef FLOW_WIRDEF_MQ_TID
+#if defined(FLOW_WOKWI_DEFAULT_OVERRIDES)
+#define FLOW_WIRDEF_MQ_TID "ESP32-670D34"
+#else
+#define FLOW_WIRDEF_MQ_TID ""
+#endif
+#endif
+
 #ifndef FLOW_MODDEF_IO_ADS
 #define FLOW_MODDEF_IO_ADS 125
 #endif

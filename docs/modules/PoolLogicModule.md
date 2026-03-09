@@ -41,12 +41,20 @@ Interfaces runtime exposées:
   - `rt/poollogic/ph`
   - `rt/poollogic/orp`
 
-Ces snapshots sont routés vers MQTT via le runtime mux (`main.cpp`), pas publiés directement par `PoolLogicModule`.
+Ces snapshots sont routés vers MQTT via `MQTTModule::RuntimeProducer` (providers enregistrés dans `main_flowio.cpp`), pas publiés directement par `PoolLogicModule`.
 
 ## Config / NVS
 
-Branche: `ConfigBranchId::PoolLogic`  
-Module JSON: `poollogic`  
+Module config: `poollogic`
+Identité config: `moduleId = ConfigModuleId::PoolLogic`
+Branches locales utilisées:
+- `1`: `mode`
+- `2`: `filtration`
+- `3`: `sensors`
+- `4`: `pid`
+- `5`: `delay`
+- `6`: `device`
+
 Persistance: `ConfigStore` + `NvsKeys::PoolLogic::*`
 
 ### Paramètres modes et stratégie
@@ -161,8 +169,9 @@ Les réponses d'erreur suivent `ErrorCode` (`MissingArgs`, `MissingValue`, `NotR
 
 Logique principale:
 - filtration:
-  - en auto: suit fenêtre scheduler, mode hiver, freeze-hold, et coupe sur erreur PSI
-  - en manuel (`auto_mode=false`): `PoolLogic` n'impose pas de demande auto
+  - sécurité PSI prioritaire: coupe sur erreur PSI (auto **et** manuel)
+  - en auto: suit fenêtre scheduler, mode hiver et freeze-hold
+  - en manuel (`auto_mode=false`): `PoolLogic` n'impose pas de demande auto hors sécurité PSI
 - robot:
   - démarre après `robot_delay_min` de filtration
   - s'arrête après `robot_dur_min`
@@ -248,7 +257,7 @@ Les interlocks `PoolDeviceModule` restent appliqués.
 
 ## Runtime MQTT (`rt/poollogic/*`)
 
-Snapshots publiés (via runtime mux):
+Snapshots publiés (via `RuntimeProducer` du `MQTTModule`):
 - `rt/poollogic/ph`
 - `rt/poollogic/orp`
 
@@ -271,6 +280,19 @@ Payload (champs principaux):
 Sémantique importante:
 - `input/setpoint/error` sont des valeurs latched au compute PID
 - `rt/io/input/*` reste la source des mesures live brutes
+
+## Config MQTT (`cfg/poollogic*`)
+
+Publication autoportée via `MqttConfigRouteProducer` local:
+- `cfg/poollogic` (agrégat base)
+- `cfg/poollogic/mode`
+- `cfg/poollogic/filtration`
+- `cfg/poollogic/sensors`
+- `cfg/poollogic/pid`
+- `cfg/poollogic/delay`
+- `cfg/poollogic/device`
+
+Le mapping `ConfigChanged -> messageId -> topic` est local au module.
 
 ## Home Assistant
 

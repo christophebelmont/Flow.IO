@@ -37,9 +37,9 @@ Type: module actif.
 ## Config / NVS
 
 Branches:
-- `ConfigBranchId::Time` (`module: time`)
+- `moduleId = ConfigModuleId::Time`, branche locale `1` (`module: time`)
   - `server1`, `server2`, `tz`, `enabled`, `week_start_mon`
-- `ConfigBranchId::TimeScheduler` (`module: time/scheduler`)
+- `moduleId = ConfigModuleId::Time`, branche locale `2` (`module: time/scheduler`)
   - `slots_blob` (`tm_sched`)
 
 ## Commandes
@@ -55,7 +55,7 @@ Branches:
 
 Abonnements:
 - `DataChanged` (clé `WifiReady`)
-- `ConfigChanged` (branches `Time` et `TimeScheduler`)
+- `ConfigChanged` (branches locales `1` et `2` du module `Time`)
 
 Publications:
 - `SchedulerEventTriggered` avec payload `SchedulerEventTriggeredPayload`

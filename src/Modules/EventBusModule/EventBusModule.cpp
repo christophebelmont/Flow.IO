@@ -20,6 +20,6 @@ void EventBusModule::init(ConfigStore&, ServiceRegistry& services) {
 
 void EventBusModule::loop() {
     /// Dispatch queued events.
-    _bus.dispatch(8);
+    _bus.dispatch(16);
     vTaskDelay(pdMS_TO_TICKS(5));
 }

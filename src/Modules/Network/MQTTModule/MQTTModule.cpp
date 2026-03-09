@@ -54,6 +54,7 @@ static bool isMqttConnKey(const char* key)
 {
     return isAnyOf(key, {
         NvsKeys::Mqtt::BaseTopic,
+        NvsKeys::Mqtt::TopicDeviceId,
         NvsKeys::Mqtt::Host,
         NvsKeys::Mqtt::Port,
         NvsKeys::Mqtt::User,
@@ -67,6 +68,25 @@ static void makeDeviceId(char* out, size_t len)
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
     snprintf(out, len, "ESP32-%02X%02X%02X", mac[3], mac[4], mac[5]);
+}
+
+static size_t sanitizeTopicSegment(const char* src, char* dst, size_t cap)
+{
+    if (!src || !dst || cap == 0U) return 0U;
+    size_t w = 0U;
+    for (size_t i = 0U; src[i] != '\0' && (w + 1U) < cap; ++i) {
+        const char c = src[i];
+        const bool safe =
+            (c >= 'a' && c <= 'z') ||
+            (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') ||
+            (c == '-') ||
+            (c == '_') ||
+            (c == '.');
+        dst[w++] = safe ? c : '_';
+    }
+    dst[w] = '\0';
+    return w;
 }
 
 static constexpr uint8_t kMqttCfgBranch = 1;
@@ -114,8 +134,25 @@ void MQTTModule::setState_(MQTTState s)
     }
 }
 
+void MQTTModule::refreshTopicDeviceId_()
+{
+    if (cfgData_.topicDeviceId[0] == '\0') {
+        makeDeviceId(deviceId_, sizeof(deviceId_));
+        return;
+    }
+
+    char sanitized[sizeof(deviceId_)] = {0};
+    const size_t n = sanitizeTopicSegment(cfgData_.topicDeviceId, sanitized, sizeof(sanitized));
+    if (n == 0U) {
+        makeDeviceId(deviceId_, sizeof(deviceId_));
+        return;
+    }
+    snprintf(deviceId_, sizeof(deviceId_), "%s", sanitized);
+}
+
 void MQTTModule::buildTopics_()
 {
+    refreshTopicDeviceId_();
     snprintf(topicCmd_, sizeof(topicCmd_), "%s/%s/%s", cfgData_.baseTopic, deviceId_, MqttTopics::SuffixCmd);
     snprintf(topicStatus_, sizeof(topicStatus_), "%s/%s/%s", cfgData_.baseTopic, deviceId_, MqttTopics::SuffixStatus);
     snprintf(topicCfgSet_, sizeof(topicCfgSet_), "%s/%s/%s", cfgData_.baseTopic, deviceId_, MqttTopics::SuffixCfgSet);
@@ -284,9 +321,59 @@ bool MQTTModule::queueSlot_(uint8_t slotIdx, uint8_t prio, bool invalidateOld)
     return true;
 }
 
+void MQTTModule::snapshotQueueStatsNoLock_(uint16_t& jobsUsed,
+                                           uint16_t& highCount,
+                                           uint16_t& normalCount,
+                                           uint16_t& lowCount) const
+{
+    jobsUsed = 0U;
+    for (uint8_t i = 0; i < MaxJobs; ++i) {
+        if (jobs_[i].used) ++jobsUsed;
+    }
+    highCount = highQ_.count;
+    normalCount = normalQ_.count;
+    lowCount = lowQ_.count;
+}
+
+void MQTTModule::logEnqueueReject_(uint8_t producerId,
+                                   uint16_t messageId,
+                                   uint8_t priority,
+                                   const char* reason,
+                                   uint16_t jobsUsed,
+                                   uint16_t highCount,
+                                   uint16_t normalCount,
+                                   uint16_t lowCount)
+{
+    const uint32_t nowMs = millis();
+    static constexpr uint32_t kMinLogIntervalMs = 1000U;
+    if ((uint32_t)(nowMs - lastEnqueueRejectLogMs_) < kMinLogIntervalMs) return;
+    lastEnqueueRejectLogMs_ = nowMs;
+
+    LOGW("enqueue reject reason=%s producer=%u msg=%u prio=%u jobs=%u/%u q(h=%u/%u,n=%u/%u,l=%u/%u)",
+         reason ? reason : "unknown",
+         (unsigned)producerId,
+         (unsigned)messageId,
+         (unsigned)priority,
+         (unsigned)jobsUsed,
+         (unsigned)MaxJobs,
+         (unsigned)highCount,
+         (unsigned)HighQueueCap,
+         (unsigned)normalCount,
+         (unsigned)NormalQueueCap,
+         (unsigned)lowCount,
+         (unsigned)LowQueueCap);
+}
+
 bool MQTTModule::enqueueJob_(uint8_t producerId, uint16_t messageId, uint8_t priority, uint8_t flags)
 {
     bool ok = false;
+    bool shouldLogReject = false;
+    const bool silentRejectLog = (flags & (uint8_t)MqttEnqueueFlags::SilentRejectLog) != 0U;
+    const char* rejectReason = nullptr;
+    uint16_t jobsUsed = 0U;
+    uint16_t highCount = 0U;
+    uint16_t normalCount = 0U;
+    uint16_t lowCount = 0U;
     portENTER_CRITICAL(&jobsMux_);
 
     int16_t idx = findJobSlot_(producerId, messageId);
@@ -308,6 +395,11 @@ bool MQTTModule::enqueueJob_(uint8_t producerId, uint16_t messageId, uint8_t pri
         if (job.queued) {
             if (job.priority > job.queuedPrio) {
                 ok = queueSlot_((uint8_t)idx, job.priority, true);
+                if (!ok) {
+                    rejectReason = "queue_full";
+                    snapshotQueueStatsNoLock_(jobsUsed, highCount, normalCount, lowCount);
+                    shouldLogReject = !silentRejectLog;
+                }
             } else {
                 ok = true;
             }
@@ -318,13 +410,27 @@ bool MQTTModule::enqueueJob_(uint8_t producerId, uint16_t messageId, uint8_t pri
         job.retryCount = 0;
         job.notBeforeMs = 0;
         ok = queueSlot_((uint8_t)idx, job.priority, false);
+        if (!ok) {
+            rejectReason = "queue_full";
+            snapshotQueueStatsNoLock_(jobsUsed, highCount, normalCount, lowCount);
+            shouldLogReject = !silentRejectLog;
+        }
         portEXIT_CRITICAL(&jobsMux_);
+        if (shouldLogReject) {
+            logEnqueueReject_(producerId, messageId, priority, rejectReason, jobsUsed, highCount, normalCount, lowCount);
+        }
         return ok;
     }
 
     idx = allocJobSlot_();
     if (idx < 0) {
+        rejectReason = "slot_full";
+        snapshotQueueStatsNoLock_(jobsUsed, highCount, normalCount, lowCount);
+        shouldLogReject = !silentRejectLog;
         portEXIT_CRITICAL(&jobsMux_);
+        if (shouldLogReject) {
+            logEnqueueReject_(producerId, messageId, priority, rejectReason, jobsUsed, highCount, normalCount, lowCount);
+        }
         return false;
     }
 
@@ -340,10 +446,16 @@ bool MQTTModule::enqueueJob_(uint8_t producerId, uint16_t messageId, uint8_t pri
 
     ok = queueSlot_((uint8_t)idx, job.priority, false);
     if (!ok) {
+        rejectReason = "queue_full";
+        snapshotQueueStatsNoLock_(jobsUsed, highCount, normalCount, lowCount);
+        shouldLogReject = !silentRejectLog;
         job = Job{};
     }
 
     portEXIT_CRITICAL(&jobsMux_);
+    if (shouldLogReject) {
+        logEnqueueReject_(producerId, messageId, priority, rejectReason, jobsUsed, highCount, normalCount, lowCount);
+    }
     return ok;
 }
 
@@ -659,6 +771,61 @@ void MQTTModule::onDisconnect_(const esp_mqtt_error_codes_t*)
     }
 
     setState_(MQTTState::ErrorWait);
+}
+
+void MQTTModule::updateAndReportQueueOccupancy_(uint32_t nowMs)
+{
+    uint16_t jobsUsed = 0U;
+    uint16_t highCount = 0U;
+    uint16_t normalCount = 0U;
+    uint16_t lowCount = 0U;
+
+    portENTER_CRITICAL(&jobsMux_);
+    snapshotQueueStatsNoLock_(jobsUsed, highCount, normalCount, lowCount);
+    portEXIT_CRITICAL(&jobsMux_);
+
+    if (jobsUsed > occMaxJobs_) occMaxJobs_ = jobsUsed;
+    if (highCount > occMaxHigh_) occMaxHigh_ = highCount;
+    if (normalCount > occMaxNormal_) occMaxNormal_ = normalCount;
+    if (lowCount > occMaxLow_) occMaxLow_ = lowCount;
+
+    if (occLastReportMs_ == 0U) {
+        occLastReportMs_ = nowMs;
+        return;
+    }
+    if ((uint32_t)(nowMs - occLastReportMs_) < 5000U) return;
+
+    LOGD("queue occ max/boot jobs=%u/%u qh=%u/%u qn=%u/%u ql=%u/%u",
+         (unsigned)occMaxJobs_,
+         (unsigned)MaxJobs,
+         (unsigned)occMaxHigh_,
+         (unsigned)HighQueueCap,
+         (unsigned)occMaxNormal_,
+         (unsigned)NormalQueueCap,
+         (unsigned)occMaxLow_,
+         (unsigned)LowQueueCap);
+
+    occLastReportMs_ = nowMs;
+}
+
+void MQTTModule::tickProducers_(uint32_t nowMs)
+{
+    const MqttPublishProducer* snapshot[MaxProducers]{};
+    uint8_t count = 0;
+
+    portENTER_CRITICAL(&producerMux_);
+    count = producerCount_;
+    if (count > MaxProducers) count = MaxProducers;
+    for (uint8_t i = 0; i < count; ++i) {
+        snapshot[i] = producers_[i];
+    }
+    portEXIT_CRITICAL(&producerMux_);
+
+    for (uint8_t i = 0; i < count; ++i) {
+        const MqttPublishProducer* producer = snapshot[i];
+        if (!producer || !producer->onTransportTick) continue;
+        producer->onTransportTick(producer->ctx, nowMs);
+    }
 }
 
 void MQTTModule::onMessage_(const char* topic,
@@ -1179,6 +1346,7 @@ void MQTTModule::init(ConfigStore& cfg, ServiceRegistry& services)
     cfg.registerVar(userVar_, kCfgModuleId, kCfgBranchId);
     cfg.registerVar(passVar_, kCfgModuleId, kCfgBranchId);
     cfg.registerVar(baseTopicVar_, kCfgModuleId, kCfgBranchId);
+    cfg.registerVar(topicDeviceIdVar_, kCfgModuleId, kCfgBranchId);
     cfg.registerVar(enabledVar_, kCfgModuleId, kCfgBranchId);
 
     wifiSvc_ = services.get<WifiService>("wifi");
@@ -1309,6 +1477,10 @@ void MQTTModule::onConfigLoaded(ConfigStore&, ServiceRegistry& services)
 
 void MQTTModule::loop()
 {
+    const uint32_t nowMs = millis();
+    updateAndReportQueueOccupancy_(nowMs);
+    tickProducers_(nowMs);
+
     if (!cfgData_.enabled) {
         if (state_ != MQTTState::Disabled) {
             stopClient_(true);

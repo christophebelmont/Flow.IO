@@ -618,8 +618,38 @@ void HAModule::refreshIdentityFromConfig()
     if (nodeTopicId_[0] == '\0') {
         snprintf(nodeTopicId_, sizeof(nodeTopicId_), "flowio");
     }
-    snprintf(deviceIdent_, sizeof(deviceIdent_), "%s-%s", cfgData_.vendor, deviceId_);
-    entityHash3_ = hash3Digits(deviceId_);
+
+    char mqttTopicDeviceId[64] = {0};
+    const char* idForEntityPrefix = deviceId_;
+    if (resolveMqttTopicDeviceId_(mqttTopicDeviceId, sizeof(mqttTopicDeviceId))) {
+        idForEntityPrefix = mqttTopicDeviceId;
+    }
+
+    // HA `device.identifiers` should follow the effective MQTT topic device id when available.
+    snprintf(deviceIdent_, sizeof(deviceIdent_), "%s-%s", cfgData_.vendor, idForEntityPrefix);
+    entityHash3_ = hash3Digits(idForEntityPrefix);
+}
+
+bool HAModule::resolveMqttTopicDeviceId_(char* out, size_t outLen) const
+{
+    if (!out || outLen == 0U) return false;
+    out[0] = '\0';
+    if (!mqttSvc_ || !mqttSvc_->formatTopic) return false;
+
+    char topic[192] = {0};
+    mqttSvc_->formatTopic(mqttSvc_->ctx, MqttTopics::SuffixStatus, topic, sizeof(topic));
+    if (topic[0] == '\0') return false;
+
+    // Topic format: <base>/<deviceId>/status. Keep deviceId extraction robust when base contains slashes.
+    char* lastSlash = strrchr(topic, '/');
+    if (!lastSlash || lastSlash == topic) return false;
+    *lastSlash = '\0'; // Strip trailing "/status"
+
+    char* deviceSlash = strrchr(topic, '/');
+    if (!deviceSlash || *(deviceSlash + 1) == '\0') return false;
+
+    const int n = snprintf(out, outLen, "%s", deviceSlash + 1);
+    return n > 0 && (size_t)n < outLen;
 }
 
 uint16_t HAModule::entityCount_() const

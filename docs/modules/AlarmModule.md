@@ -36,7 +36,7 @@ Type: module actif.
 
 ## Config / NVS
 
-Branche `ConfigBranchId::Alarms`:
+Module config `alarms` (`moduleId = ConfigModuleId::Alarms`, branche locale `1`):
 - `enabled`
 - `eval_period_ms`
 

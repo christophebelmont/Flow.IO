@@ -24,6 +24,7 @@ constexpr char Port[] = "mq_port"; // MQTT module persisted key for field `mq_po
 constexpr char User[] = "mq_user"; // MQTT module persisted key for field `mq_user`.
 constexpr char Pass[] = "mq_pass"; // MQTT module persisted key for field `mq_pass`.
 constexpr char BaseTopic[] = "mq_base"; // MQTT module persisted key for field `mq_base`.
+constexpr char TopicDeviceId[] = "mq_tid"; // MQTT topic device id override for `<base>/<deviceId>/...`.
 constexpr char Enabled[] = "mq_en"; // MQTT module persisted key for field `mq_en`.
 constexpr char SensorMinPublishMs[] = "mq_smin"; // MQTT module persisted key for field `mq_smin`.
 }  // namespace Mqtt

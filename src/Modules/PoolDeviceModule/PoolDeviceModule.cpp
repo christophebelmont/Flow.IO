@@ -23,9 +23,15 @@
 
 namespace {
 static constexpr uint8_t kPoolDeviceCfgProducerId = 48;
+static constexpr const char* kPoolDeviceCfgTopicBase = "cfg/pdm";
+static constexpr const char* kPoolDeviceCfgRuntimeTopicBase = "cfg/pdmrt";
 static constexpr uint8_t kPoolDeviceCfgBranchBase = 1;
 static constexpr uint8_t kPoolDeviceCfgRuntimeBranchBase = (uint8_t)(kPoolDeviceCfgBranchBase + POOL_DEVICE_MAX);
 static constexpr uint8_t kTimeCfgBranch = 1;
+static constexpr uint16_t kCfgMsgBasePdm = 1;
+static constexpr uint16_t kCfgMsgBasePdmrt = 2;
+static constexpr uint16_t kCfgMsgPdmSlotBase = 16;
+static constexpr uint16_t kCfgMsgPdmrtSlotBase = 32;
 
 static constexpr uint8_t poolDeviceCfgBranchFromSlot_(uint8_t slot)
 {
@@ -872,6 +878,180 @@ bool PoolDeviceModule::configureRuntime_()
     return true;
 }
 
+MqttBuildResult PoolDeviceModule::buildCfgBasePdmStatic_(void* ctx, uint16_t, MqttBuildContext& buildCtx)
+{
+    PoolDeviceModule* self = static_cast<PoolDeviceModule*>(ctx);
+    return self ? self->buildCfgBasePdm_(buildCtx) : MqttBuildResult::PermanentError;
+}
+
+MqttBuildResult PoolDeviceModule::buildCfgBasePdmrtStatic_(void* ctx, uint16_t, MqttBuildContext& buildCtx)
+{
+    PoolDeviceModule* self = static_cast<PoolDeviceModule*>(ctx);
+    return self ? self->buildCfgBasePdmrt_(buildCtx) : MqttBuildResult::PermanentError;
+}
+
+MqttBuildResult PoolDeviceModule::buildCfgBasePdm_(MqttBuildContext& buildCtx)
+{
+    if (!cfgStore_) return MqttBuildResult::RetryLater;
+    if (!buildCtx.topic || buildCtx.topicCapacity == 0U || !buildCtx.payload || buildCtx.payloadCapacity == 0U) {
+        return MqttBuildResult::PermanentError;
+    }
+    if (!mqttSvc_ || !mqttSvc_->formatTopic) return MqttBuildResult::RetryLater;
+
+    char relativeTopic[Limits::Mqtt::Buffers::DynamicTopic] = {0};
+    size_t topicLen = 0U;
+    if (!MqttConfigRouteProducer::buildRelativeTopic(relativeTopic,
+                                                     sizeof(relativeTopic),
+                                                     kPoolDeviceCfgTopicBase,
+                                                     "",
+                                                     topicLen)) {
+        return MqttBuildResult::PermanentError;
+    }
+    mqttSvc_->formatTopic(mqttSvc_->ctx, relativeTopic, buildCtx.topic, buildCtx.topicCapacity);
+    if (buildCtx.topic[0] == '\0') return MqttBuildResult::PermanentError;
+    topicLen = strnlen(buildCtx.topic, buildCtx.topicCapacity);
+
+    buildCtx.payload[0] = '{';
+    buildCtx.payload[1] = '\0';
+    size_t pos = 1U;
+    bool any = false;
+    bool truncatedPayload = false;
+
+    for (uint8_t i = 0; i < POOL_DEVICE_MAX; ++i) {
+        if (!slots_[i].used) continue;
+
+        char moduleJson[640] = {0};
+        bool truncatedModule = false;
+        const bool hasAny = cfgStore_->toJsonModule(cfgModuleName_[i],
+                                                    moduleJson,
+                                                    sizeof(moduleJson),
+                                                    &truncatedModule);
+        if (truncatedModule) {
+            truncatedPayload = true;
+            break;
+        }
+        if (!hasAny) continue;
+
+        const int w = snprintf(buildCtx.payload + pos,
+                               buildCtx.payloadCapacity - pos,
+                               "%s\"%s\":%s",
+                               any ? "," : "",
+                               slots_[i].id,
+                               moduleJson);
+        if (!(w > 0 && (size_t)w < (buildCtx.payloadCapacity - pos))) {
+            truncatedPayload = true;
+            break;
+        }
+        pos += (size_t)w;
+        any = true;
+    }
+
+    if (truncatedPayload || pos + 2U > buildCtx.payloadCapacity) {
+        if (!writeErrorJson(buildCtx.payload, buildCtx.payloadCapacity, ErrorCode::CfgTruncated, "cfg/pdm")) {
+            snprintf(buildCtx.payload, buildCtx.payloadCapacity, "{\"ok\":false}");
+        }
+        buildCtx.topicLen = (uint16_t)topicLen;
+        buildCtx.payloadLen = (uint16_t)strnlen(buildCtx.payload, buildCtx.payloadCapacity);
+        buildCtx.qos = 1;
+        buildCtx.retain = true;
+        return MqttBuildResult::Ready;
+    }
+
+    if (!any) {
+        LOGW("cfg base skipped: no data for %s", kPoolDeviceCfgTopicBase);
+        return MqttBuildResult::NoLongerNeeded;
+    }
+
+    buildCtx.payload[pos++] = '}';
+    buildCtx.payload[pos] = '\0';
+    buildCtx.topicLen = (uint16_t)topicLen;
+    buildCtx.payloadLen = (uint16_t)pos;
+    buildCtx.qos = 1;
+    buildCtx.retain = true;
+    return MqttBuildResult::Ready;
+}
+
+MqttBuildResult PoolDeviceModule::buildCfgBasePdmrt_(MqttBuildContext& buildCtx)
+{
+    if (!cfgStore_) return MqttBuildResult::RetryLater;
+    if (!buildCtx.topic || buildCtx.topicCapacity == 0U || !buildCtx.payload || buildCtx.payloadCapacity == 0U) {
+        return MqttBuildResult::PermanentError;
+    }
+    if (!mqttSvc_ || !mqttSvc_->formatTopic) return MqttBuildResult::RetryLater;
+
+    char relativeTopic[Limits::Mqtt::Buffers::DynamicTopic] = {0};
+    size_t topicLen = 0U;
+    if (!MqttConfigRouteProducer::buildRelativeTopic(relativeTopic,
+                                                     sizeof(relativeTopic),
+                                                     kPoolDeviceCfgRuntimeTopicBase,
+                                                     "",
+                                                     topicLen)) {
+        return MqttBuildResult::PermanentError;
+    }
+    mqttSvc_->formatTopic(mqttSvc_->ctx, relativeTopic, buildCtx.topic, buildCtx.topicCapacity);
+    if (buildCtx.topic[0] == '\0') return MqttBuildResult::PermanentError;
+    topicLen = strnlen(buildCtx.topic, buildCtx.topicCapacity);
+
+    buildCtx.payload[0] = '{';
+    buildCtx.payload[1] = '\0';
+    size_t pos = 1U;
+    bool any = false;
+    bool truncatedPayload = false;
+
+    for (uint8_t i = 0; i < POOL_DEVICE_MAX; ++i) {
+        if (!slots_[i].used) continue;
+
+        char moduleJson[640] = {0};
+        bool truncatedModule = false;
+        const bool hasAny = cfgStore_->toJsonModule(cfgRuntimeModuleName_[i],
+                                                    moduleJson,
+                                                    sizeof(moduleJson),
+                                                    &truncatedModule);
+        if (truncatedModule) {
+            truncatedPayload = true;
+            break;
+        }
+        if (!hasAny) continue;
+
+        const int w = snprintf(buildCtx.payload + pos,
+                               buildCtx.payloadCapacity - pos,
+                               "%s\"%s\":%s",
+                               any ? "," : "",
+                               slots_[i].id,
+                               moduleJson);
+        if (!(w > 0 && (size_t)w < (buildCtx.payloadCapacity - pos))) {
+            truncatedPayload = true;
+            break;
+        }
+        pos += (size_t)w;
+        any = true;
+    }
+
+    if (truncatedPayload || pos + 2U > buildCtx.payloadCapacity) {
+        if (!writeErrorJson(buildCtx.payload, buildCtx.payloadCapacity, ErrorCode::CfgTruncated, "cfg/pdmrt")) {
+            snprintf(buildCtx.payload, buildCtx.payloadCapacity, "{\"ok\":false}");
+        }
+        buildCtx.topicLen = (uint16_t)topicLen;
+        buildCtx.payloadLen = (uint16_t)strnlen(buildCtx.payload, buildCtx.payloadCapacity);
+        buildCtx.qos = 1;
+        buildCtx.retain = true;
+        return MqttBuildResult::Ready;
+    }
+
+    if (!any) {
+        LOGW("cfg base skipped: no data for %s", kPoolDeviceCfgRuntimeTopicBase);
+        return MqttBuildResult::NoLongerNeeded;
+    }
+
+    buildCtx.payload[pos++] = '}';
+    buildCtx.payload[pos] = '\0';
+    buildCtx.topicLen = (uint16_t)topicLen;
+    buildCtx.payloadLen = (uint16_t)pos;
+    buildCtx.qos = 1;
+    buildCtx.retain = true;
+    return MqttBuildResult::Ready;
+}
+
 void PoolDeviceModule::onEventStatic_(const Event& e, void* user)
 {
     if (!user) return;
@@ -1224,9 +1404,10 @@ uint32_t PoolDeviceModule::toSeconds_(uint64_t ms)
 void PoolDeviceModule::init(ConfigStore& cfg, ServiceRegistry& services)
 {
     constexpr uint8_t kCfgModuleId = (uint8_t)ConfigModuleId::PoolDevice;
-    const uint8_t cfgRouteCap = (uint8_t)(POOL_DEVICE_MAX * 2U);
+    const uint8_t cfgRouteCap = (uint8_t)(2U + POOL_DEVICE_MAX * 2U);
     cfgStore_ = &cfg;
     logHub_ = services.get<LogHubService>("loghub");
+    mqttSvc_ = services.get<MqttService>("mqtt");
     ioSvc_ = services.get<IOServiceV2>("io");
     (void)services.add("pooldev", &poolSvc_);
     cmdSvc_ = services.get<CommandService>("cmd");
@@ -1250,6 +1431,27 @@ void PoolDeviceModule::init(ConfigStore& cfg, ServiceRegistry& services)
         cfgRoutes_ = new (std::nothrow) MqttConfigRouteProducer::Route[cfgRouteCap];
     }
     cfgRouteCount_ = 0;
+    if (cfgRoutes_ && cfgRouteCount_ < cfgRouteCap) {
+        MqttConfigRouteProducer::Route& cfgBaseRoute = cfgRoutes_[cfgRouteCount_++];
+        cfgBaseRoute = MqttConfigRouteProducer::Route{};
+        cfgBaseRoute.messageId = kCfgMsgBasePdm;
+        cfgBaseRoute.branch = {(uint8_t)ConfigModuleId::PoolDevice, ConfigBranchRef::UnknownLocalBranch};
+        cfgBaseRoute.topicSuffix = "";
+        cfgBaseRoute.changePriority = (uint8_t)MqttPublishPriority::Low;
+        cfgBaseRoute.customBuild = &PoolDeviceModule::buildCfgBasePdmStatic_;
+        cfgBaseRoute.topicBase = kPoolDeviceCfgTopicBase;
+    }
+    if (cfgRoutes_ && cfgRouteCount_ < cfgRouteCap) {
+        MqttConfigRouteProducer::Route& cfgRuntimeBaseRoute = cfgRoutes_[cfgRouteCount_++];
+        cfgRuntimeBaseRoute = MqttConfigRouteProducer::Route{};
+        cfgRuntimeBaseRoute.messageId = kCfgMsgBasePdmrt;
+        cfgRuntimeBaseRoute.branch = {(uint8_t)ConfigModuleId::PoolDevice, ConfigBranchRef::UnknownLocalBranch};
+        cfgRuntimeBaseRoute.topicSuffix = "";
+        cfgRuntimeBaseRoute.changePriority = (uint8_t)MqttPublishPriority::Low;
+        cfgRuntimeBaseRoute.customBuild = &PoolDeviceModule::buildCfgBasePdmrtStatic_;
+        cfgRuntimeBaseRoute.topicBase = kPoolDeviceCfgRuntimeTopicBase;
+    }
+
     for (uint8_t i = 0; i < POOL_DEVICE_MAX; ++i) {
         PoolDeviceSlot& s = slots_[i];
         if (!s.used) continue;
@@ -1270,19 +1472,21 @@ void PoolDeviceModule::init(ConfigStore& cfg, ServiceRegistry& services)
         if (cfgRoutes_ && cfgRouteCount_ < cfgRouteCap) {
             MqttConfigRouteProducer::Route& cfgRoute = cfgRoutes_[cfgRouteCount_++];
             cfgRoute = MqttConfigRouteProducer::Route{};
-            cfgRoute.messageId = (uint16_t)(1U + i);
+            cfgRoute.messageId = (uint16_t)(kCfgMsgPdmSlotBase + i);
             cfgRoute.branch = {(uint8_t)ConfigModuleId::PoolDevice, localBranchId};
             cfgRoute.moduleName = cfgModuleName_[i];
-            cfgRoute.topicSuffix = cfgModuleName_[i];
+            cfgRoute.topicSuffix = s.id;
+            cfgRoute.topicBase = kPoolDeviceCfgTopicBase;
             cfgRoute.changePriority = (uint8_t)MqttPublishPriority::Normal;
         }
         if (cfgRoutes_ && cfgRouteCount_ < cfgRouteCap) {
             MqttConfigRouteProducer::Route& cfgRuntimeRoute = cfgRoutes_[cfgRouteCount_++];
             cfgRuntimeRoute = MqttConfigRouteProducer::Route{};
-            cfgRuntimeRoute.messageId = (uint16_t)(1U + POOL_DEVICE_MAX + i);
+            cfgRuntimeRoute.messageId = (uint16_t)(kCfgMsgPdmrtSlotBase + i);
             cfgRuntimeRoute.branch = {(uint8_t)ConfigModuleId::PoolDevice, runtimeBranchId};
             cfgRuntimeRoute.moduleName = cfgRuntimeModuleName_[i];
-            cfgRuntimeRoute.topicSuffix = cfgRuntimeModuleName_[i];
+            cfgRuntimeRoute.topicSuffix = s.id;
+            cfgRuntimeRoute.topicBase = kPoolDeviceCfgRuntimeTopicBase;
             cfgRuntimeRoute.changePriority = (uint8_t)MqttPublishPriority::Normal;
         }
 
@@ -1512,6 +1716,7 @@ void PoolDeviceModule::init(ConfigStore& cfg, ServiceRegistry& services)
 
 void PoolDeviceModule::onConfigLoaded(ConfigStore&, ServiceRegistry& services)
 {
+    mqttSvc_ = services.get<MqttService>("mqtt");
     if (!cfgMqttPub_) {
         cfgMqttPub_ = new (std::nothrow) MqttConfigRouteProducer();
     }

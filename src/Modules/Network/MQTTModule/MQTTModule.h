@@ -24,6 +24,7 @@ struct MQTTConfig {
     char user[Limits::Mqtt::Buffers::User] = FLOW_WIRDEF_MQ_USER;
     char pass[Limits::Mqtt::Buffers::Pass] = FLOW_WIRDEF_MQ_PASS;
     char baseTopic[Limits::Mqtt::Buffers::BaseTopic] = FLOW_WIRDEF_MQ_BASE;
+    char topicDeviceId[Limits::Mqtt::Buffers::DeviceId] = FLOW_WIRDEF_MQ_TID;
 };
 
 /** @brief MQTT connection state. */
@@ -171,6 +172,11 @@ private:
         NVS_KEY(NvsKeys::Mqtt::BaseTopic), "baseTopic", "mqtt", ConfigType::CharArray,
         (char*)cfgData_.baseTopic, ConfigPersistence::Persistent, sizeof(cfgData_.baseTopic)
     };
+    // CFGDOC: {"label":"ID device MQTT topic","help":"Segment <deviceId> des topics MQTT. Vide = auto (MAC)."}
+    ConfigVariable<char,0> topicDeviceIdVar_{
+        NVS_KEY(NvsKeys::Mqtt::TopicDeviceId), "topicDeviceId", "mqtt", ConfigType::CharArray,
+        (char*)cfgData_.topicDeviceId, ConfigPersistence::Persistent, sizeof(cfgData_.topicDeviceId)
+    };
     // CFGDOC: {"label":"MQTT actif","help":"Active ou désactive le client MQTT."}
     ConfigVariable<bool,0> enabledVar_{
         NVS_KEY(NvsKeys::Mqtt::Enabled), "enabled", "mqtt", ConfigType::Bool,
@@ -239,6 +245,12 @@ private:
     uint32_t parseFailCount_ = 0;
     uint32_t handlerFailCount_ = 0;
     uint32_t oversizeDropCount_ = 0;
+    uint32_t lastEnqueueRejectLogMs_ = 0;
+    uint32_t occLastReportMs_ = 0;
+    uint16_t occMaxJobs_ = 0;
+    uint16_t occMaxHigh_ = 0;
+    uint16_t occMaxNormal_ = 0;
+    uint16_t occMaxLow_ = 0;
 
     MqttPublishProducer ackProducerDesc_{};
     MqttPublishProducer statusProducerDesc_{};
@@ -246,6 +258,7 @@ private:
     MqttPublishProducer alarmProducerDesc_{};
 
     void setState_(MQTTState s);
+    void refreshTopicDeviceId_();
     void buildTopics_();
     void enqueueAlarmFullSync_();
 
@@ -267,6 +280,8 @@ private:
     void processRxCmd_(const RxMsg& msg);
     void processRxCfgSet_(const RxMsg& msg);
     void publishRxError_(const char* ackTopicSuffix, ErrorCode code, const char* where, bool parseFailure);
+    void updateAndReportQueueOccupancy_(uint32_t nowMs);
+    void tickProducers_(uint32_t nowMs);
 
     bool enqueueAck_(const char* topicSuffix,
                      const char* payload,
@@ -278,6 +293,18 @@ private:
     void processJobs_(uint32_t nowMs);
 
     bool enqueueJob_(uint8_t producerId, uint16_t messageId, uint8_t priority, uint8_t flags);
+    void snapshotQueueStatsNoLock_(uint16_t& jobsUsed,
+                                   uint16_t& highCount,
+                                   uint16_t& normalCount,
+                                   uint16_t& lowCount) const;
+    void logEnqueueReject_(uint8_t producerId,
+                           uint16_t messageId,
+                           uint8_t priority,
+                           const char* reason,
+                           uint16_t jobsUsed,
+                           uint16_t highCount,
+                           uint16_t normalCount,
+                           uint16_t lowCount);
     bool queuePush_(uint8_t prio, const JobQueueItem& item);
     bool queuePop_(uint8_t prio, JobQueueItem& out);
     bool queueSlot_(uint8_t slotIdx, uint8_t prio, bool invalidateOld);

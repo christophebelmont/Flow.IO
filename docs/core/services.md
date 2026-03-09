@@ -87,9 +87,15 @@ services.add("myservice", &svc);
 - observation (`usedCount/activeMask/isActive`)
 
 ### `MqttService`
-- publication (`publish(topic,payload,qos,retain)`)
-- format topic (`formatTopic(suffix)`)
-- état (`isConnected`)
+- enqueue job (`enqueue(producerId, messageId, prio, flags)`)
+- enregistrement producteur (`registerProducer(producer)`)
+- format topic (`formatTopic(suffix, out, outLen)`)
+- état transport (`isConnected`)
+
+Le service MQTT est **job-based**:
+- le service ne prend plus directement `topic/payload` en entrée
+- chaque producteur conserve son mapping local `messageId -> build topic/payload`
+- le cœur MQTT construit/publie au dernier moment via `MqttBuildContext`
 
 ### `HAService`
 - enregistrement entités discovery:

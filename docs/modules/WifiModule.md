@@ -34,7 +34,7 @@ Type: module actif.
 
 ## Config / NVS
 
-Branche: `ConfigBranchId::Wifi` (`module: wifi`)
+Module config: `wifi` (`moduleId = ConfigModuleId::Wifi`, branche locale `1`)
 - `enabled` (`wifi_en`)
 - `ssid` (`wifi_ssid`)
 - `pass` (`wifi_pass`)

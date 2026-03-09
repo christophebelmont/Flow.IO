@@ -31,8 +31,11 @@ constexpr size_t MaxNvsKeyLen = 15;
 /** @brief FreeRTOS log queue length used by `LogHub` (`LogHubModule::init`).
  *  Increased moderately to absorb boot-time log bursts before log dispatcher task starts. */
 constexpr uint8_t LogQueueLen = 64;
-/** @brief FreeRTOS event queue length used by `EventBus` (`EventBus::QUEUE_LENGTH`). */
-constexpr uint8_t EventQueueLen = 16;
+/** @brief FreeRTOS event queue length used by `EventBus` (`EventBus::QUEUE_LENGTH`).
+ *  Sized to absorb startup bursts while limiting DRAM usage. */
+constexpr uint8_t EventQueueLen = 32;
+/** @brief Maximum number of EventBus subscribers (`EventBus::MAX_SUBSCRIBERS`). */
+constexpr uint8_t EventSubscribersMax = 50;
 /** @brief MQTT-specific limits grouped by concern to keep `SystemLimits` readable. */
 namespace Mqtt {
 

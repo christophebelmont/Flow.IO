@@ -37,7 +37,7 @@ Type: module actif (event-driven par notification task).
 
 ## Config / NVS
 
-Branche `ConfigBranchId::Ha` (`module: ha`):
+Module config: `ha` (`moduleId = ConfigModuleId::Ha`, branche locale `1`):
 - `enabled`
 - `vendor`
 - `device_id`
@@ -61,10 +61,16 @@ Réactions:
 
 ## MQTT
 
+- producteur MQTT enregistré (`producerId` dédié HA) sur le cœur TX unifié
+- jobs HA en mode IDs (`producerId + messageId`), sans publication directe module -> broker
+- build topic/payload discovery à la demande via `MqttBuildContext` (buffer central MQTT)
 - construit topics discovery:
   - `<discoveryPrefix>/<component>/<nodeTopicId>/<objectId>/config`
+- préfixe `object_id` de type `flowioNNN_*`:
+  - `NNN` dérive du `deviceId` MQTT effectif (`mqtt.topicDeviceId` / `mq_tid` si défini, sinon fallback auto)
 - payloads incluent:
   - device metadata
+  - `device.identifiers[0] = <vendor>-<mqttDeviceIdEffectif>` (donc suit `mqtt.topicDeviceId` / `mq_tid` si défini)
   - `availability` basée sur topic `status`
 - capteurs diagnostic natifs publiés:
   - `alarms_pack` (`rt/alarms/p`)

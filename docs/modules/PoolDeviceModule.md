@@ -52,9 +52,10 @@ Codes retour: `POOLDEV_SVC_OK`, `...UNKNOWN_SLOT`, `...NOT_READY`, `...DISABLED`
 
 ## Config / NVS
 
-Branches config par slot:
-- métier: `pdm/pd0` ... `pdm/pd7` (`ConfigBranchId::PoolDevicePd0..Pd7`)
-- runtime persistant: `pdmrt/pd0` ... `pdmrt/pd7` (`ConfigBranchId::PoolDeviceRuntimePd0..Pd7`)
+Branches config (modèle 8/8):
+- `moduleId = ConfigModuleId::PoolDevice`
+- branches locales métier: `1..8` (`pdm/pd0..pd7`)
+- branches locales runtime persistant: `9..16` (`pdmrt/pd0..pd7`)
 
 Clés persistantes (format):
 - `pd%uen` -> `enabled`
@@ -90,7 +91,7 @@ Abonnements:
 - `EventId::DataChanged`
   - sur `DATAKEY_TIME_READY` à `true` -> demande reconcile de période
 - `EventId::ConfigChanged`
-  - branche `ConfigBranchId::Time` -> demande reconcile de période (ex: `week_start_mon`)
+  - branche `moduleId=ConfigModuleId::Time` (ex: `week_start_mon`) -> reconcile de période
 
 Publications:
 - aucune publication EventBus directe
@@ -167,7 +168,20 @@ Le module implémente `IRuntimeSnapshotProvider`:
   - `rt/pdm/metrics/pdN`
 - `buildRuntimeSnapshot(idx, ...)` -> JSON complet state/metrics
 
-Publication assurée par `MQTTModule` via mux runtime global.
+Publication assurée par le producteur runtime intégré à `MQTTModule` (`RuntimeProducer`), via jobs `(producerId,messageId)`.
+
+## Publication config MQTT (`cfg/*`)
+
+Publication autoportée via `MqttConfigRouteProducer` local au module:
+- agrégat métier: `cfg/pdm`
+- détail métier par slot: `cfg/pdm/pdN`
+- agrégat runtime persistant: `cfg/pdmrt`
+- détail runtime persistant par slot: `cfg/pdmrt/pdN`
+
+Le module garde localement:
+- le mapping changement config -> `messageId`
+- le mapping `messageId` -> topic relatif
+- le build éventuel custom de payload
 
 ## Home Assistant
 

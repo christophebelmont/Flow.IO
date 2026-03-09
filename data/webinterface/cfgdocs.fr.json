@@ -1,9 +1,9 @@
 {
   "_meta": {
     "generated": true,
-    "total": 257,
-    "decl_total": 209,
-    "decl_with_cfgdoc": 96,
+    "total": 258,
+    "decl_total": 210,
+    "decl_with_cfgdoc": 97,
     "missing_cfgdoc_count": 113,
     "manual_overrides_total": 18,
     "manual_overrides_applied": 0
@@ -1355,6 +1355,15 @@
       "label": "Port MQTT",
       "help": "Port TCP utilisé pour la connexion au broker.",
       "var": "portVar_",
+      "source": "cfgdoc"
+    },
+    "mqtt/topicDeviceId": {
+      "module": "mqtt",
+      "name": "topicDeviceId",
+      "type": "CharArray",
+      "label": "ID device MQTT topic",
+      "help": "Segment <deviceId> des topics MQTT. Vide = auto (MAC).",
+      "var": "topicDeviceIdVar_",
       "source": "cfgdoc"
     },
     "mqtt/user": {

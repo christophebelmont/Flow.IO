@@ -33,7 +33,7 @@ Aucun.
 
 ## Config / NVS
 
-Branche: `ConfigBranchId::SystemMonitor` (`module: sysmon`)
+Module config: `sysmon` (`moduleId = ConfigModuleId::SystemMonitor`, branche locale `1`)
 - `trace_period_ms` (`NvsKeys::SystemMonitor::TracePeriodMs`)
 
 ## EventBus / DataStore / MQTT

@@ -1,208 +1,94 @@
-# DataStore et Flux Runtime (état actuel)
+# DataStore / EventBus / MQTT (état actuel)
 
 ## Introduction
 
 Flow.IO sépare les responsabilités en 4 blocs:
-1. `ConfigStore`: configuration persistante (NVS), chargée au boot puis modifiable.
-2. `DataStore`: état runtime en RAM (`RuntimeData`).
-3. `EventBus`: signalisation asynchrone (`EventId`, payloads bornés à 48 octets).
-4. `RuntimeDispatchCore` + sink: décision de publication runtime (throttle, immédiat, retry) découplée du transport.
+1. `ConfigStore`: configuration persistante (NVS)
+2. `DataStore`: état runtime RAM (`RuntimeData`)
+3. `EventBus`: signalisation asynchrone (payload max `48` octets)
+4. `MQTTModule`: transport MQTT unifié job-based
 
-Ce document décrit le **flux réellement implémenté** après le refactor big-bang runtime.
+## Contrats clés
 
-## Structures et contrats clés
-
-- `RuntimeData` (agrégat): `wifi`, `time`, `mqtt`, `ha`, `io`, `pool`.
-- `DataKey` (`include/Core/DataKeys.h`): identifiants stables des champs runtime.
 - `DataChangedPayload`:
   - `DataKey id`
+- `ConfigChangedPayload`:
+  - `moduleId` (8 bits)
+  - `localBranchId` (8 bits)
+  - `nvsKey`, `module` (traces/debug)
 - `IRuntimeSnapshotProvider`:
   - `runtimeSnapshotCount()`
   - `runtimeSnapshotSuffix()`
   - `runtimeSnapshotClass()`
   - `runtimeSnapshotAffectsKey()`
   - `buildRuntimeSnapshot()`
-- `RuntimeRouteClass`:
-  - `NumericThrottled`
-  - `ActuatorImmediate`
+- `MqttPublishProducer`:
+  - `buildMessage(...)`
+  - callbacks published/deferred/dropped
 
 ## DataStore: mécanique exacte
 
 Écriture runtime standard:
-1. un module met à jour `RuntimeData` via un helper `set...`.
-2. le helper appelle `DataStore::notifyChanged(key)`.
-3. `DataStore::notifyChanged()` publie `EventId::DataChanged` avec `DataChangedPayload{id}`.
+1. un module met à jour `RuntimeData` via helper `set...`
+2. le helper appelle `DataStore::notifyChanged(key)`
+3. `DataStore` publie `EventId::DataChanged`
 
 Important:
-- `DataSnapshotAvailable` n'est plus utilisé.
-- il n'y a plus de `_dirtyFlags` cumulatif dans `DataStore`.
+- pas de store d'événements persistant
+- EventBus est volatil, queue-borné
 
-## Flowchart 1: enregistrements au démarrage
+## ConfigStore: mécanique exacte
 
-```mermaid
-flowchart TD
-A["main_flowio::setup()"] --> B["moduleManager.add(...)\n(inclut mqttRuntimeDispatchModule)"]
-B --> C["mqttRuntimeDispatchModule.registerProvider(io/pooldev/poollogic)"]
-C --> D["ModuleManager::initAll(cfg, services)"]
+1. module déclare ses variables (`registerVar`)
+2. moduleId/localBranchId sont stockés avec chaque variable
+3. `ConfigStore::set/applyJson` persiste puis publie `EventId::ConfigChanged`
 
-D --> E["Phase init() de chaque module"]
-E --> E1["DataStoreModule::init\nsetEventBus + services.add('datastore')"]
-E --> E2["EventBusModule::init\nservices.add('eventbus')"]
-E --> E3["MQTTModule::init\nservices.add('mqtt')"]
-E --> E4["IOModule::init\nregisterVar + services.add('io')"]
-E --> E5["PoolDeviceModule::init\nservices.add('pooldev')"]
-E --> E6["MqttRuntimeDispatchModule::init\ncore_.setSink(MqttRuntimeSink) + subscribe(DataChanged)"]
+Le routage métier config vers MQTT reste local aux modules (producteurs cfg).
 
-D --> F["ConfigStore::loadPersistent()"]
-F --> G["Phase onConfigLoaded()"]
-G --> G1["IOModule::onConfigLoaded\nconfigureRuntime_()"]
-G --> G2["PoolDeviceModule::onConfigLoaded\nloadPersistedMetrics_()"]
-G --> G3["PoolLogicModule::onConfigLoaded\nensureDailySlot_()"]
-G --> G4["MqttRuntimeDispatchModule::onConfigLoaded\nRuntimeDispatchCore::onConfigLoaded()"]
-
-D --> H["startTask() modules actifs"]
-H --> H1["EventBusModule::loop\nEventBus::dispatch(8)"]
-H --> H2["MqttRuntimeDispatchModule::loop\nRuntimeDispatchCore::tick() (25 ms)"]
-H --> H3["IOModule::loop / PoolDeviceModule::loop / MQTTModule::loop"]
-```
-
-### Fonctions impliquées (startup)
-
-- `main_flowio::setup()`
-- `ModuleManager::initAll()`
-- `ConfigStore::loadPersistent()`
-- `Module::init()` / `Module::onConfigLoaded()` / `Module::startTask()`
-- `MqttRuntimeDispatchModule::registerProvider()`
-- `RuntimeDispatchCore::onConfigLoaded()`
-- `RuntimeDispatchCore::rebuildRoutes_()`
-- `RuntimeDispatchCore::markAllRoutesDirty(true)`
-
-### Structures manipulées (startup)
-
-- `ServiceRegistry`
-- `ConfigStore` / `ConfigVariable<>`
-- `RuntimeDispatchCore::providers_[]`
-- `RuntimeDispatchCore::routes_[]` (`RouteEntry`)
-- `MqttRuntimeDispatchModule::MqttRuntimeSink`
-- `EventBus` (`QueuedEvent`)
-
-## Flowchart 2: changement d'un état numérique runtime
-
-Exemple typique: mesure analogique (`rt/io/input/aN`).
+## Flow runtime -> MQTT
 
 ```mermaid
 flowchart TD
-A["IOModule::loop()"] --> B["IOModule::ioTick_(now)"]
-B --> C["scheduler_.tick(now)"]
-C --> D["tickFastAds_/tickSlowDs_"]
-D --> E["IOModule::processAnalogDefinition_(idx)"]
-
-E --> F["slot.endpoint->update(value,true,ts)"]
-F --> G["callback def.onValueChanged(ctx,value)"]
-G --> H["main_flowio::onIoFloatValue(ctx,value)"]
-H --> I["setIoEndpointFloat(ds, idx, value, millis)"]
-
-I --> J["RuntimeData.io.endpoints[idx] = IOEndpointRuntime"]
-J --> K["DataStore::notifyChanged(DataKey=IoBase+idx)"]
-K --> L["EventBus::post(EventId::DataChanged, DataChangedPayload)"]
-
-L --> M["EventBus::dispatch() -> MqttRuntimeDispatchModule::onEvent_()"]
-M --> N["RuntimeDispatchCore::onDataChanged(change)"]
-N --> O["provider.runtimeSnapshotAffectsKey(...) ? markRouteDirty(i,false)"]
-O --> P["MqttRuntimeDispatchModule::loop() -> RuntimeDispatchCore::tick()"]
-P --> Q{"routeClass == NumericThrottled ?"}
-Q -->|oui| R["throttle 10s (kNumericThrottleMs)"]
-R --> S["provider.buildRuntimeSnapshot(...)"]
-Q -->|non| S
-S --> T["MqttRuntimeSink::publish -> MQTTModule::publish -> esp_mqtt_client_publish"]
+A["Module runtime (io/pooldev/poollogic)"] --> B["setXxxRuntime(...) + DataStore::notifyChanged"]
+B --> C["EventBus::post(DataChanged)"]
+C --> D["MQTTModule::onEvent(DataChanged)"]
+D --> E["RuntimeProducer::onDataChanged(key)"]
+E --> F["enqueue(producerId=Runtime,messageId=route)"]
+F --> G["MQTT core dequeue/build/publish"]
 ```
 
-### Fonctions impliquées (numérique)
-
-- `IOModule::processAnalogDefinition_()`
-- `main_flowio::onIoFloatValue()`
-- `setIoEndpointFloat()`
-- `DataStore::notifyChanged()`
-- `EventBus::post()`
-- `MqttRuntimeDispatchModule::onEvent_()`
-- `RuntimeDispatchCore::onDataChanged()`
-- `RuntimeDispatchCore::markRouteDirty_()`
-- `RuntimeDispatchCore::tick()`
-- `IRuntimeSnapshotProvider::buildRuntimeSnapshot()`
-- `MQTTModule::publish()`
-
-### Structures manipulées (numérique)
-
-- `IOModule::AnalogSlot`
-- `IOAnalogSample`
-- `IOEndpointRuntime`
-- `DataChangedPayload`
-- `RuntimeDispatchCore::RouteEntry` / `RouteSnapshot`
-
-## Flowchart 3: changement d'un état actuateur runtime
-
-Exemple typique: sortie digitale (`rt/io/output/dN`) pilotée par `PoolDeviceModule`.
+## Flow config -> MQTT
 
 ```mermaid
 flowchart TD
-A["PoolDeviceModule::tickDevices_() ou cmd"] --> B["PoolDeviceModule::writeIo_(ioId,on)"]
-B --> C["ioSvc_->writeDigital(ctx,id,on,ts)"]
-C --> D["IOModule::svcWriteDigital_ -> ioWriteDigital_()"]
-
-D --> E["DigitalActuatorEndpoint::write(in)"]
-E --> F["setIoEndpointBool(ds, rtIdx, on, ts)"]
-F --> G["DataStore::notifyChanged(IoBase+rtIdx)"]
-G --> H["EventBus::post(DataChangedPayload)"]
-
-H --> I["MqttRuntimeDispatchModule::onEvent_ -> RuntimeDispatchCore::onDataChanged"]
-I --> J["MqttRuntimeDispatchModule::loop -> RuntimeDispatchCore::tick"]
-J --> K["routeClass == ActuatorImmediate => pas de throttle 10s"]
-K --> L["buildRuntimeSnapshot(topic rt/io/output/dN)"]
-L --> M["mqttSvc.publish -> MQTTModule::publish"]
+A["ConfigStore::set/applyJson"] --> B["EventBus::post(ConfigChanged)"]
+B --> C["MqttConfigRouteProducer du module concerné"]
+C --> D["enqueue(producerId module,messageId local)"]
+D --> E["MQTT core build tardif via buildMessage"]
+E --> F["publish <base>/<device>/cfg/*"]
 ```
 
-### Fonctions impliquées (actuateur)
+## Politique runtime
 
-- `PoolDeviceModule::writeIo_()`
-- `IOModule::svcWriteDigital_()`
-- `IOModule::ioWriteDigital_()`
-- `setIoEndpointBool()`
-- `DataStore::notifyChanged()`
-- `RuntimeDispatchCore::onDataChanged()`
-- `RuntimeDispatchCore::tick()`
-- `MQTTModule::publish()`
+- routes `ActuatorImmediate`: priorité haute
+- routes `NumericThrottled`: priorité normale + throttling local (`10 s`)
+- coalescing par `(producerId,messageId)` dans le cœur
+- retry/backoff transport géré au centre MQTT
 
-### Structures manipulées (actuateur)
+## Politique config
 
-- `IOModule::DigitalSlot`
-- `IOEndpointValue`
-- `IOEndpointRuntime`
-- `DataChangedPayload`
-- `RuntimeDispatchCore::RouteEntry`
+- producteurs cfg module-owned
+- pending/retry local via `MqttConfigRouteProducer`
+- timeout route cfg après refus prolongé (`10 s`)
+- métriques `cfgq ...` toutes les `5 s` quand actif
 
-## Politique de dispatch runtime (état actuel)
+## Points de surveillance runtime
 
-- `NumericThrottled`: publication max 1 fois / 10s par route.
-- `ActuatorImmediate`: publication immédiate, sans attendre la fenêtre 10s.
-- Retry publication: backoff exponentiel `250ms -> 500ms -> ... -> 5s`.
-- Déduplication: si `ts <= lastPublishedTs` (et pas `force`), la route n'est pas republiée.
-- Reconnexion MQTT: `DATAKEY_MQTT_READY=true` force un `markAllRoutesDirty(true)`.
-
-## DataKeys et plages runtime
-
-Référence `include/Core/DataKeys.h`:
-- clés fixes réseau/temps/mqtt/ha (`1..12` hors trous)
-- `40..63`: IO endpoints (`IoBase + idx`)
-- `80..87`: pool-device state
-- `88..95`: pool-device metrics
-
-## Rôle exact de MQTTModule après refactor
-
-`MQTTModule` ne fait plus la logique de throttling runtime par route.
-Il reste responsable de:
-- transport MQTT (`publish`, connexion, QoS/outbox guards, low-heap guards)
-- commandes `cmd` / `cfg/set`
-- publication config (`cfg/*`), alarmes et snapshots périodiques non liés au dispatcher runtime (`rt/network/state`, `rt/system/state`)
-
-Le throttling runtime capteurs/actionneurs est porté par `RuntimeDispatchCore`.
-Le transport MQTT est branché via `MqttRuntimeDispatchModule::MqttRuntimeSink`.
+- EventBus:
+  - `post stats 5s: ...` (`DEBUG`, `WARN` si drops > 0)
+  - `sub stats 5s: ...` (`DEBUG`, `WARN` si rejets/capacité)
+  - `sub reject ...`
+- MQTT:
+  - `queue occ max/boot ...` (`DEBUG`, métrologie max boot)
+  - `enqueue reject ...`
+  - `cfgq ...` (`DEBUG`, `WARN` si `tto > 0`)

@@ -129,7 +129,11 @@ private:
     bool configureRuntime_();
     void tickDevices_(uint32_t nowMs);
     static void onEventStatic_(const Event& e, void* user);
+    static MqttBuildResult buildCfgBasePdmStatic_(void* ctx, uint16_t messageId, MqttBuildContext& buildCtx);
+    static MqttBuildResult buildCfgBasePdmrtStatic_(void* ctx, uint16_t messageId, MqttBuildContext& buildCtx);
     void onEvent_(const Event& e);
+    MqttBuildResult buildCfgBasePdm_(MqttBuildContext& buildCtx);
+    MqttBuildResult buildCfgBasePdmrt_(MqttBuildContext& buildCtx);
     void resetDailyCounters_();
     void resetWeeklyCounters_();
     void resetMonthlyCounters_();
@@ -153,6 +157,7 @@ private:
     const LogHubService* logHub_ = nullptr;
     const IOServiceV2* ioSvc_ = nullptr;
     const CommandService* cmdSvc_ = nullptr;
+    const MqttService* mqttSvc_ = nullptr;
     const HAService* haSvc_ = nullptr;
     PoolDeviceService poolSvc_{
         svcCount_,

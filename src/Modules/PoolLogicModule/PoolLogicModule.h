@@ -46,6 +46,7 @@ public:
     bool runtimeSnapshotAffectsKey(uint8_t idx, DataKey key) const override;
     bool buildRuntimeSnapshot(uint8_t idx, char* out, size_t len, uint32_t& maxTsOut) const override;
     void setStartupReady(bool ready) { startupReady_ = ready; }
+    static MqttBuildResult buildCfgBaseStatic_(void* ctx, uint16_t messageId, MqttBuildContext& buildCtx);
 
 private:
     struct DeviceFsm {
@@ -179,6 +180,7 @@ private:
     const PoolDeviceService* poolSvc_ = nullptr;
     const HAService* haSvc_ = nullptr;
     const CommandService* cmdSvc_ = nullptr;
+    const MqttService* mqttSvc_ = nullptr;
     const AlarmService* alarmSvc_ = nullptr;
     const LogHubService* logHub_ = nullptr;
     MqttConfigRouteProducer* cfgMqttPub_ = nullptr;
@@ -347,6 +349,7 @@ private:
     bool cmdFiltrationWrite_(const CommandRequest& req, char* reply, size_t replyLen);
     bool cmdFiltrationRecalc_(const CommandRequest& req, char* reply, size_t replyLen);
     bool cmdAutoModeSet_(const CommandRequest& req, char* reply, size_t replyLen);
+    MqttBuildResult buildCfgBase_(MqttBuildContext& buildCtx);
 
     void ensureDailySlot_();
     bool computeFiltrationWindow_(float waterTemp, uint8_t& startHourOut, uint8_t& stopHourOut, uint8_t& durationOut);
