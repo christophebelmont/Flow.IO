@@ -4,9 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Superviseur Flow.IO</title>
-  <script>window.__FLOW_WEB_ASSET_VERSION__="__FLOW_WEB_ASSET_VERSION__";</script>
-  <script>window.__FLOW_FIRMWARE_VERSION__="__FLOW_FIRMWARE_VERSION__";</script>
-  <link rel="stylesheet" href="/webinterface/app.css?v=__FLOW_WEB_ASSET_VERSION__" />
+  <link rel="stylesheet" href="/webinterface/app.css" />
 </head>
 <body>
   <div id="overlay" class="overlay"></div>
@@ -14,7 +12,7 @@
     <aside id="drawer" class="drawer collapsed">
       <div class="drawer-header">
         <button id="menuToggle" class="menu-btn" data-menu-toggle aria-label="Toggle menu">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 7h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"/></svg>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 6.5h18v1.8H3zm0 5.1h18v1.8H3zm0 5.1h18v1.8H3z"/></svg>
         </button>
         <div class="drawer-user">Superviseur Flow.IO</div>
       </div>
@@ -27,14 +25,14 @@
       </nav>
       <div class="drawer-footer">
         <span class="app-wordmark">Flow.IO</span>
-        <span class="app-meta">Supervisor __FLOW_FIRMWARE_VERSION__</span>
+        <span class="app-meta">Supervisor -</span>
       </div>
     </aside>
 
     <main class="content">
       <div class="mobile-topbar">
         <button class="menu-btn" data-menu-toggle aria-label="Open menu">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 7h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"/></svg>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 6.5h18v1.8H3zm0 5.1h18v1.8H3zm0 5.1h18v1.8H3z"/></svg>
         </button>
         <div class="mobile-title">Superviseur Flow.IO</div>
       </div>
@@ -184,8 +182,8 @@
               <button id="rebootSupervisor" class="btn-tonal">Redémarrer le Superviseur</button>
             </div>
             <div class="system-action">
-              <h3>Redémarrage de Flow.IO</h3>
-              <p>Demande à Flow.IO de redémarrer proprement via le lien I2C.</p>
+              <h3>Redémarrer Flow.IO</h3>
+              <p>Redémarre Flow.IO proprement via le lien I2C.</p>
               <button id="rebootFlow" class="btn-tonal">Redémarrer Flow.IO</button>
             </div>
             <div class="system-action">
@@ -259,6 +257,6 @@
     </main>
   </div>
 
-    <script src="/webinterface/app.js?v=__FLOW_WEB_ASSET_VERSION__"></script>
-  </body>
+    <script src="/webinterface/app.js"></script>
+</body>
 </html>

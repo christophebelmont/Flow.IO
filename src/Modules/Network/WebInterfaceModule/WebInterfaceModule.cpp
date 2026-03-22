@@ -24,6 +24,14 @@
 #include "Modules/Network/WifiModule/WifiRuntime.h"
 #include "WebInterfaceMenuIcons.h"
 
+#ifndef FLOW_WEB_HIDE_MENU_SVG
+#define FLOW_WEB_HIDE_MENU_SVG 0
+#endif
+
+#ifndef FLOW_WEB_UNIFY_STATUS_CARD_ICONS
+#define FLOW_WEB_UNIFY_STATUS_CARD_ICONS 0
+#endif
+
 static void sanitizeJsonString_(char* s)
 {
     if (!s) return;
@@ -60,8 +68,6 @@ constexpr uint32_t kHttpLatencyInfoMs = 40U;
 constexpr uint32_t kHttpLatencyWarnMs = 120U;
 constexpr uint32_t kHttpLatencyFlowCfgInfoMs = 200U;
 constexpr uint32_t kHttpLatencyFlowCfgWarnMs = 900U;
-constexpr const char* kWebAssetVersionToken = "__FLOW_WEB_ASSET_VERSION__";
-constexpr const char* kFirmwareVersionToken = "__FLOW_FIRMWARE_VERSION__";
 
 const char* webAssetVersion_()
 {
@@ -92,24 +98,6 @@ int flowCfgApplyHttpStatus_(const char* ackJson)
     if (strstr(ackJson, "\"code\":\"IoError\"")) return 502;
     if (strstr(ackJson, "\"code\":\"Failed\"")) return 502;
     return 500;
-}
-
-bool sendVersionedIndexHtml_(AsyncWebServerRequest* request)
-{
-    if (!request) return false;
-    File f = SPIFFS.open("/webinterface/index.html", FILE_READ);
-    if (!f) return false;
-
-    String html = f.readString();
-    f.close();
-    if (html.length() == 0) return false;
-
-    html.replace(kWebAssetVersionToken, webAssetVersion_());
-    html.replace(kFirmwareVersionToken, FirmwareVersion::Full);
-    AsyncWebServerResponse* response = request->beginResponse(200, "text/html", html);
-    addNoCacheHeaders_(response);
-    request->send(response);
-    return true;
 }
 
 bool parseFlowStatusDomainParam_(const String& raw, FlowStatusDomain& domainOut)
@@ -343,7 +331,7 @@ void WebInterfaceModule::startServer_()
             return;
         }
         AsyncWebServerResponse* response = request->beginResponse(SPIFFS, "/webinterface/app.css", "text/css");
-        addVersionedAssetCacheHeaders_(response);
+        addNoCacheHeaders_(response);
         request->send(response);
     });
     server_.on("/webinterface/app.js", HTTP_GET, [this](AsyncWebServerRequest* request) {
@@ -353,7 +341,7 @@ void WebInterfaceModule::startServer_()
         }
         AsyncWebServerResponse* response =
             request->beginResponse(SPIFFS, "/webinterface/app.js", "application/javascript");
-        addVersionedAssetCacheHeaders_(response);
+        addNoCacheHeaders_(response);
         request->send(response);
     });
     server_.on("/webinterface/cfgdocs.fr.json", HTTP_GET, [this](AsyncWebServerRequest* request) {
@@ -382,9 +370,38 @@ void WebInterfaceModule::startServer_()
         addNoCacheHeaders_(response);
         request->send(response);
     });
+    server_.on("/api/web/meta", HTTP_GET, [this](AsyncWebServerRequest* request) {
+        HttpLatencyScope latency(request, "/api/web/meta");
+        StaticJsonDocument<320> doc;
+        doc["ok"] = true;
+        doc["web_asset_version"] = webAssetVersion_();
+        doc["firmware_version"] = FirmwareVersion::Full;
+        doc["hide_menu_svg"] = (FLOW_WEB_HIDE_MENU_SVG != 0);
+        doc["unify_status_card_icons"] = (FLOW_WEB_UNIFY_STATUS_CARD_ICONS != 0);
+        doc["upms"] = (uint32_t)millis();
+        JsonObject heap = doc.createNestedObject("heap");
+        heap["free"] = (uint32_t)ESP.getFreeHeap();
+        heap["min_free"] = (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);
+
+        char out[320] = {0};
+        const size_t n = serializeJson(doc, out, sizeof(out));
+        if (n == 0 || n >= sizeof(out)) {
+            request->send(500, "application/json",
+                          "{\"ok\":false,\"err\":{\"code\":\"Failed\",\"where\":\"web.meta\"}}");
+            return;
+        }
+
+        AsyncWebServerResponse* response = request->beginResponse(200, "application/json", out);
+        addNoCacheHeaders_(response);
+        request->send(response);
+    });
     server_.on("/webinterface", HTTP_GET, [this](AsyncWebServerRequest* request) {
         HttpLatencyScope latency(request, "/webinterface");
-        if (spiffsReady_ && SPIFFS.exists("/webinterface/index.html") && sendVersionedIndexHtml_(request)) {
+        if (spiffsReady_ && SPIFFS.exists("/webinterface/index.html")) {
+            AsyncWebServerResponse* response =
+                request->beginResponse(SPIFFS, "/webinterface/index.html", "text/html");
+            addNoCacheHeaders_(response);
+            request->send(response);
             return;
         }
         AsyncWebServerResponse* response = request->beginResponse(200, "text/html", kWebInterfaceFallbackPage);

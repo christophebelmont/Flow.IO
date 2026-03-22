@@ -2,25 +2,32 @@
     const overlay = document.getElementById('overlay');
     const menuToggles = Array.from(document.querySelectorAll('[data-menu-toggle]'));
     const menuItems = Array.from(document.querySelectorAll('.menu-item'));
+    const flowCfgMenuIcon = document.querySelector('.menu-item[data-page="page-control"] .ico');
     const pages = Array.from(document.querySelectorAll('.page'));
     const appMeta = document.querySelector('.app-meta');
-    const webAssetVersion = (typeof window.__FLOW_WEB_ASSET_VERSION__ === 'string')
-      ? window.__FLOW_WEB_ASSET_VERSION__
-      : '';
+    let webAssetVersion = '';
+    let supervisorFirmwareVersion = '-';
+    let hideMenuSvg = false;
+    let unifyStatusCardIcons = false;
+    let supervisorUptimeMs = 0;
+    let supervisorHeap = {};
+
+    function applyMenuIconPreference(hidden) {
+      hideMenuSvg = !!hidden;
+      document.body.classList.toggle('menu-icons-disabled', hideMenuSvg);
+    }
+
+    function applyStatusIconPreference(unified) {
+      unifyStatusCardIcons = !!unified;
+    }
 
     function resolveSupervisorFirmwareVersion() {
-      if (typeof window.__FLOW_FIRMWARE_VERSION__ === 'string') {
-        const trimmed = window.__FLOW_FIRMWARE_VERSION__.trim();
-        if (trimmed && !/^__FLOW_[A-Z0-9_]+__$/.test(trimmed)) {
-          return trimmed;
-        }
-      }
       if (appMeta) {
         const raw = (appMeta.textContent || '').trim();
         const match = raw.match(/^Supervisor\s+(.+)$/i);
         if (match && match[1]) {
           const version = match[1].trim();
-          if (version && !/^__FLOW_[A-Z0-9_]+__$/.test(version)) {
+          if (version && version !== '-') {
             return version;
           }
         }
@@ -28,12 +35,43 @@
       return '-';
     }
 
-    const supervisorFirmwareVersion = resolveSupervisorFirmwareVersion();
+    supervisorFirmwareVersion = resolveSupervisorFirmwareVersion();
     let flowStatusLiveTimer = null;
 
     function versionedWebAssetUrl(path) {
       if (!webAssetVersion) return path;
       return path + '?v=' + encodeURIComponent(webAssetVersion);
+    }
+
+    async function loadWebMeta() {
+      try {
+        const res = await fetch('/api/web/meta', { cache: 'no-store' });
+        const data = await res.json().catch(() => null);
+        if (!res.ok || !data || data.ok !== true) return;
+
+        if (typeof data.web_asset_version === 'string') {
+          webAssetVersion = data.web_asset_version.trim();
+        }
+        applyMenuIconPreference(!!data.hide_menu_svg);
+        applyStatusIconPreference(!!data.unify_status_card_icons);
+        if (typeof data.firmware_version === 'string') {
+          const trimmed = data.firmware_version.trim();
+          if (trimmed) {
+            supervisorFirmwareVersion = trimmed;
+            if (appMeta) {
+              appMeta.textContent = 'Supervisor ' + trimmed;
+            }
+          }
+        }
+        supervisorUptimeMs = Number(data.upms) || 0;
+        supervisorHeap = (data.heap && typeof data.heap === 'object') ? data.heap : {};
+
+        const activePage = document.querySelector('.page.active');
+        if (activePage && activePage.id === 'page-status') {
+          refreshFlowStatus().catch(() => {});
+        }
+      } catch (err) {
+      }
     }
 
     function isMobileLayout() {
@@ -117,6 +155,7 @@
       if (isMobileLayout()) {
         setMobileDrawerOpen(!drawer.classList.contains('mobile-open'));
       } else {
+        if (hideMenuSvg) return;
         drawer.classList.toggle('collapsed');
       }
     }));
@@ -199,7 +238,7 @@
     let wifiScanAutoRequested = false;
     let flowStatusReqSeq = 0;
     const fieldApplyCheckIcon =
-      '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M9.2 16.6 4.9 12.3l1.4-1.4 2.9 2.9 8.5-8.5 1.4 1.4z"/></svg>';
+      '<svg viewBox="0 0 664 663" aria-hidden="true"><path fill="none" d="M646.293 331.888L17.7538 17.6187L155.245 331.888M646.293 331.888L17.753 646.157L155.245 331.888M646.293 331.888L318.735 330.228L155.245 331.888"></path><path stroke-linejoin="round" stroke-linecap="round" stroke-width="33.67" stroke="currentColor" d="M646.293 331.888L17.7538 17.6187L155.245 331.888M646.293 331.888L17.753 646.157L155.245 331.888M646.293 331.888L318.735 330.228L155.245 331.888"></path></svg>';
     const flowStatusDomainTtlMs = 20000;
     const flowStatusDomainKeys = ['system', 'wifi', 'mqtt', 'pool', 'i2c'];
     const flowStatusDomainCache = {
@@ -538,6 +577,33 @@
       return span;
     }
 
+    function buildFlowStatusReadonlySwitch(v) {
+      const on = !!v;
+      const sw = document.createElement('span');
+      sw.className = 'md3-switch status-toggle-readonly';
+      sw.setAttribute('role', 'img');
+      sw.setAttribute('aria-label', on ? 'Actif' : 'Inactif');
+      sw.title = on ? 'Actif' : 'Inactif';
+
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = on;
+      input.disabled = true;
+      input.tabIndex = -1;
+      input.setAttribute('aria-hidden', 'true');
+
+      const track = document.createElement('span');
+      track.className = 'md3-track';
+
+      const thumb = document.createElement('span');
+      thumb.className = 'md3-thumb';
+
+      sw.appendChild(input);
+      sw.appendChild(track);
+      sw.appendChild(thumb);
+      return sw;
+    }
+
     function fmtFlowUptime(ms) {
       if (!Number.isFinite(ms) || ms < 0) return '-';
       const sec = Math.floor(ms / 1000);
@@ -640,20 +706,22 @@
     }
 
     function buildFlowStatusCardIcon(iconKey, ok, label) {
+      const unifiedIconSvg =
+        '<svg viewBox="0 0 512 512" aria-hidden="true"><path d="M288 32c0-17.7-14.3-32-32-32s-32 14.3-32 32V256c0 17.7 14.3 32 32 32s32-14.3 32-32V32zM143.5 120.6c13.6-11.3 15.4-31.5 4.1-45.1s-31.5-15.4-45.1-4.1C49.7 115.4 16 181.8 16 256c0 132.5 107.5 240 240 240s240-107.5 240-240c0-74.2-33.8-140.6-86.6-184.6c-13.6-11.3-33.8-9.4-45.1 4.1s-9.4 33.8 4.1 45.1c38.9 32.3 63.5 81 63.5 135.4c0 97.2-78.8 176-176 176s-176-78.8-176-176c0-54.4 24.7-103.1 63.5-135.4z"/></svg>';
       const iconSvg = {
-        wifi: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.28 8.84a15.3 15.3 0 0 1 19.44 0l-1.42 1.42a13.3 13.3 0 0 0-16.6 0Zm3.54 3.54a10.3 10.3 0 0 1 12.36 0l-1.42 1.42a8.3 8.3 0 0 0-9.52 0Zm3.54 3.54a5.3 5.3 0 0 1 5.28 0L12 18.56Zm2.64 4.08a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3Z"/></svg>',
+        wifi: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M2.28 8.84a15.3 15.3 0 0 1 19.44 0l-1.42 1.42a13.3 13.3 0 0 0-16.6 0l-1.42-1.42zm3.54 3.54a10.3 10.3 0 0 1 12.36 0l-1.42 1.42a8.3 8.3 0 0 0-9.52 0l-1.42-1.42zm3.54 3.54a5.3 5.3 0 0 1 5.28 0L12 18.56l-2.64-2.64z"/></svg>',
         supervisor: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v2H7Zm0 4h10v2H7Zm0 4h6v2H7Z"/><path d="M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H8l-5 0V5a2 2 0 0 1 2-2Zm0 2v14h14V5Z"/></svg>',
         system: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6v2h2.5A1.5 1.5 0 0 1 19 6.5V9h2v6h-2v2.5A1.5 1.5 0 0 1 17.5 19H15v2H9v-2H6.5A1.5 1.5 0 0 1 5 17.5V15H3V9h2V6.5A1.5 1.5 0 0 1 6.5 5H9Zm-2 4v10h10V7Zm2 2h6v6H9Z"/></svg>',
-        mqtt: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 15a7 7 0 0 1 14 0h-2a5 5 0 0 0-10 0Zm3 0a4 4 0 0 1 8 0h-2a2 2 0 0 0-4 0Zm4-1.5A1.5 1.5 0 1 1 10.5 15 1.5 1.5 0 0 1 12 13.5Z"/><path d="M4 19h16v2H4Z"/></svg>',
-        pool: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 16a4 4 0 0 1 4-4h8a4 4 0 0 1 4 4v3H4Zm4-6a4 4 0 1 1 8 0Z"/></svg>',
-        pump: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h8a3 3 0 0 1 3 3v1h2a2 2 0 0 1 2 2v3h-2v-3h-2v2a3 3 0 0 1-3 3H5Zm2 2v7h6a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1Z"/><path d="M3 10h2v4H3z"/></svg>'
+        mqtt: '<svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="6.594" cy="7.156" fill="#fff" stroke="currentColor" rx="2.844" ry="2.781"/><ellipse cx="19.094" cy="8.594" fill="#fff" stroke="currentColor" rx="2.844" ry="2.906"/><ellipse cx="11.687" cy="18.344" fill="#fff" stroke="currentColor" rx="3" ry="2.906"/><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" d="m9.625 7.375 6.625.875M7.312 10.062l2.875 5.625M13.375 15.937l4.125-4.875"/></svg>',
+        pool: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M1.125 10.875c1.5 0 2.25-.75 3-1.5s1.5-1.5 3-1.5s2.25.75 3 1.5s1.5 1.5 3 1.5s2.25-.75 3-1.5s1.5-1.5 3-1.5s2.25.75 3 1.5v2.5c-.75-.75-1.5-1.5-3-1.5s-2.25.75-3 1.5s-1.5 1.5-3 1.5s-2.25-.75-3-1.5s-1.5-1.5-3-1.5s-2.25.75-3 1.5s-1.5 1.5-3 1.5v-2.5zm0 4c1.5 0 2.25-.75 3-1.5s1.5-1.5 3-1.5s2.25.75 3 1.5s1.5 1.5 3 1.5s2.25-.75 3-1.5s1.5-1.5 3-1.5s2.25.75 3 1.5v2.5c-.75-.75-1.5-1.5-3-1.5s-2.25.75-3 1.5s-1.5 1.5-3 1.5s-2.25-.75-3-1.5s-1.5-1.5-3-1.5s-2.25.75-3 1.5s-1.5 1.5-3 1.5v-2.5z"/></svg>',
+        pump: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M18 1H6a5 5 0 0 0 0 10h12a5 5 0 0 0 0-10zm0 8a3 3 0 1 1 3-3 3 3 0 0 1-3 3zm0 4H6a5 5 0 0 0 0 10h12a5 5 0 0 0 0-10zm-.2 9H6a4 4 0 0 1 0-8h11.8a4 4 0 1 1 0 8zM6 15a3 3 0 1 0 3 3 3 3 0 0 0-3-3zm0 5a2 2 0 1 1 2-2 2.003 2.003 0 0 1-2 2z"/></svg>'
       };
       const span = document.createElement('span');
       span.className = ok ? 'status-card-icon is-true' : 'status-card-icon is-false';
       span.setAttribute('role', 'img');
       span.setAttribute('aria-label', label || (ok ? 'OK' : 'NOK'));
       span.title = label || (ok ? 'OK' : 'NOK');
-      span.innerHTML = iconSvg[iconKey] || iconSvg.system;
+      span.innerHTML = unifyStatusCardIcons ? unifiedIconSvg : (iconSvg[iconKey] || iconSvg.system);
       return span;
     }
 
@@ -916,9 +984,6 @@
       const mqttHandlerFail = mqtt.hndf ?? 0;
       const mqttOversizeDrop = mqtt.ovr ?? 0;
       const i2cLinkOk = !!i2c.lnk;
-      const i2cReqCount = i2c.req ?? 0;
-      const i2cBadReqCount = i2c.breq ?? 0;
-      const i2cFetchedAt = flowStatusDomainCache.i2c ? flowStatusDomainCache.i2c.fetchedAt : 0;
       const mqttIssueCount = (Number(mqttRxDrop) || 0) +
         (Number(mqttParseFail) || 0) +
         (Number(mqttHandlerFail) || 0) +
@@ -927,23 +992,28 @@
       const airTemp = pool.air;
       const phValue = pool.ph;
       const orpValue = pool.orp;
+      const hasPoolModes = !!pool.has;
+      const autoModeOn = hasPoolModes ? !!pool.auto : null;
+      const winterModeOn = hasPoolModes ? !!pool.wint : null;
       const filtrationOn = (typeof pool.fil === 'boolean') ? pool.fil : null;
-      const phPumpOn = (typeof pool.php === 'boolean') ? pool.php : null;
-      const chlorinePumpOn = (typeof pool.clp === 'boolean') ? pool.clp : null;
-      const robotOn = (typeof pool.rbt === 'boolean') ? pool.rbt : null;
       const poolMetricsReady =
         Number.isFinite(Number(waterTemp)) ||
         Number.isFinite(Number(airTemp)) ||
         Number.isFinite(Number(phValue)) ||
         Number.isFinite(Number(orpValue));
-      const poolDevicesReady =
+      const poolStatesReady =
+        typeof autoModeOn === 'boolean' ||
         typeof filtrationOn === 'boolean' ||
-        typeof phPumpOn === 'boolean' ||
-        typeof chlorinePumpOn === 'boolean' ||
-        typeof robotOn === 'boolean';
+        typeof winterModeOn === 'boolean';
       const heapFree = ('free' in heap) ? heap.free : null;
       const heapMin = ('min_free' in heap) ? heap.min_free : null;
       const systemReady = firmware !== '-' || uptimeMs > 0 || heapFree !== null;
+      const supervisorHeapFree = ('free' in supervisorHeap) ? supervisorHeap.free : null;
+      const supervisorHeapMin = ('min_free' in supervisorHeap) ? supervisorHeap.min_free : null;
+      const supervisorReady =
+        supervisorFirmwareVersion !== '-' ||
+        supervisorUptimeMs > 0 ||
+        supervisorHeapFree !== null;
 
       flowStatusGrid.innerHTML = '';
       appendFlowStatusCard({
@@ -980,34 +1050,33 @@
         ok: poolMetricsReady,
         iconLabel: poolMetricsReady ? 'Mesures bassin disponibles' : 'Mesures bassin indisponibles',
         rows: [
-          ['Eau', fmtFlowFixed(waterTemp, 1, 'C')],
-          ['Air', fmtFlowFixed(airTemp, 1, 'C')],
+          ['Eau', fmtFlowFixed(waterTemp, 1, '°C')],
+          ['Air', fmtFlowFixed(airTemp, 1, '°C')],
           ['ORP', fmtFlowFixed(orpValue, 0, 'mV')],
           ['pH', fmtFlowFixed(phValue, 2, '')]
         ]
       });
       appendFlowStatusCard({
-        title: 'Pompes',
+        title: 'Etats Bassin',
         icon: 'pump',
-        ok: poolDevicesReady,
-        iconLabel: poolDevicesReady ? 'Etat des pompes disponible' : 'Etat des pompes indisponible',
+        ok: poolStatesReady,
+        iconLabel: poolStatesReady ? 'Etats bassin disponibles' : 'Etats bassin indisponibles',
         rows: [
-          ['Filtration', (typeof filtrationOn === 'boolean') ? buildFlowStatusBoolIcon(filtrationOn) : '-'],
-          ['Chlore', (typeof chlorinePumpOn === 'boolean') ? buildFlowStatusBoolIcon(chlorinePumpOn) : '-'],
-          ['pH', (typeof phPumpOn === 'boolean') ? buildFlowStatusBoolIcon(phPumpOn) : '-'],
-          ['Robot', (typeof robotOn === 'boolean') ? buildFlowStatusBoolIcon(robotOn) : '-']
+          ['Mode auto', (typeof autoModeOn === 'boolean') ? buildFlowStatusReadonlySwitch(autoModeOn) : '-'],
+          ['Filtration', (typeof filtrationOn === 'boolean') ? buildFlowStatusReadonlySwitch(filtrationOn) : '-'],
+          ['Hivernage', (typeof winterModeOn === 'boolean') ? buildFlowStatusReadonlySwitch(winterModeOn) : '-']
         ]
       });
       appendFlowStatusCard({
         title: 'Superviseur',
-        icon: 'supervisor',
-        ok: i2cLinkOk,
-        iconLabel: i2cLinkOk ? 'Lien I2C actif' : 'Lien I2C inactif',
+        icon: 'system',
+        ok: supervisorReady,
+        iconLabel: supervisorReady ? 'Superviseur disponible' : 'Superviseur indisponible',
         rows: [
           ['Firmware', supervisorFirmwareVersion],
-          ['Req I2C', fmtFlowCount(i2cReqCount)],
-          ['Err I2C', fmtFlowCount(i2cBadReqCount)],
-          ['Synchro', createFlowLiveValue('elapsed', 0, i2cFetchedAt)]
+          ['Uptime', createFlowLiveValue('uptime', supervisorUptimeMs, Date.now())],
+          ['Heap libre', fmtFlowBytes(supervisorHeapFree)],
+          ['Heap min', fmtFlowBytes(supervisorHeapMin)]
         ]
       });
       appendFlowStatusCard({
@@ -1247,6 +1316,13 @@
       return 'Configuration > ' + cleanPath.split('/').join(' > ');
     }
 
+    function flowCfgRootIconMarkup() {
+      if (flowCfgMenuIcon && typeof flowCfgMenuIcon.innerHTML === 'string' && flowCfgMenuIcon.innerHTML.trim().length > 0) {
+        return flowCfgMenuIcon.innerHTML;
+      }
+      return '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M13.221 22.753c-1.046.164-2.13.247-3.222.247-5.304 0-9-1.845-9-3.5v-3.018C2.602 17.984 5.984 19 9.999 19c.528 0 1.042-.022 1.548-.057.275-.018.484-.256.465-.532s-.239-.485-.533-.466c-.483.033-.975.055-1.48.055-5.304 0-9-1.845-9-3.5v-3.018C2.602 12.984 5.984 14 9.999 14c1.516 0 2.979-.146 4.349-.436a.5.5 0 0 0-.207-.979A20 20 0 0 1 9.999 13c-5.304 0-9-1.845-9-3.5V6.482C2.602 7.984 5.984 9 9.999 9s7.397-1.016 9-2.518V9.5c0 .646-.533 1.188-.979 1.53a.501.501 0 0 0 .304.897.5.5 0 0 0 .303-.103c.141-.107.252-.223.372-.336v.174a.5.5 0 0 0 1 0V4.5c0-2.523-4.393-4.5-10-4.5s-10 1.977-10 4.5v15c0 2.523 4.393 4.5 10 4.5 1.144 0 2.28-.087 3.376-.259.273-.043.459-.299.417-.571s-.297-.454-.571-.417M9.999 1c5.304 0 9 1.845 9 3.5s-3.696 3.5-9 3.5-9-1.845-9-3.5 3.696-3.5 9-3.5M23.69 16.843a.5.5 0 0 0-.669-.3c-.24.098-.501.02-.624-.194s-.062-.482.145-.638a.497.497 0 0 0 .075-.73c-.817-.927-1.867-1.541-3.039-1.774a.5.5 0 0 0-.596.44c-.026.258-.234.452-.482.452s-.456-.194-.482-.452a.504.504 0 0 0-.596-.44 5.44 5.44 0 0 0-3.039 1.774.5.5 0 0 0 .075.73.487.487 0 0 1 .145.638.49.49 0 0 1-.624.194.497.497 0 0 0-.669.3c-.209.616-.311 1.191-.311 1.756s.102 1.139.311 1.755a.5.5 0 0 0 .669.3c.24-.099.5-.018.624.194a.49.49 0 0 1-.145.638.497.497 0 0 0-.075.73c.816.928 1.867 1.542 3.039 1.774a.5.5 0 0 0 .595-.44c.026-.258.234-.452.482-.452s.456.194.482.452a.504.504 0 0 0 .597.441 5.43 5.43 0 0 0 3.039-1.774.5.5 0 0 0-.075-.73.49.49 0 0 1-.145-.638.494.494 0 0 1 .624-.194.5.5 0 0 0 .669-.3c.209-.616.311-1.19.311-1.756s-.102-1.14-.311-1.756m-.824 2.773c-.553-.036-1.058.252-1.336.734s-.251 1.066.031 1.522c-.507.48-1.101.83-1.748 1.029a1.478 1.478 0 0 0-2.627-.001 4.4 4.4 0 0 1-1.748-1.029c.282-.456.309-1.04.03-1.522s-.792-.768-1.336-.734c-.089-.354-.133-.688-.133-1.016s.044-.662.133-1.016a1.44 1.44 0 0 0 1.336-.734 1.48 1.48 0 0 0-.03-1.522c.507-.48 1.1-.829 1.747-1.029a1.478 1.478 0 0 0 2.628 0c.647.2 1.24.549 1.747 1.029a1.49 1.49 0 0 0-.03 1.522c.278.483.804.77 1.336.734.089.354.133.689.133 1.016s-.044.662-.133 1.017m-4.367-3.517c-1.378 0-2.5 1.121-2.5 2.5s1.122 2.5 2.5 2.5 2.5-1.121 2.5-2.5-1.122-2.5-2.5-2.5m0 4c-.827 0-1.5-.673-1.5-1.5s.673-1.5 1.5-1.5 1.5.673 1.5 1.5-.673 1.5-1.5 1.5"/></svg>';
+    }
+
     function flowCfgCachedChildren(prefix) {
       const p = nettoyerNomFlowCfg(prefix);
       const key = flowCfgCacheKey(p);
@@ -1275,8 +1351,7 @@
       rootBtn.type = 'button';
       rootBtn.className = 'control-title-root-btn' + (segs.length === 0 ? ' active' : '');
       rootBtn.setAttribute('aria-label', 'Racine configuration');
-      rootBtn.innerHTML =
-        '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.3 7.3 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.58.23-1.13.54-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96c.5.4 1.05.71 1.63.94l.36 2.54a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.54c.58-.23 1.13-.54 1.63-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7Z"/></svg>';
+      rootBtn.innerHTML = flowCfgRootIconMarkup();
       if (segs.length === 0) {
         rootBtn.disabled = true;
       } else {
@@ -1762,13 +1837,15 @@
         valueWrap.className = 'control-value-wrap';
 
         if (typeof value === 'boolean') {
-          const sw = document.createElement('span');
+          row.classList.add('control-row-bool');
+          const sw = document.createElement('label');
           sw.className = 'md3-switch';
           const input = document.createElement('input');
           input.type = 'checkbox';
           input.checked = value;
           input.dataset.key = key;
           input.dataset.kind = 'bool';
+          input.setAttribute('aria-label', label.textContent || key);
           const track = document.createElement('span');
           track.className = 'md3-track';
           const thumb = document.createElement('span');
@@ -1778,6 +1855,7 @@
           sw.appendChild(track);
           sw.appendChild(thumb);
           inputEl = input;
+          valueWrap.classList.add('control-value-wrap-bool');
           valueWrap.appendChild(sw);
         } else if (enumOptions && enumOptions.length > 0) {
           const select = document.createElement('select');
@@ -2308,3 +2386,4 @@
         showPage('page-status');
       }
     }
+    loadWebMeta().catch(() => {});
