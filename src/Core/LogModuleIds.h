@@ -4,8 +4,8 @@
  * @brief Stable log module identifiers and helpers.
  */
 
+#include "Core/ModuleId.h"
 #include <stdint.h>
-#include <string.h>
 
 using LogModuleId = uint16_t;
 
@@ -45,38 +45,40 @@ enum class LogModuleIdValue : LogModuleId {
     CoreEventBus = 43
 };
 
-static inline LogModuleId logModuleIdFromModuleName(const char* moduleName)
+static inline LogModuleId logModuleIdFromModuleId(ModuleId moduleId)
 {
-    if (!moduleName || moduleName[0] == '\0') return (LogModuleId)LogModuleIdValue::Unknown;
-
-    if (strcmp(moduleName, "loghub") == 0) return (LogModuleId)LogModuleIdValue::LogHub;
-    if (strcmp(moduleName, "log.dispatcher") == 0) return (LogModuleId)LogModuleIdValue::LogDispatcher;
-    if (strcmp(moduleName, "log.sink.serial") == 0) return (LogModuleId)LogModuleIdValue::LogSinkSerial;
-    if (strcmp(moduleName, "log.sink.alarm") == 0) return (LogModuleId)LogModuleIdValue::LogSinkAlarm;
-
-    if (strcmp(moduleName, "eventbus") == 0) return (LogModuleId)LogModuleIdValue::EventBusModule;
-    if (strcmp(moduleName, "config") == 0) return (LogModuleId)LogModuleIdValue::ConfigStoreModule;
-    if (strcmp(moduleName, "datastore") == 0) return (LogModuleId)LogModuleIdValue::DataStoreModule;
-    if (strcmp(moduleName, "cmd") == 0) return (LogModuleId)LogModuleIdValue::CommandModule;
-    if (strcmp(moduleName, "alarms") == 0) return (LogModuleId)LogModuleIdValue::AlarmModule;
-    if (strcmp(moduleName, "wifi") == 0) return (LogModuleId)LogModuleIdValue::WifiModule;
-    if (strcmp(moduleName, "wifiprov") == 0) return (LogModuleId)LogModuleIdValue::WifiProvisioningModule;
-    if (strcmp(moduleName, "time") == 0) return (LogModuleId)LogModuleIdValue::TimeModule;
-    if (strcmp(moduleName, "i2ccfg.client") == 0) return (LogModuleId)LogModuleIdValue::I2cCfgClientModule;
-    if (strcmp(moduleName, "i2ccfg.server") == 0) return (LogModuleId)LogModuleIdValue::I2cCfgServerModule;
-    if (strcmp(moduleName, "webinterface") == 0) return (LogModuleId)LogModuleIdValue::WebInterfaceModule;
-    if (strcmp(moduleName, "fwupdate") == 0) return (LogModuleId)LogModuleIdValue::FirmwareUpdateModule;
-    if (strcmp(moduleName, "system") == 0) return (LogModuleId)LogModuleIdValue::SystemModule;
-    if (strcmp(moduleName, "sysmon") == 0) return (LogModuleId)LogModuleIdValue::SystemMonitorModule;
-    if (strcmp(moduleName, "ha") == 0) return (LogModuleId)LogModuleIdValue::HAModule;
-    if (strcmp(moduleName, "mqtt") == 0) return (LogModuleId)LogModuleIdValue::MQTTModule;
-    if (strcmp(moduleName, "io") == 0) return (LogModuleId)LogModuleIdValue::IOModule;
-    if (strcmp(moduleName, "pooldev") == 0) return (LogModuleId)LogModuleIdValue::PoolDeviceModule;
-    if (strcmp(moduleName, "poollogic") == 0) return (LogModuleId)LogModuleIdValue::PoolLogicModule;
-    if (strcmp(moduleName, "hmi") == 0) return (LogModuleId)LogModuleIdValue::HMIModule;
-    if (strcmp(moduleName, "hmi.supervisor") == 0) return (LogModuleId)LogModuleIdValue::HMIModule;
-
-    return (LogModuleId)LogModuleIdValue::Unknown;
+    switch (moduleId) {
+        case ModuleId::LogHub: return (LogModuleId)LogModuleIdValue::LogHub;
+        case ModuleId::LogDispatcher: return (LogModuleId)LogModuleIdValue::LogDispatcher;
+        case ModuleId::LogSinkSerial: return (LogModuleId)LogModuleIdValue::LogSinkSerial;
+        case ModuleId::LogSinkAlarm: return (LogModuleId)LogModuleIdValue::LogSinkAlarm;
+        case ModuleId::EventBus: return (LogModuleId)LogModuleIdValue::EventBusModule;
+        case ModuleId::ConfigStore: return (LogModuleId)LogModuleIdValue::ConfigStoreModule;
+        case ModuleId::DataStore: return (LogModuleId)LogModuleIdValue::DataStoreModule;
+        case ModuleId::Command: return (LogModuleId)LogModuleIdValue::CommandModule;
+        case ModuleId::Alarm: return (LogModuleId)LogModuleIdValue::AlarmModule;
+        case ModuleId::Wifi: return (LogModuleId)LogModuleIdValue::WifiModule;
+        case ModuleId::WifiProvisioning: return (LogModuleId)LogModuleIdValue::WifiProvisioningModule;
+        case ModuleId::Time: return (LogModuleId)LogModuleIdValue::TimeModule;
+        case ModuleId::I2cCfgClient: return (LogModuleId)LogModuleIdValue::I2cCfgClientModule;
+        case ModuleId::I2cCfgServer: return (LogModuleId)LogModuleIdValue::I2cCfgServerModule;
+        case ModuleId::WebInterface: return (LogModuleId)LogModuleIdValue::WebInterfaceModule;
+        case ModuleId::FirmwareUpdate: return (LogModuleId)LogModuleIdValue::FirmwareUpdateModule;
+        case ModuleId::System: return (LogModuleId)LogModuleIdValue::SystemModule;
+        case ModuleId::SystemMonitor: return (LogModuleId)LogModuleIdValue::SystemMonitorModule;
+        case ModuleId::Ha: return (LogModuleId)LogModuleIdValue::HAModule;
+        case ModuleId::Mqtt: return (LogModuleId)LogModuleIdValue::MQTTModule;
+        case ModuleId::Io: return (LogModuleId)LogModuleIdValue::IOModule;
+        case ModuleId::PoolDevice: return (LogModuleId)LogModuleIdValue::PoolDeviceModule;
+        case ModuleId::PoolLogic: return (LogModuleId)LogModuleIdValue::PoolLogicModule;
+        case ModuleId::Hmi:
+        case ModuleId::SupervisorHmi:
+            return (LogModuleId)LogModuleIdValue::HMIModule;
+        case ModuleId::Unknown:
+        case ModuleId::Count:
+        default:
+            return (LogModuleId)LogModuleIdValue::Unknown;
+    }
 }
 
 static inline const char* logModuleNameFromId(LogModuleId moduleId)

@@ -18,15 +18,15 @@
 
 class I2CCfgServerModule : public ModulePassive {
 public:
-    const char* moduleId() const override { return "i2ccfg.server"; }
+    ModuleId moduleId() const override { return ModuleId::I2cCfgServer; }
 
     uint8_t dependencyCount() const override { return 4; }
-    const char* dependency(uint8_t i) const override {
-        if (i == 0) return "loghub";
-        if (i == 1) return "config";
-        if (i == 2) return "datastore";
-        if (i == 3) return "cmd";
-        return nullptr;
+    ModuleId dependency(uint8_t i) const override {
+        if (i == 0) return ModuleId::LogHub;
+        if (i == 1) return ModuleId::ConfigStore;
+        if (i == 2) return ModuleId::DataStore;
+        if (i == 3) return ModuleId::Command;
+        return ModuleId::Unknown;
     }
 
     void init(ConfigStore& cfg, ServiceRegistry& services) override;

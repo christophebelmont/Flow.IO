@@ -10,13 +10,13 @@
 
 class LogAlarmSinkModule : public ModulePassive {
 public:
-    const char* moduleId() const override { return "log.sink.alarm"; }
+    ModuleId moduleId() const override { return ModuleId::LogSinkAlarm; }
 
     uint8_t dependencyCount() const override { return 2; }
-    const char* dependency(uint8_t i) const override {
-        if (i == 0) return "loghub";
-        if (i == 1) return "alarms";
-        return nullptr;
+    ModuleId dependency(uint8_t i) const override {
+        if (i == 0) return ModuleId::LogHub;
+        if (i == 1) return ModuleId::Alarm;
+        return ModuleId::Unknown;
     }
 
     void init(ConfigStore& cfg, ServiceRegistry& services) override;

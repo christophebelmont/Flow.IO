@@ -18,7 +18,7 @@ class ModuleManager;
 class SystemMonitorModule : public Module {
 public:
     /** @brief Module id. */
-    const char* moduleId() const override { return "sysmon"; }
+    ModuleId moduleId() const override { return ModuleId::SystemMonitor; }
     /** @brief Task name. */
     const char* taskName() const override { return "sysmon"; }
     /** @brief Pin monitoring module on core 0. */
@@ -30,9 +30,9 @@ public:
     // Only logger is mandatory
     /** @brief Depends on log hub. */
     uint8_t dependencyCount() const override { return 1; }
-    const char* dependency(uint8_t i) const override {
-        if (i == 0) return "loghub";
-        return nullptr;
+    ModuleId dependency(uint8_t i) const override {
+        if (i == 0) return ModuleId::LogHub;
+        return ModuleId::Unknown;
     }
 
     /** @brief Initialize monitoring. */

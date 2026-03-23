@@ -32,7 +32,7 @@ class OneWireBus;
 
 class IOModule : public Module, public IRuntimeSnapshotProvider {
 public:
-    const char* moduleId() const override { return "io"; }
+    ModuleId moduleId() const override { return ModuleId::Io; }
     const char* taskName() const override { return "io"; }
     BaseType_t taskCore() const override { return 1; }
     uint16_t taskStackSize() const override { return 2560; }
@@ -41,18 +41,18 @@ public:
 
 #if defined(FLOW_PROFILE_SUPERVISOR)
     uint8_t dependencyCount() const override { return 2; }
-    const char* dependency(uint8_t i) const override {
-        if (i == 0) return "loghub";
-        if (i == 1) return "datastore";
-        return nullptr;
+    ModuleId dependency(uint8_t i) const override {
+        if (i == 0) return ModuleId::LogHub;
+        if (i == 1) return ModuleId::DataStore;
+        return ModuleId::Unknown;
     }
 #else
     uint8_t dependencyCount() const override { return 3; }
-    const char* dependency(uint8_t i) const override {
-        if (i == 0) return "loghub";
-        if (i == 1) return "datastore";
-        if (i == 2) return "mqtt";
-        return nullptr;
+    ModuleId dependency(uint8_t i) const override {
+        if (i == 0) return ModuleId::LogHub;
+        if (i == 1) return ModuleId::DataStore;
+        if (i == 2) return ModuleId::Mqtt;
+        return ModuleId::Unknown;
     }
 #endif
 

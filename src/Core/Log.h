@@ -4,6 +4,7 @@
  */
 #pragma once
 
+#include "Core/ModuleId.h"
 #include "Core/Services/ILogger.h"
 
 namespace Log {
@@ -26,11 +27,6 @@ namespace Log {
      * @brief Set the minimum level emitted for a module id.
      */
     bool setModuleMinLevel(LogModuleId moduleId, LogLevel level);
-
-    /**
-     * @brief Resolve a module id from a runtime module string id.
-     */
-    LogModuleId moduleIdFromName(const char* moduleName);
 
     /**
      * @brief Log a formatted message with a given level.

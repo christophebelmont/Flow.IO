@@ -4,6 +4,7 @@
  * @brief Base interface for all runtime modules.
  */
 #include "ConfigStore.h"
+#include "Core/ModuleId.h"
 #include "Core/SystemLimits.h"
 #include "Runtime.h"
 #include "ServiceRegistry.h"
@@ -28,14 +29,14 @@ public:
     virtual ~Module() = default;
 
     /** @brief Unique module identifier (used for dependency wiring). */
-    virtual const char* moduleId() const = 0;
+    virtual ModuleId moduleId() const = 0;
     /** @brief FreeRTOS task name for this module. */
     virtual const char* taskName() const = 0;
 
     /** @brief Number of declared dependencies. */
     virtual uint8_t dependencyCount() const { return 0; }
-    /** @brief Dependency id at index, or nullptr if none. */
-    virtual const char* dependency(uint8_t) const { return nullptr; }
+    /** @brief Dependency id at index, or ModuleId::Unknown if none. */
+    virtual ModuleId dependency(uint8_t) const { return ModuleId::Unknown; }
 
     /** @brief Initialize module and register services/config. */
     virtual void init(ConfigStore& cfg, ServiceRegistry& services) = 0;

@@ -33,7 +33,7 @@ struct WifiConfig {
 class WifiModule : public Module {
 public:
     /** @brief Module id. */
-    const char* moduleId() const override { return "wifi"; }
+    ModuleId moduleId() const override { return ModuleId::Wifi; }
     /** @brief Task name. */
     const char* taskName() const override { return "wifi"; }
     /** @brief Pin network module on core 0. */
@@ -51,10 +51,10 @@ public:
 
     /** @brief Depends on log hub and datastore. */
     uint8_t dependencyCount() const override { return 2; }
-    const char* dependency(uint8_t i) const override {
-        if (i == 0) return "loghub";
-        if (i == 1) return "datastore";
-        return nullptr;
+    ModuleId dependency(uint8_t i) const override {
+        if (i == 0) return ModuleId::LogHub;
+        if (i == 1) return ModuleId::DataStore;
+        return ModuleId::Unknown;
     }
 
     /** @brief Initialize WiFi config/services. */

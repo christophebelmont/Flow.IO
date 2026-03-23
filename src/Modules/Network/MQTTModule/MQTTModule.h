@@ -36,20 +36,20 @@ enum class MQTTState : uint8_t { Disabled, WaitingNetwork, Connecting, Connected
 
 class MQTTModule : public Module {
 public:
-    const char* moduleId() const override { return "mqtt"; }
+    ModuleId moduleId() const override { return ModuleId::Mqtt; }
     const char* taskName() const override { return "mqtt"; }
     BaseType_t taskCore() const override { return 0; }
     uint8_t taskCount() const override { return 1; }
     const ModuleTaskSpec* taskSpecs() const override { return singleLoopTaskSpec(); }
 
     uint8_t dependencyCount() const override { return 5; }
-    const char* dependency(uint8_t i) const override {
-        if (i == 0) return "loghub";
-        if (i == 1) return "wifi";
-        if (i == 2) return "cmd";
-        if (i == 3) return "time";
-        if (i == 4) return "alarms";
-        return nullptr;
+    ModuleId dependency(uint8_t i) const override {
+        if (i == 0) return ModuleId::LogHub;
+        if (i == 1) return ModuleId::Wifi;
+        if (i == 2) return ModuleId::Command;
+        if (i == 3) return ModuleId::Time;
+        if (i == 4) return ModuleId::Alarm;
+        return ModuleId::Unknown;
     }
 
     void init(ConfigStore& cfg, ServiceRegistry& services) override;

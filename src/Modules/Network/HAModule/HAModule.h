@@ -16,7 +16,7 @@
 
 class HAModule : public Module {
 public:
-    const char* moduleId() const override { return "ha"; }
+    ModuleId moduleId() const override { return ModuleId::Ha; }
     const char* taskName() const override { return "ha"; }
     BaseType_t taskCore() const override { return 0; }
     uint16_t taskStackSize() const override { return 3072; }
@@ -24,12 +24,12 @@ public:
     const ModuleTaskSpec* taskSpecs() const override { return singleLoopTaskSpec(); }
 
     uint8_t dependencyCount() const override { return 4; }
-    const char* dependency(uint8_t i) const override {
-        if (i == 0) return "eventbus";
-        if (i == 1) return "config";
-        if (i == 2) return "datastore";
-        if (i == 3) return "mqtt";
-        return nullptr;
+    ModuleId dependency(uint8_t i) const override {
+        if (i == 0) return ModuleId::EventBus;
+        if (i == 1) return ModuleId::ConfigStore;
+        if (i == 2) return ModuleId::DataStore;
+        if (i == 3) return ModuleId::Mqtt;
+        return ModuleId::Unknown;
     }
 
     void init(ConfigStore& cfg, ServiceRegistry& services) override;

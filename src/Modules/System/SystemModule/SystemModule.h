@@ -12,15 +12,15 @@
 class SystemModule : public ModulePassive {
 public:
     /** @brief Module id. */
-    const char* moduleId() const override { return "system"; }
+    ModuleId moduleId() const override { return ModuleId::System; }
 
     /** @brief Depends on log hub, command service and config service. */
     uint8_t dependencyCount() const override { return 3; }
-    const char* dependency(uint8_t i) const override {
-        if (i == 0) return "loghub";
-        if (i == 1) return "cmd";
-        if (i == 2) return "config";
-        return nullptr;
+    ModuleId dependency(uint8_t i) const override {
+        if (i == 0) return ModuleId::LogHub;
+        if (i == 1) return ModuleId::Command;
+        if (i == 2) return ModuleId::ConfigStore;
+        return ModuleId::Unknown;
     }
 
     /** @brief Register system commands. */

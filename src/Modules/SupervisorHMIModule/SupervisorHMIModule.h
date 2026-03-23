@@ -15,7 +15,7 @@ class SupervisorHMIModule : public Module {
 public:
     SupervisorHMIModule(const BoardSpec& board, const SupervisorRuntimeOptions& runtime);
 
-    const char* moduleId() const override { return "hmi.supervisor"; }
+    ModuleId moduleId() const override { return ModuleId::SupervisorHmi; }
     const char* taskName() const override { return "hmi.sup"; }
     BaseType_t taskCore() const override { return 1; }
     uint16_t taskStackSize() const override { return 6144; }
@@ -23,14 +23,14 @@ public:
     const ModuleTaskSpec* taskSpecs() const override { return singleLoopTaskSpec(); }
 
     uint8_t dependencyCount() const override { return 6; }
-    const char* dependency(uint8_t i) const override {
-        if (i == 0) return "loghub";
-        if (i == 1) return "config";
-        if (i == 2) return "wifi";
-        if (i == 3) return "wifiprov";
-        if (i == 4) return "fwupdate";
-        if (i == 5) return "i2ccfg.client";
-        return nullptr;
+    ModuleId dependency(uint8_t i) const override {
+        if (i == 0) return ModuleId::LogHub;
+        if (i == 1) return ModuleId::ConfigStore;
+        if (i == 2) return ModuleId::Wifi;
+        if (i == 3) return ModuleId::WifiProvisioning;
+        if (i == 4) return ModuleId::FirmwareUpdate;
+        if (i == 5) return ModuleId::I2cCfgClient;
+        return ModuleId::Unknown;
     }
 
     void init(ConfigStore& cfg, ServiceRegistry& services) override;

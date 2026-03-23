@@ -39,14 +39,15 @@ public:
         return &taskEntries[idx];
     }
 private:
-    Module* modules[Limits::Core::Capacity::MaxModules];
+    Module* modules[Limits::Core::Capacity::MaxModules]{};
+    Module* modulesById[kModuleIdCount]{};
     uint8_t count = 0;
 
-    Module* ordered[Limits::Core::Capacity::MaxModules];
+    Module* ordered[Limits::Core::Capacity::MaxModules]{};
     uint8_t orderedCount = 0;
     TaskEntry taskEntries[Limits::Core::Capacity::MaxModuleTasks]{};
     uint8_t taskEntryCount = 0;
 
-    Module* findById(const char* id);
+    Module* findById(ModuleId id);
     bool buildInitOrder();
 };

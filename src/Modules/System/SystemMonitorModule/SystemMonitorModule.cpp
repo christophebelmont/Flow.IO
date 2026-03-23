@@ -208,7 +208,7 @@ void SystemMonitorModule::logTaskStacks() {
 
         char entry[80];
         const int ew = snprintf(entry, sizeof(entry), "%s/%s@c%ld=%u%s",
-                                task->module->moduleId() ? task->module->moduleId() : "?",
+                                toString(task->module->moduleId()),
                                 spec.name ? spec.name : "?",
                                 (long)spec.coreId,
                                 (unsigned)hw,

@@ -13,7 +13,7 @@
 class EventBusModule : public Module {
 public:
     /** @brief Module id. */
-    const char* moduleId() const override { return "eventbus"; }
+    ModuleId moduleId() const override { return ModuleId::EventBus; }
     /** @brief Task name. */
     const char* taskName() const override { return "EventBus"; }
     /** @brief Pin control-path module on core 1. */
@@ -23,9 +23,9 @@ public:
 
     /** @brief EventBus depends on log hub. */
     uint8_t dependencyCount() const override { return 1; }
-    const char* dependency(uint8_t i) const override {
-        if (i == 0) return "loghub";
-        return nullptr;
+    ModuleId dependency(uint8_t i) const override {
+        if (i == 0) return ModuleId::LogHub;
+        return ModuleId::Unknown;
     }
     /** @brief Initialize and register EventBus service. */
     void init(ConfigStore& cfg, ServiceRegistry& services) override;

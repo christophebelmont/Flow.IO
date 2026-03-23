@@ -14,11 +14,11 @@
 class CommandModule : public ModulePassive {
 public:
     /** @brief Module id. */
-    const char* moduleId() const override { return "cmd"; }
+    ModuleId moduleId() const override { return ModuleId::Command; }
 
     /** @brief Command module depends on log hub. */
     uint8_t dependencyCount() const override { return 1; }
-    const char* dependency(uint8_t i) const override { return (i == 0) ? "loghub" : nullptr; }
+    ModuleId dependency(uint8_t i) const override { return (i == 0) ? ModuleId::LogHub : ModuleId::Unknown; }
 
     /** @brief Initialize registry and register service. */
     void init(ConfigStore&, ServiceRegistry& services) override;

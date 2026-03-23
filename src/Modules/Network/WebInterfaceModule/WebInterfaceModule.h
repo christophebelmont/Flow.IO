@@ -22,7 +22,7 @@ class WebInterfaceModule : public Module {
 public:
     explicit WebInterfaceModule(const BoardSpec& board);
 
-    const char* moduleId() const override { return "webinterface"; }
+    ModuleId moduleId() const override { return ModuleId::WebInterface; }
     const char* taskName() const override { return "webinterface"; }
     BaseType_t taskCore() const override { return 0; }
     uint16_t taskStackSize() const override { return 4096; }
@@ -30,14 +30,14 @@ public:
     const ModuleTaskSpec* taskSpecs() const override { return singleLoopTaskSpec(); }
 
     uint8_t dependencyCount() const override { return 6; }
-    const char* dependency(uint8_t i) const override {
-        if (i == 0) return "loghub";
-        if (i == 1) return "wifi";
-        if (i == 2) return "eventbus";
-        if (i == 3) return "datastore";
-        if (i == 4) return "cmd";
-        if (i == 5) return "i2ccfg.client";
-        return nullptr;
+    ModuleId dependency(uint8_t i) const override {
+        if (i == 0) return ModuleId::LogHub;
+        if (i == 1) return ModuleId::Wifi;
+        if (i == 2) return ModuleId::EventBus;
+        if (i == 3) return ModuleId::DataStore;
+        if (i == 4) return ModuleId::Command;
+        if (i == 5) return ModuleId::I2cCfgClient;
+        return ModuleId::Unknown;
     }
 
     void init(ConfigStore& cfg, ServiceRegistry& services) override;

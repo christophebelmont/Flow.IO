@@ -6,14 +6,13 @@
 #include "Board/BoardSerialMap.h"
 #include "Core/Log.h"
 #include "Core/LogModuleIds.h"
-#include <cstring>
 
 #define LOG_MODULE_ID ((LogModuleId)LogModuleIdValue::CoreModuleManager)
 
 static void logRegisteredModules(Module* modules[], uint8_t count) {
     ///Logger::log(LogLevel::Info, "MOD", "Registered modules (%u):", count);
     for (uint8_t i = 0; i < count; ++i) {
-        ///Logger::log(LogLevel::Info, "MOD", " - %s", modules[i]->moduleId());
+        ///Logger::log(LogLevel::Info, "MOD", " - %s", toString(modules[i]->moduleId()));
     }
 }
 
@@ -21,10 +20,12 @@ static void dbgDumpModules(Module* modules[], uint8_t count) {
     Board::SerialMap::logSerial().printf("[MOD] Registered modules (%u):\r\n", count);
     for (uint8_t i = 0; i < count; ++i) {
         if (!modules[i]) continue;
-        Board::SerialMap::logSerial().printf("  - %s deps=%u\r\n", modules[i]->moduleId(), modules[i]->dependencyCount());
+        Board::SerialMap::logSerial().printf("  - %s deps=%u\r\n",
+                                             toString(modules[i]->moduleId()),
+                                             modules[i]->dependencyCount());
         for (uint8_t d = 0; d < modules[i]->dependencyCount(); ++d) {
-            const char* dep = modules[i]->dependency(d);
-            Board::SerialMap::logSerial().printf("      -> %s\r\n", dep ? dep : "(null)");
+            const ModuleId dep = modules[i]->dependency(d);
+            Board::SerialMap::logSerial().printf("      -> %s\r\n", toString(dep));
         }
     }
     Board::SerialMap::logSerial().flush();
@@ -41,8 +42,8 @@ bool ModuleManager::add(Module* m) {
         return false;
     }
 
-    const char* moduleId = m->moduleId();
-    if (!moduleId || moduleId[0] == '\0') {
+    const ModuleId moduleId = m->moduleId();
+    if (!isValidModuleId(moduleId)) {
         Log::error(LOG_MODULE_ID, "add failed: invalid module id");
         return false;
     }
@@ -54,19 +55,18 @@ bool ModuleManager::add(Module* m) {
     }
 
     if (findById(moduleId)) {
-        Log::error(LOG_MODULE_ID, "add failed: duplicate module id=%s", moduleId);
+        Log::error(LOG_MODULE_ID, "add failed: duplicate module id=%s", toString(moduleId));
         return false;
     }
 
     modules[count++] = m;
+    modulesById[moduleIdIndex(moduleId)] = m;
     return true;
 }
 
-Module* ModuleManager::findById(const char* id) {
-    if (!id || id[0] == '\0') return nullptr;
-    for (uint8_t i = 0; i < count; ++i)
-        if (modules[i] && modules[i]->moduleId() && strcmp(modules[i]->moduleId(), id) == 0) return modules[i];
-    return nullptr;
+Module* ModuleManager::findById(ModuleId id) {
+    if (!isValidModuleId(id)) return nullptr;
+    return modulesById[moduleIdIndex(id)];
 }
 
 bool ModuleManager::buildInitOrder() {
@@ -87,17 +87,17 @@ bool ModuleManager::buildInitOrder() {
             const uint8_t depCount = m->dependencyCount();
 
             for (uint8_t d = 0; d < depCount; ++d) {
-                const char* depId = m->dependency(d);
-                if (!depId) continue;
+                const ModuleId depId = m->dependency(d);
+                if (!isValidModuleId(depId)) continue;
 
                 Module* dep = findById(depId);
                 if (!dep) {
                     Board::SerialMap::logSerial().printf("[MOD][ERR] Missing dependency: module='%s' requires='%s'\r\n",
-                                                         m->moduleId(), depId);
+                                                         toString(m->moduleId()), toString(depId));
                     Board::SerialMap::logSerial().flush();
                     delay(20);
-            Log::error(LOG_MODULE_ID, "missing dependency: module=%s requires=%s",
-                               m->moduleId(), depId);
+                    Log::error(LOG_MODULE_ID, "missing dependency: module=%s requires=%s",
+                               toString(m->moduleId()), toString(depId));
                     return false;
                 }
 
@@ -132,7 +132,7 @@ bool ModuleManager::buildInitOrder() {
             Board::SerialMap::logSerial().print("[MOD] Remaining not placed:\r\n");
             for (uint8_t i = 0; i < count; ++i) {
                 if (modules[i] && !placed[i]) {
-                    Board::SerialMap::logSerial().printf("   * %s\r\n", modules[i]->moduleId());
+                    Board::SerialMap::logSerial().printf("   * %s\r\n", toString(modules[i]->moduleId()));
                 }
             }
             Board::SerialMap::logSerial().flush();
@@ -151,7 +151,7 @@ bool ModuleManager::initAll(ConfigStore& cfg, ServiceRegistry& services) {
     Log::debug(LOG_MODULE_ID, "initAll: moduleCount=%u", (unsigned)count);
     /*Serial.printf("[MOD] moduleCount=%d\n", count);
     for (int i=0;i<count;i++){
-        Serial.printf("[MOD] module[%d]=%s\n", i, modules[i]->moduleId());
+        Serial.printf("[MOD] module[%d]=%s\n", i, toString(modules[i]->moduleId()));
     }
     Serial.flush();
     delay(20);*/
@@ -161,15 +161,16 @@ bool ModuleManager::initAll(ConfigStore& cfg, ServiceRegistry& services) {
     if (!buildInitOrder()) return false;
 
     for (uint8_t i = 0; i < orderedCount; ++i) {
-        const LogModuleId logModuleId = Log::moduleIdFromName(ordered[i]->moduleId());
+        const ModuleId moduleId = ordered[i]->moduleId();
+        const LogModuleId logModuleId = logModuleIdFromModuleId(moduleId);
         if (logModuleId != (LogModuleId)LogModuleIdValue::Unknown) {
-            (void)Log::registerModule(logModuleId, ordered[i]->moduleId());
+            (void)Log::registerModule(logModuleId, toString(moduleId));
         }
         ///Logger::log(LogLevel::Info, "MOD", "Init %s", ordered[i]->moduleId());
-        Log::debug(LOG_MODULE_ID, "init: %s", ordered[i]->moduleId());
+        Log::debug(LOG_MODULE_ID, "init: %s", toString(moduleId));
         ordered[i]->init(cfg, services);
         if (logModuleId != (LogModuleId)LogModuleIdValue::Unknown) {
-            (void)Log::registerModule(logModuleId, ordered[i]->moduleId());
+            (void)Log::registerModule(logModuleId, toString(moduleId));
         }
     }
 
@@ -199,7 +200,7 @@ bool ModuleManager::initAll(ConfigStore& cfg, ServiceRegistry& services) {
         const ModuleTaskSpec* specs = module->taskSpecs();
         if (!specs) {
             Log::error(LOG_MODULE_ID, "taskSpecs missing module=%s taskCount=%u",
-                       module->moduleId(),
+                       toString(module->moduleId()),
                        (unsigned)declaredTaskCount);
             return false;
         }
@@ -208,20 +209,20 @@ bool ModuleManager::initAll(ConfigStore& cfg, ServiceRegistry& services) {
             const ModuleTaskSpec& spec = specs[taskIndex];
             if (!isValidTaskSpec(spec)) {
                 Log::error(LOG_MODULE_ID, "invalid task spec module=%s index=%u",
-                           module->moduleId(),
+                           toString(module->moduleId()),
                            (unsigned)taskIndex);
                 return false;
             }
             if (taskEntryCount >= Limits::Core::Capacity::MaxModuleTasks) {
                 Log::error(LOG_MODULE_ID, "task registry full at module=%s limit=%u",
-                           module->moduleId(),
+                           toString(module->moduleId()),
                            (unsigned)Limits::Core::Capacity::MaxModuleTasks);
                 return false;
             }
 
             TaskHandle_t handle = nullptr;
             Log::debug(LOG_MODULE_ID, "startTask module=%s task=%s core=%ld prio=%u stack=%lu",
-                       module->moduleId(),
+                       toString(module->moduleId()),
                        spec.name,
                        (long)spec.coreId,
                        (unsigned)spec.priority,
@@ -238,7 +239,7 @@ bool ModuleManager::initAll(ConfigStore& cfg, ServiceRegistry& services) {
             );
             if (ok != pdPASS || !handle) {
                 Log::error(LOG_MODULE_ID, "startTask failed module=%s task=%s err=%ld",
-                           module->moduleId(),
+                           toString(module->moduleId()),
                            spec.name,
                            (long)ok);
                 return false;

@@ -13,13 +13,13 @@
 class DataStoreModule : public ModulePassive {
 public:
     /** @brief Module id. */
-    const char* moduleId() const override { return "datastore"; }
+    ModuleId moduleId() const override { return ModuleId::DataStore; }
 
     /** @brief DataStore depends on EventBus. */
     uint8_t dependencyCount() const override { return 1; }
-    const char* dependency(uint8_t i) const override {
-        if (i == 0) return "eventbus";
-        return nullptr;
+    ModuleId dependency(uint8_t i) const override {
+        if (i == 0) return ModuleId::EventBus;
+        return ModuleId::Unknown;
     }
 
     /** @brief Initialize DataStore and register service. */

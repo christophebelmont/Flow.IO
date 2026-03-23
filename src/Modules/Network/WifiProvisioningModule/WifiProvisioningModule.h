@@ -13,7 +13,7 @@
 
 class WifiProvisioningModule : public Module {
 public:
-    const char* moduleId() const override { return "wifiprov"; }
+    ModuleId moduleId() const override { return ModuleId::WifiProvisioning; }
     const char* taskName() const override { return "wifiprov"; }
     BaseType_t taskCore() const override { return 0; }
     uint16_t taskStackSize() const override { return 4096; }
@@ -21,10 +21,10 @@ public:
     const ModuleTaskSpec* taskSpecs() const override { return singleLoopTaskSpec(); }
 
     uint8_t dependencyCount() const override { return 2; }
-    const char* dependency(uint8_t i) const override {
-        if (i == 0) return "wifi";
-        if (i == 1) return "loghub";
-        return nullptr;
+    ModuleId dependency(uint8_t i) const override {
+        if (i == 0) return ModuleId::Wifi;
+        if (i == 1) return ModuleId::LogHub;
+        return ModuleId::Unknown;
     }
 
     void init(ConfigStore& cfg, ServiceRegistry& services) override;

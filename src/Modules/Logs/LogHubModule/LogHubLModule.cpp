@@ -103,7 +103,7 @@ void LogHubModule::init(ConfigStore& cfg, ServiceRegistry& services) {
     }
 
     Log::setHub(&hubSvc_);
-    (void)Log::registerModule((LogModuleId)LogModuleIdValue::LogHub, moduleId());
+    (void)Log::registerModule((LogModuleId)LogModuleIdValue::LogHub, toString(moduleId()));
     (void)Log::registerModule((LogModuleId)LogModuleIdValue::CoreI2cLink, "core.i2clink");
     (void)Log::registerModule((LogModuleId)LogModuleIdValue::CoreModuleManager, "core.modulemanager");
     (void)Log::registerModule((LogModuleId)LogModuleIdValue::CoreConfigStore, "core.configstore");

@@ -14,7 +14,7 @@
 
 class HMIModule : public Module {
 public:
-    const char* moduleId() const override { return "hmi"; }
+    ModuleId moduleId() const override { return ModuleId::Hmi; }
     const char* taskName() const override { return "HMI"; }
     BaseType_t taskCore() const override { return 1; }
     uint16_t taskStackSize() const override { return 4096; }
@@ -22,14 +22,14 @@ public:
     const ModuleTaskSpec* taskSpecs() const override { return singleLoopTaskSpec(); }
 
     uint8_t dependencyCount() const override { return 6; }
-    const char* dependency(uint8_t i) const override {
-        if (i == 0) return "loghub";
-        if (i == 1) return "config";
-        if (i == 2) return "eventbus";
-        if (i == 3) return "datastore";
-        if (i == 4) return "io";
-        if (i == 5) return "alarms";
-        return nullptr;
+    ModuleId dependency(uint8_t i) const override {
+        if (i == 0) return ModuleId::LogHub;
+        if (i == 1) return ModuleId::ConfigStore;
+        if (i == 2) return ModuleId::EventBus;
+        if (i == 3) return ModuleId::DataStore;
+        if (i == 4) return ModuleId::Io;
+        if (i == 5) return ModuleId::Alarm;
+        return ModuleId::Unknown;
     }
 
     void init(ConfigStore& cfg, ServiceRegistry& services) override;

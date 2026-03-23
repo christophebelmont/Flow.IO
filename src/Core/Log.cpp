@@ -45,10 +45,6 @@ bool Log::setModuleMinLevel(LogModuleId moduleId, LogLevel level) {
     return g_hub->setModuleMinLevel(g_hub->ctx, moduleId, level);
 }
 
-LogModuleId Log::moduleIdFromName(const char* moduleName) {
-    return logModuleIdFromModuleName(moduleName);
-}
-
 void Log::logf(LogLevel lvl, LogModuleId moduleId, const char* fmt, ...) {
     va_list ap;
     va_start(ap, fmt);

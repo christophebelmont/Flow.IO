@@ -29,7 +29,7 @@ struct TimeConfig {
 class TimeModule : public Module {
 public:
     /** @brief Module id. */
-    const char* moduleId() const override { return "time"; }
+    ModuleId moduleId() const override { return ModuleId::Time; }
     /** @brief Task name. */
     const char* taskName() const override { return "time"; }
     /** @brief Pin control-path scheduler on core 1. */
@@ -40,12 +40,12 @@ public:
 
     /** @brief Depends on log hub, datastore, command and event bus. */
     uint8_t dependencyCount() const override { return 4; }
-    const char* dependency(uint8_t i) const override {
-        if (i == 0) return "loghub";
-        if (i == 1) return "datastore";
-        if (i == 2) return "cmd";
-        if (i == 3) return "eventbus";
-        return nullptr;
+    ModuleId dependency(uint8_t i) const override {
+        if (i == 0) return ModuleId::LogHub;
+        if (i == 1) return ModuleId::DataStore;
+        if (i == 2) return ModuleId::Command;
+        if (i == 3) return ModuleId::EventBus;
+        return ModuleId::Unknown;
     }
 
     /** @brief Initialize time config and services. */

@@ -16,7 +16,7 @@
 class LogHubModule : public ModulePassive {
 public:
     /** @brief Module id. */
-    const char* moduleId() const override { return "loghub"; }
+    ModuleId moduleId() const override { return ModuleId::LogHub; }
 
     /** @brief Initialize log hub and register services. */
     void init(ConfigStore& cfg, ServiceRegistry& services) override;

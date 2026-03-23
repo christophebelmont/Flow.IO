@@ -16,7 +16,7 @@ class FirmwareUpdateModule : public Module {
 public:
     explicit FirmwareUpdateModule(const BoardSpec& board);
 
-    const char* moduleId() const override { return "fwupdate"; }
+    ModuleId moduleId() const override { return ModuleId::FirmwareUpdate; }
     const char* taskName() const override { return "fwupdate"; }
     BaseType_t taskCore() const override { return 0; }
     uint16_t taskStackSize() const override { return 8192; }
@@ -24,12 +24,12 @@ public:
     const ModuleTaskSpec* taskSpecs() const override { return singleLoopTaskSpec(); }
 
     uint8_t dependencyCount() const override { return 4; }
-    const char* dependency(uint8_t i) const override {
-        if (i == 0) return "loghub";
-        if (i == 1) return "wifi";
-        if (i == 2) return "cmd";
-        if (i == 3) return "webinterface";
-        return nullptr;
+    ModuleId dependency(uint8_t i) const override {
+        if (i == 0) return ModuleId::LogHub;
+        if (i == 1) return ModuleId::Wifi;
+        if (i == 2) return ModuleId::Command;
+        if (i == 3) return ModuleId::WebInterface;
+        return ModuleId::Unknown;
     }
 
     void init(ConfigStore& cfg, ServiceRegistry& services) override;

@@ -19,14 +19,14 @@
 
 class I2CCfgClientModule : public ModulePassive {
 public:
-    const char* moduleId() const override { return "i2ccfg.client"; }
+    ModuleId moduleId() const override { return ModuleId::I2cCfgClient; }
 
     uint8_t dependencyCount() const override { return 3; }
-    const char* dependency(uint8_t i) const override {
-        if (i == 0) return "loghub";
-        if (i == 1) return "config";
-        if (i == 2) return "cmd";
-        return nullptr;
+    ModuleId dependency(uint8_t i) const override {
+        if (i == 0) return ModuleId::LogHub;
+        if (i == 1) return ModuleId::ConfigStore;
+        if (i == 2) return ModuleId::Command;
+        return ModuleId::Unknown;
     }
 
     void init(ConfigStore& cfg, ServiceRegistry& services) override;

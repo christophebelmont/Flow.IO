@@ -37,23 +37,23 @@ struct PoolDeviceDefinition {
 
 class PoolDeviceModule : public Module, public IRuntimeSnapshotProvider {
 public:
-    const char* moduleId() const override { return "pooldev"; }
+    ModuleId moduleId() const override { return ModuleId::PoolDevice; }
     const char* taskName() const override { return "pooldev"; }
     BaseType_t taskCore() const override { return 1; }
     uint8_t taskCount() const override { return 1; }
     const ModuleTaskSpec* taskSpecs() const override { return singleLoopTaskSpec(); }
 
     uint8_t dependencyCount() const override { return 8; }
-    const char* dependency(uint8_t i) const override {
-        if (i == 0) return "loghub";
-        if (i == 1) return "datastore";
-        if (i == 2) return "cmd";
-        if (i == 3) return "time";
-        if (i == 4) return "io";
-        if (i == 5) return "mqtt";
-        if (i == 6) return "eventbus";
-        if (i == 7) return "ha";
-        return nullptr;
+    ModuleId dependency(uint8_t i) const override {
+        if (i == 0) return ModuleId::LogHub;
+        if (i == 1) return ModuleId::DataStore;
+        if (i == 2) return ModuleId::Command;
+        if (i == 3) return ModuleId::Time;
+        if (i == 4) return ModuleId::Io;
+        if (i == 5) return ModuleId::Mqtt;
+        if (i == 6) return ModuleId::EventBus;
+        if (i == 7) return ModuleId::Ha;
+        return ModuleId::Unknown;
     }
 
     void init(ConfigStore& cfg, ServiceRegistry& services) override;

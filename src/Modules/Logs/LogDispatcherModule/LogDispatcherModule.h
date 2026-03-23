@@ -14,15 +14,15 @@
 class LogDispatcherModule : public ModulePassive {
 public:
     /** @brief Module id. */
-    const char* moduleId() const override { return "log.dispatcher"; }
+    ModuleId moduleId() const override { return ModuleId::LogDispatcher; }
     uint8_t taskCount() const override { return (_hub && _sinkReg) ? 1 : 0; }
     const ModuleTaskSpec* taskSpecs() const override;
 
     /** @brief Depends on log hub. */
     uint8_t dependencyCount() const override { return 1; }
-    const char* dependency(uint8_t i) const override {
-        if (i == 0) return "loghub";
-        return nullptr;
+    ModuleId dependency(uint8_t i) const override {
+        if (i == 0) return ModuleId::LogHub;
+        return ModuleId::Unknown;
     }
 
     /** @brief Start dispatcher task and wire sink registry. */

@@ -15,7 +15,7 @@ struct CommandRequest;
 
 class AlarmModule : public Module {
 public:
-    const char* moduleId() const override { return "alarms"; }
+    ModuleId moduleId() const override { return ModuleId::Alarm; }
     const char* taskName() const override { return "alarms"; }
     BaseType_t taskCore() const override { return 1; }
     uint16_t taskStackSize() const override { return 2816; }
@@ -23,11 +23,11 @@ public:
     const ModuleTaskSpec* taskSpecs() const override { return singleLoopTaskSpec(); }
 
     uint8_t dependencyCount() const override { return 3; }
-    const char* dependency(uint8_t i) const override {
-        if (i == 0) return "loghub";
-        if (i == 1) return "eventbus";
-        if (i == 2) return "cmd";
-        return nullptr;
+    ModuleId dependency(uint8_t i) const override {
+        if (i == 0) return ModuleId::LogHub;
+        if (i == 1) return ModuleId::EventBus;
+        if (i == 2) return ModuleId::Command;
+        return ModuleId::Unknown;
     }
 
     void init(ConfigStore& cfg, ServiceRegistry& services) override;
