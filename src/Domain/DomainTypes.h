@@ -19,6 +19,7 @@ enum class DomainRole : uint8_t {
     PoolLevelSensor,
     PhLevelSensor,
     ChlorineLevelSensor,
+    WaterCounterSensor,
     OrpSensor,
     PhSensor,
     PsiSensor,

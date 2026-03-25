@@ -119,6 +119,25 @@
       "displayConfig": null
     },
     {
+      "id": 2105,
+      "runtimeId": 2105,
+      "moduleId": 21,
+      "module": "io",
+      "valueId": 5,
+      "key": "pool.water_counter",
+      "label": "Compteur eau",
+      "type": "int32",
+      "domain": "pool",
+      "group": "Compteur",
+      "unit": "imp",
+      "decimals": null,
+      "order": 50,
+      "enum": null,
+      "flags": null,
+      "display": "value",
+      "displayConfig": null
+    },
+    {
       "id": 2301,
       "runtimeId": 2301,
       "moduleId": 23,

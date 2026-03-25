@@ -23,6 +23,7 @@ inline constexpr RuntimeUiManifestItem kRuntimeUiManifestItems[] = {
     {2004, "mqtt.parse_fail", "uint32", nullptr},
     {2005, "mqtt.handler_fail", "uint32", nullptr},
     {2006, "mqtt.oversize_drop", "uint32", nullptr},
+    {2105, "pool.water_counter", "int32", "imp"},
     {2301, "pool.auto_mode", "bool", nullptr},
     {2302, "pool.winter_mode", "bool", nullptr},
     {2201, "pool.filtration_on", "bool", nullptr},

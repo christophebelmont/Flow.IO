@@ -4,22 +4,22 @@
   "editor": "wokwi",
   "parts": [
     { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 9.6, "left": 62.44, "attrs": {} },
-    { "type": "wokwi-ds18b20", "id": "AirTemp", "top": 210.07, "left": 272.88, "attrs": {} },
-    { "type": "wokwi-ds18b20", "id": "WaterTemp", "top": 210.07, "left": 330.48, "attrs": {} },
+    { "type": "wokwi-ds18b20", "id": "AirTemp", "top": -106.73, "left": 234.48, "attrs": {} },
+    { "type": "wokwi-ds18b20", "id": "WaterTemp", "top": -106.73, "left": 282.48, "attrs": {} },
     { "type": "chip-ads1115", "id": "ads1115-int", "top": -27.78, "left": 484.8, "attrs": {} },
     { "type": "chip-pcf8574", "id": "pcf8574", "top": -18.18, "left": -158.4, "attrs": {} },
     {
       "type": "wokwi-text",
       "id": "text1",
-      "top": 182.4,
-      "left": 259.2,
+      "top": -134.4,
+      "left": 192,
       "attrs": { "text": "Air Temp" }
     },
     {
       "type": "wokwi-text",
       "id": "text2",
-      "top": 182.4,
-      "left": 336,
+      "top": -134.4,
+      "left": 278.4,
       "attrs": { "text": "Water Temp" }
     },
     {
@@ -33,8 +33,8 @@
     { "type": "wokwi-potentiometer", "id": "pot2", "top": -164.5, "left": 518.2, "attrs": {} },
     { "type": "wokwi-potentiometer", "id": "pot3", "top": -164.5, "left": 623.8, "attrs": {} },
     { "type": "wokwi-vcc", "id": "vcc1", "top": 173.56, "left": 38.4, "attrs": {} },
-    { "type": "wokwi-gnd", "id": "gnd1", "top": 278.4, "left": 325.8, "attrs": {} },
-    { "type": "wokwi-gnd", "id": "gnd2", "top": 278.4, "left": 268.2, "attrs": {} },
+    { "type": "wokwi-gnd", "id": "gnd1", "top": -48, "left": 277.8, "attrs": {} },
+    { "type": "wokwi-gnd", "id": "gnd2", "top": -48, "left": 229.8, "attrs": {} },
     { "type": "wokwi-gnd", "id": "gnd3", "top": 163.2, "left": 18.6, "attrs": {} },
     { "type": "wokwi-gnd", "id": "gnd4", "top": 28.8, "left": 431.4, "attrs": {} },
     { "type": "wokwi-vcc", "id": "vcc2", "top": -56.84, "left": 460.8, "attrs": {} },
@@ -117,42 +117,42 @@
     {
       "type": "wokwi-led",
       "id": "led1",
-      "top": -99.6,
+      "top": -234,
       "left": -389.4,
       "attrs": { "color": "blue", "label": "Wifi", "flip": "1" }
     },
     {
       "type": "wokwi-led",
       "id": "led2",
-      "top": -99.6,
+      "top": -205.2,
       "left": -360.6,
       "attrs": { "color": "yellow", "label": "Group", "flip": "1" }
     },
     {
       "type": "wokwi-led",
       "id": "led3",
-      "top": -99.6,
+      "top": -176.4,
       "left": -303,
       "attrs": { "color": "green", "label": "Freeze / Chl PID", "flip": "1" }
     },
     {
       "type": "wokwi-led",
       "id": "led4",
-      "top": -99.6,
+      "top": -176.4,
       "left": -331.8,
       "attrs": { "color": "green", "label": "Auto / pH PID", "flip": "1" }
     },
     {
       "type": "wokwi-led",
       "id": "led5",
-      "top": -99.6,
+      "top": -138,
       "left": -274.2,
       "attrs": { "color": "red", "label": "pH Lvl", "flip": "1" }
     },
     {
       "type": "wokwi-led",
       "id": "led6",
-      "top": -99.6,
+      "top": -138,
       "left": -245.4,
       "attrs": { "color": "red", "label": "Chl Lvl", "flip": "1" }
     },
@@ -402,67 +402,18 @@
     {
       "type": "wokwi-text",
       "id": "text12",
-      "top": -134.4,
-      "left": -393.6,
-      "rotate": 270,
-      "attrs": { "text": "MQTT" }
+      "top": 134.4,
+      "left": 28.8,
+      "attrs": { "text": "RES" }
     },
     {
-      "type": "wokwi-text",
-      "id": "text13",
-      "top": -144,
-      "left": -374.4,
-      "rotate": 270,
-      "attrs": { "text": "ON      /     OFF" }
+      "type": "wokwi-pushbutton",
+      "id": "btn1",
+      "top": 92.6,
+      "left": -134.4,
+      "attrs": { "color": "green", "xray": "1" }
     },
-    {
-      "type": "wokwi-text",
-      "id": "text14",
-      "top": -163.2,
-      "left": -364.8,
-      "rotate": 270,
-      "attrs": { "text": "AUTO / pH PID" }
-    },
-    {
-      "type": "wokwi-text",
-      "id": "text15",
-      "top": -172.8,
-      "left": -345.6,
-      "rotate": 270,
-      "attrs": { "text": "Hivers / ORP PID" }
-    },
-    {
-      "type": "wokwi-text",
-      "id": "text16",
-      "top": -163.2,
-      "left": -307.2,
-      "rotate": 270,
-      "attrs": { "text": "pH Level Alert" }
-    },
-    {
-      "type": "wokwi-text",
-      "id": "text17",
-      "top": -163.2,
-      "left": -278.4,
-      "rotate": 270,
-      "attrs": { "text": "Chl Level Alert" }
-    },
-    {
-      "type": "wokwi-text",
-      "id": "text18",
-      "top": -220.8,
-      "left": -268.8,
-      "rotate": 270,
-      "attrs": { "text": "Chl Pump Uptime / PSI Alarm" }
-    },
-    {
-      "type": "wokwi-text",
-      "id": "text19",
-      "top": -172.8,
-      "left": -259.2,
-      "rotate": 270,
-      "attrs": { "text": "pH Pump Uptime" }
-    }
+    { "type": "wokwi-vcc", "id": "vcc9", "top": 77.56, "left": -163.2, "attrs": {} }
   ],
   "connections": [
     [ "esp:TX", "$serialMonitor:RX", "", [] ],
@@ -574,7 +525,9 @@
     [ "ads1115-int:ADDR0", "gnd4:GND", "green", [ "h0" ] ],
     [ "ads1115-int1:ADDR0", "vcc7:VCC", "green", [ "h0" ] ],
     [ "ads1115-int:ADDR1", "gnd11:GND", "green", [ "v0" ] ],
-    [ "ads1115-int1:ADDR1", "gnd12:GND", "green", [ "v0" ] ]
+    [ "ads1115-int1:ADDR1", "gnd12:GND", "green", [ "v0" ] ],
+    [ "esp:35", "btn1:1.r", "green", [ "h0" ] ],
+    [ "vcc9:VCC", "btn1:1.l", "red", [ "v0" ] ]
   ],
   "dependencies": {}
 }

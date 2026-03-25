@@ -334,7 +334,7 @@ bool IOModule::writeRuntimeUiValue(uint8_t valueId, IRuntimeUiWriter& writer) co
 {
     if (!dataStore_) return writer.writeUnavailable(makeRuntimeUiId(moduleId(), valueId));
 
-    float value = 0.0f;
+    const RuntimeUiId runtimeId = makeRuntimeUiId(moduleId(), valueId);
     uint8_t runtimeIndex = 0xFF;
 
     switch (valueId) {
@@ -350,11 +350,19 @@ bool IOModule::writeRuntimeUiValue(uint8_t valueId, IRuntimeUiWriter& writer) co
         case RuntimeUiOrp:
             runtimeIndex = PoolBinding::kSensorBindings[PoolBinding::kSensorSlotOrp].runtimeIndex;
             break;
+        case RuntimeUiWaterCounter: {
+            runtimeIndex = PoolBinding::kSensorBindings[PoolBinding::kSensorSlotWaterCounter].runtimeIndex;
+            int32_t value = 0;
+            if (!ioEndpointInt(*dataStore_, runtimeIndex, value)) {
+                return writer.writeUnavailable(runtimeId);
+            }
+            return writer.writeI32(runtimeId, value);
+        }
         default:
             return false;
     }
 
-    const RuntimeUiId runtimeId = makeRuntimeUiId(moduleId(), valueId);
+    float value = 0.0f;
     if (!ioEndpointFloat(*dataStore_, runtimeIndex, value)) {
         return writer.writeUnavailable(runtimeId);
     }

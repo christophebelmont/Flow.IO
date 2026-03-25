@@ -48,6 +48,16 @@ static inline bool ioEndpointBool(const DataStore& ds, uint8_t idx, bool& out)
     return true;
 }
 
+static inline bool ioEndpointInt(const DataStore& ds, uint8_t idx, int32_t& out)
+{
+    if (idx >= IO_MAX_ENDPOINTS) return false;
+    const IOEndpointRuntime& ep = ds.data().io.endpoints[idx];
+    if (!ep.valid) return false;
+    if (ep.valueType != IO_VALUE_INT32) return false;
+    out = ep.intValue;
+    return true;
+}
+
 static inline bool setIoEndpointFloat(DataStore& ds, uint8_t idx, float value, uint32_t tsMs)
 {
     if (idx >= IO_MAX_ENDPOINTS) return false;

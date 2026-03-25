@@ -17,6 +17,7 @@
 namespace {
 
 using Profiles::FlowIO::ModuleInstances;
+static constexpr uint32_t kWaterCounterDebounceUs = 100000U;  // Accept at most 1 pulse every 100 ms.
 
 struct FlowIoAnalogHaSpec {
     uint8_t analogIdx = 0;
@@ -46,6 +47,7 @@ constexpr FlowIoDigitalHaSpec kDigitalHaSpecs[] = {
     {0, "io_pool_lvl", "Pool Level", "mdi:waves-arrow-up"},
     {1, "io_ph_lvl", "pH Level", "mdi:flask-outline"},
     {2, "io_chl_lvl", "Chlorine Level", "mdi:test-tube"},
+    {3, "io_wat_cnt", "Water Counter", "mdi:water-sync"},
 };
 
 struct FlowIoDiscoveryHeap {
@@ -186,6 +188,18 @@ void applyAnalogDefaultsForRole(DomainRole role, IOAnalogDefinition& def)
             break;
         default:
             requireSetup(false, "unsupported analog domain role");
+            break;
+    }
+}
+
+void applyDigitalDefaultsForRole(DomainRole role, IODigitalInputDefinition& def)
+{
+    switch (role) {
+        case DomainRole::WaterCounterSensor:
+            def.mode = IO_DIGITAL_INPUT_COUNTER;
+            def.counterDebounceUs = kWaterCounterDebounceUs;
+            break;
+        default:
             break;
     }
 }
@@ -375,6 +389,7 @@ void configureIoModule(const AppContext& ctx, ModuleInstances& modules)
             def.pin = ioPoint->pin;
             def.activeHigh = preset.activeHigh;
             def.pullMode = preset.pullMode;
+            applyDigitalDefaultsForRole(preset.role, def);
             def.onValueChanged = onIoBoolValue;
             def.onValueCtx = (void*)(uintptr_t)compat->runtimeIndex;
             def.onCounterChanged = onIoIntValue;

@@ -23,6 +23,7 @@ enum class BoardSignal : uint8_t {
     DigitalIn1,
     DigitalIn2,
     DigitalIn3,
+    DigitalIn4,
     AnalogIn1,
     AnalogIn2,
     AnalogIn3,

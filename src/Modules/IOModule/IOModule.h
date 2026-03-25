@@ -92,6 +92,7 @@ private:
         RuntimeUiAirTemp = 2,
         RuntimeUiPh = 3,
         RuntimeUiOrp = 4,
+        RuntimeUiWaterCounter = 5,
     };
 
     static bool tickFastAds_(void* ctx, uint32_t nowMs);

@@ -48,7 +48,8 @@ constexpr uint8_t kSensorSlotAirTemp = 5;
 constexpr uint8_t kSensorSlotPoolLevel = 6;
 constexpr uint8_t kSensorSlotPhLevel = 7;
 constexpr uint8_t kSensorSlotChlorineLevel = 8;
-constexpr uint8_t kSensorBindingCount = 9;
+constexpr uint8_t kSensorSlotWaterCounter = 9;
+constexpr uint8_t kSensorBindingCount = 10;
 
 inline constexpr PoolIoBinding kIoBindings[kDeviceBindingCount] = {
     {PoolDomain::kPoolDevices[0].legacySlot, (IoId)(IO_ID_DO_BASE + PoolDomain::kPoolDevices[0].legacySlot), PoolDomain::kPoolDevices[0].objectSuffix, PoolDomain::kPoolDevices[0].displayName, PoolDomain::kPoolDevices[0].haIcon},
@@ -71,6 +72,7 @@ inline constexpr PoolSensorBinding kSensorBindings[kSensorBindingCount] = {
     {PoolDomain::kSensors[6].legacySlot, POOL_SENSOR_KIND_DIGITAL, (IoId)(IO_ID_DI_BASE + 0), PoolDomain::kSensors[6].endpointId, PoolDomain::kSensors[6].displayName, PoolDomain::kSensors[6].runtimeIndex},
     {PoolDomain::kSensors[7].legacySlot, POOL_SENSOR_KIND_DIGITAL, (IoId)(IO_ID_DI_BASE + 1), PoolDomain::kSensors[7].endpointId, PoolDomain::kSensors[7].displayName, PoolDomain::kSensors[7].runtimeIndex},
     {PoolDomain::kSensors[8].legacySlot, POOL_SENSOR_KIND_DIGITAL, (IoId)(IO_ID_DI_BASE + 2), PoolDomain::kSensors[8].endpointId, PoolDomain::kSensors[8].displayName, PoolDomain::kSensors[8].runtimeIndex},
+    {PoolDomain::kSensors[9].legacySlot, POOL_SENSOR_KIND_DIGITAL, (IoId)(IO_ID_DI_BASE + 3), PoolDomain::kSensors[9].endpointId, PoolDomain::kSensors[9].displayName, PoolDomain::kSensors[9].runtimeIndex},
 };
 
 inline constexpr const PoolIoBinding* ioBindingBySlot(uint8_t slot)
@@ -106,4 +108,3 @@ inline constexpr const PoolSensorBinding* sensorBindingByIoId(IoId ioId)
 }
 
 }  // namespace PoolBinding
-

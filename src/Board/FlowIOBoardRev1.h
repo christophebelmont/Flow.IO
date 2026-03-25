@@ -31,6 +31,7 @@ inline constexpr IoPointSpec kFlowIOBoardRev1IoPoints[] = {
     {"digital_in1", IoCapability::DigitalIn, BoardSignal::DigitalIn1, 34, false, 0},
     {"digital_in2", IoCapability::DigitalIn, BoardSignal::DigitalIn2, 36, false, 0},
     {"digital_in3", IoCapability::DigitalIn, BoardSignal::DigitalIn3, 39, false, 0},
+    {"digital_in4", IoCapability::DigitalIn, BoardSignal::DigitalIn4, 35, false, 0},
     {"analog_in1", IoCapability::AnalogIn, BoardSignal::AnalogIn1, 0, false, 0},
     {"analog_in2", IoCapability::AnalogIn, BoardSignal::AnalogIn2, 1, false, 0},
     {"analog_in3", IoCapability::AnalogIn, BoardSignal::AnalogIn3, 2, false, 0},

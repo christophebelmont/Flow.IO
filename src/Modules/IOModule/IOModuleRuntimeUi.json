@@ -87,6 +87,17 @@
       "unit": "mV",
       "decimals": 0,
       "order": 40
+    },
+    {
+      "valueId": 5,
+      "key": "pool.water_counter",
+      "label": "Compteur eau",
+      "type": "int32",
+      "domain": "pool",
+      "group": "Compteur",
+      "display": "value",
+      "unit": "imp",
+      "order": 50
     }
   ]
 }

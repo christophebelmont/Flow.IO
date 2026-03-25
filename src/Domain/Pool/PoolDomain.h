@@ -18,6 +18,7 @@ inline constexpr DomainIoBinding kIoBindings[] = {
     {BoardSignal::DigitalIn1, DomainRole::PoolLevelSensor},
     {BoardSignal::DigitalIn2, DomainRole::PhLevelSensor},
     {BoardSignal::DigitalIn3, DomainRole::ChlorineLevelSensor},
+    {BoardSignal::DigitalIn4, DomainRole::WaterCounterSensor},
     {BoardSignal::AnalogIn1, DomainRole::OrpSensor},
     {BoardSignal::AnalogIn2, DomainRole::PhSensor},
     {BoardSignal::AnalogIn3, DomainRole::PsiSensor},
@@ -54,6 +55,7 @@ inline constexpr DomainSensorPreset kSensors[] = {
     {DomainRole::PoolLevelSensor, "Pool Level", "Pool Level", 6, 6, true, true, 0},
     {DomainRole::PhLevelSensor, "pH Level", "pH Level", 7, 7, true, true, 0},
     {DomainRole::ChlorineLevelSensor, "Chlorine Level", "Chlorine Level", 8, 8, true, true, 0},
+    {DomainRole::WaterCounterSensor, "Water Counter", "Water Counter", 9, 9, true, true, 0},
 };
 
 inline constexpr DomainSpec kPoolDomain{
