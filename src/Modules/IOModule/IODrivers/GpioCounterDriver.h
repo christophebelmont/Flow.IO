@@ -37,4 +37,5 @@ private:
     volatile int32_t pulseCount_ = 0;
     volatile bool lastLogicalState_ = false;
     volatile uint32_t lastPulseUs_ = 0;
+    volatile uint32_t lastInactiveUs_ = 0;
 };

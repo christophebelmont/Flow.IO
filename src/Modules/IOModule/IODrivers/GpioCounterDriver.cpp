@@ -7,6 +7,7 @@
 
 namespace {
 portMUX_TYPE gGpioCounterMux = portMUX_INITIALIZER_UNLOCKED;
+static constexpr uint32_t kCounterRearmInactiveUs = 5000U;
 }
 
 GpioCounterDriver::GpioCounterDriver(const char* driverId,
@@ -32,6 +33,7 @@ bool GpioCounterDriver::begin()
     lastLogicalState_ = activeHigh_ ? (rawLevel == HIGH) : (rawLevel == LOW);
     pulseCount_ = 0;
     lastPulseUs_ = 0;
+    lastInactiveUs_ = lastLogicalState_ ? 0U : micros();
     attachInterruptArg(pin_, &GpioCounterDriver::handleInterruptThunk_, this, CHANGE);
     return true;
 }
@@ -61,18 +63,25 @@ void IRAM_ATTR GpioCounterDriver::handleInterrupt_()
 {
     int level = digitalRead(pin_);
     const bool logicalOn = activeHigh_ ? (level == HIGH) : (level == LOW);
+    const uint32_t nowUs = micros();
 
     if (!logicalOn) {
         lastLogicalState_ = false;
+        lastInactiveUs_ = nowUs;
         return;
     }
 
     if (lastLogicalState_) return;
+    lastLogicalState_ = true;
 
-    const uint32_t nowUs = micros();
     if (counterDebounceUs_ > 0 && lastPulseUs_ != 0U) {
         if ((uint32_t)(nowUs - lastPulseUs_) < counterDebounceUs_) {
-            lastLogicalState_ = true;
+            return;
+        }
+    }
+
+    if (lastInactiveUs_ != 0U) {
+        if ((uint32_t)(nowUs - lastInactiveUs_) < kCounterRearmInactiveUs) {
             return;
         }
     }
@@ -80,6 +89,5 @@ void IRAM_ATTR GpioCounterDriver::handleInterrupt_()
     portENTER_CRITICAL_ISR(&gGpioCounterMux);
     if (pulseCount_ < INT32_MAX) ++pulseCount_;
     lastPulseUs_ = nowUs;
-    lastLogicalState_ = true;
     portEXIT_CRITICAL_ISR(&gGpioCounterMux);
 }

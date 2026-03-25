@@ -343,6 +343,18 @@ Pourquoi:
 - l'ordre d'index de decouverte n'est pas une identite stable
 - le ROM code est l'identite physique robuste
 
+Politique de decouverte recommandee:
+- si `ow_rom_hex` est vide et qu'une seule sonde est detectee sur le bus autorise:
+  - l'utiliser automatiquement
+  - persister immediatement son ROM code
+- si `ow_rom_hex` est vide et que plusieurs sondes sont detectees:
+  - ne pas choisir arbitrairement
+  - laisser le point non resolu
+  - lever un warning explicite
+- si un ROM code est deja configure et absent au boot:
+  - ne pas rebasculer silencieusement vers une autre sonde
+  - garder le point indisponible jusqu'a action explicite ou flag d'auto-rebind dedie
+
 ### 7.5 INA226
 
 Le `INA226` est naturellement multi-mesures.
@@ -437,6 +449,29 @@ Politique conseillee:
 - configurable par point
 - borne compile-time max pour eviter des valeurs aberrantes
 
+### 8.5 Adaptation compteur -> grandeur physique
+
+Oui, le `CounterInputPortAdapter` doit pouvoir porter une petite couche d'adaptation de type:
+
+- `value = raw_count * c0 + c1`
+
+Cas d'usage typiques:
+- debimetre a impulsions -> volume
+- compteur d'energie impulsionnel -> Wh ou kWh
+- detecteur evenementiel -> nombre d'actions physiques equivalentes
+
+Recommandation d'implementation:
+- le driver et l'ISR ne manipulent que le compteur brut
+- l'adapter applique la conversion hors ISR
+- si l'on veut eviter le float dans les chemins chauds, stocker `c0` en fixe:
+  - `scale_num / scale_den`
+  - ou `Q16.16` / `Q24.8`
+
+Important:
+- persister de preference le compteur brut monotone
+- recalculer la grandeur derivee a la lecture ou au publish
+- cela evite les derives et simplifie un changement de `c0`
+
 ## 9. Strategie memoire et allocation
 
 ### 9.1 Regle generale
@@ -474,6 +509,30 @@ Je recommande:
 - pas d'arbre d'objets complexe
 - pas d'heritage profond cote points logiques
 - des structs compactes avec dispatch par enum / petites vtables statiques
+
+### 9.5 Impact DRAM attendu
+
+Le modele propose n'augmente pas mecaniquement la DRAM si l'on respecte trois regles:
+
+- le catalogue compile-time (`FlowIOIoLayout.h`, allowlists, tables de compatibilite) doit etre `constexpr` et rester en flash / rodata
+- les structures runtime doivent etre compactes:
+  - table de bindings
+  - etat courant des points
+  - etat des drivers
+- il ne faut pas recreer un `ConfigVariable<>` par detail hardware compile-time inutile
+
+Le plus gros risque DRAM n'est pas le catalogue de ports.
+Le plus gros risque DRAM est:
+- la multiplication des `ConfigVariable<>` membres dans `IOModule`
+- et la taille reservee par `ConfigStore::_meta[Limits::MaxConfigVars]`
+
+Dans l'existant:
+- `Limits::MaxConfigVars = 315`
+- cette capacite reserve la table meta complete dans `ConfigStore`, meme si toutes les cases ne sont pas utilisees
+
+Conclusion pratique:
+- si le nouveau design reduit vraiment le nombre total de variables de config, il faudra aussi baisser `Limits::MaxConfigVars`
+- sinon on gagnera surtout sur la RAM du module IO lui-meme, mais peu sur la table meta globale
 
 ## 10. Service public recommande
 
@@ -683,6 +742,55 @@ Il faudra donc une nomenclature compacte, par exemple:
   - `ip00a1` = point 0 scale_b
   - `ip00db` = point 0 debounce
 
+### 11.8 Comparaison avec l'existant et budget recommande
+
+Le module IO actuel est deja tres couteux en `ConfigStore`.
+
+Ordre de grandeur de l'existant:
+- config globale IO: `16` variables
+- analogiques: `6 x 8 = 48` variables
+- entrees digitales: `5 x 4 = 20` variables
+- sorties digitales: `8 x 6 = 48` variables
+- total `IOModule` actuel: `132` variables
+
+Autrement dit:
+- le seul module IO consomme deja environ `42%` du budget global de `315`
+
+Ordre de grandeur du profil Flow.IO actuel:
+- `IOModule`: `132`
+- `PoolDeviceModule`: `64`
+- `PoolLogicModule`: `51`
+- autres modules principaux du profil: environ `35 a 40`
+- total profil: environ `282 a 287`
+
+Conclusion:
+- le headroom actuel est faible
+- une implementation naive du nouveau modele ferait probablement depasser la capacite actuelle
+
+Budget recommande pour `IOModule v2`:
+- cible ideale: `<= 80` variables
+- borne haute acceptable: `<= 96`
+- au-dela, le gain architectural deviendra tres difficile a tenir cote `ConfigStore`
+
+Recommandations pour tenir ce budget:
+- ne pas persister les proprietes purement compile-time:
+  - inventaire hardware
+  - type de capteur
+  - allowlists de ports
+  - adresses fixes si elles ne sont pas censees bouger
+- ne persister que les proprietes vraiment runtime / utilisateur:
+  - binding physique
+  - calibration
+  - quelques policies d'activation
+  - runtime blobs des compteurs si necessaire
+- ne pas donner a tous les points le meme sous-ensemble de variables
+- factoriser les parametres avances par type de point ou par driver
+- utiliser 1 blob runtime par compteur / point complexe plutot que 4 ou 5 variables separees si cela ne nuit pas a l'exploitation
+
+Corollaire important:
+- si `IOModule v2` descend vraiment vers `80` variables, il deviendra possible de reduire `Limits::MaxConfigVars`
+- cela liberera de la DRAM non seulement dans le module, mais aussi dans le coeur `ConfigStore`
+
 ## 12. Fichier autoritaire de cablage
 
 Tu demandais que les details de board et de cablage metier soient portes dans un fichier precis.
@@ -740,6 +848,73 @@ Politique conseillee:
 - un `PCF8574` absent rend indisponibles les sorties qui en dependent
 - `IOServiceV2` retourne `IO_ERR_NOT_READY` ou `IO_ERR_HW` selon le cas
 - les snapshots runtime indiquent `available=false`
+
+### 14.1 Persistance des compteurs
+
+Les compteurs reboot-proof ne doivent pas revenir a zero si leur sens metier est celui d'un total monotone.
+
+Je recommande de separer clairement:
+
+- responsabilite `IOModule`:
+  - compter proprement
+  - exposer un total technique monotone
+  - persister ce total technique
+- responsabilite des couches superieures:
+  - calculs metier derives
+  - remises a zero journalieres / hebdo / mensuelles
+  - alarmes et interpretations metier
+
+Donc:
+- la persistance du compteur brut ne doit pas etre deleguee a `PoolLogicModule`
+- elle doit vivre dans `IOModule`, idealement dans un petit sous-composant interne de type `CounterRuntimeStore`
+
+Pourquoi:
+- le compteur physique existe independamment du metier piscine
+- plusieurs couches peuvent vouloir le lire
+- la logique d'impulsions, de debounce et d'integrite est deja dans l'IO
+
+### 14.2 Strategie concrete de persistance compteur
+
+Sur chaque point compteur persistant, maintenir en RAM:
+- `persistedRawTotal`
+- `sessionDelta`
+- `lastFlushMs`
+- `persistDirty`
+
+Formule exposee:
+- `rawTotal = persistedRawTotal + sessionDelta`
+- `scaledValue = rawTotal * c0 + c1`
+
+Politique de flush NVS recommandee:
+- flush periodique, pas a chaque impulsion
+- exemple:
+  - toutes les `60s`
+  - ou a partir d'un delta mini de pulses
+  - ou sur transition vers un etat idle stable
+
+Tradeoff assume:
+- on accepte une perte maximale egale au delta non encore flushe
+- si la perte doit etre strictement nulle, la flash NVS n'est pas le bon backend
+
+Dans ce cas extreme, il faudrait:
+- soit un support plus adapte type FRAM
+- soit un besoin produit revu
+
+### 14.3 Format de persistence recommande
+
+Avec le `ConfigStore` actuel, deux options sont robustes:
+
+- option A:
+  - ajouter un vrai support `UInt32` / `UInt64`
+  - persister le compteur brut directement
+
+- option B:
+  - reutiliser le pattern `runtime blob`
+  - 1 variable `CharArray` par compteur persistant
+  - exemple de format: `v1,<raw_total>,<last_flush_ms>`
+
+Pour limiter le nombre de variables, l'option B est tres bonne si l'on reste sur peu de compteurs.
+Pour la proprete API, l'option A est meilleure si l'on accepte de faire evoluer `ConfigStore`.
 
 ## 15. Scheduler cible
 
@@ -887,4 +1062,3 @@ Autrement dit:
 - le metier raisonne en `IoId`
 - le hardware raisonne en `PhysicalPortId`
 - le module IO fait le pont, sans heap runtime et sans melanger les niveaux
-
