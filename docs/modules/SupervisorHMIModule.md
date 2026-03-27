@@ -20,8 +20,9 @@ Interface HMI locale du firmware Supervisor:
 
 - écran rafraîchi périodiquement sans blocage
 - extinction backlight après timeout d'inactivité PIR
+- rallumage du backlight sur détection de présence par le capteur PIR
 - backlight forcé ON pendant update firmware
-- appui long bouton (3s par défaut dans le profil Supervisor): reset `wifi.ssid`/`wifi.pass`, notification provisioning, reboot
+- appui long sur l'entrée `wifiResetPin` (3s par défaut dans le profil Supervisor): reset `wifi.ssid`/`wifi.pass`, notification provisioning, reboot
 
 ## Brochage et timings
 
@@ -42,3 +43,5 @@ Valeurs actuelles:
 - bouton reset WiFi: `disabled`
 - timeout extinction backlight: `10000 ms`
 - appui long reset WiFi: `3000 ms`
+
+Dans l'état actuel de `src/Board/SupervisorBoardRev1.h`, `wifiResetPin = -1`. Le comportement d'appui long est donc présent dans le module, mais aucun bouton matériel n'est défini par défaut sur cette révision de carte.

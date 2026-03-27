@@ -119,10 +119,12 @@ Références principales:
 | 15 | TFT ST7789 CS | écran local Supervisor |
 | 2 | TFT ST7789 DC | écran local Supervisor |
 | 4 | TFT ST7789 RST | écran local Supervisor |
-| 23 | TFT ST7789 MOSI | écran local Supervisor |
-| 18 | TFT ST7789 SCLK | écran local Supervisor |
-| 36 | entrée PIR | extinction automatique du backlight |
+| 23 | TFT ST7789 MOSI/SDA | écran local Supervisor |
+| 18 | TFT ST7789 SCLK/SCL | écran local Supervisor |
+| 36 | entrée PIR | extinction automatique du backlight et rallumage sur détection de présence |
 | 1 / 3 | UART0 | console série par défaut |
+
+Sur le profil `Supervisor`, le reset Wi-Fi par appui long est prévu sur l'entrée `wifiResetPin`. Dans l'état actuel de la carte décrite par `src/Board/SupervisorBoardRev1.h`, cette entrée est désactivée (`pin = -1`), donc aucun bouton matériel de reset Wi‑Fi n'est câblé par défaut.
 
 ## Composition actuelle des firmwares
 
@@ -183,13 +185,14 @@ Les valeurs ci-dessous correspondent à l'implémentation actuelle du profil `Fl
 | Entrées analogiques IO | 12 | `IOModule::MAX_ANALOG_ENDPOINTS` |
 | Entrées digitales IO | 5 | `IOModule::MAX_DIGITAL_INPUTS` |
 | Sorties digitales IO | 10 | `IOModule::MAX_DIGITAL_OUTPUTS` |
-| Slots digitaux IO | 15 | `IOModule::MAX_DIGITAL_SLOTS` |
 | Équipements `PoolDevice` | 8 | `POOL_DEVICE_MAX` |
 | Capteurs Home Assistant | 24 | `HAModule::MAX_HA_SENSORS` |
 | Binary sensors Home Assistant | 8 | `HAModule::MAX_HA_BINARY_SENSORS` |
 | Switches Home Assistant | 16 | `HAModule::MAX_HA_SWITCHES` |
 | Numbers Home Assistant | 16 | `HAModule::MAX_HA_NUMBERS` |
 | Buttons Home Assistant | 8 | `HAModule::MAX_HA_BUTTONS` |
-| Routes runtime MQTT | 36 | `Limits::MaxRuntimeRoutes` |
+| Routes runtime MQTT* | 36 | `Limits::MaxRuntimeRoutes` |
 | EventBus queue | 32 | `Limits::EventQueueLen` |
 | Variables de configuration | 315 | `Limits::MaxConfigVars` |
+
+\* Une route runtime MQTT correspond à un canal de publication runtime déclaré dans le firmware. Chaque route relie une source d'état interne à un suffixe de topic MQTT, par exemple `rt/io/input/a0`, `rt/pdm/state/pd0` ou `rt/system/state`.

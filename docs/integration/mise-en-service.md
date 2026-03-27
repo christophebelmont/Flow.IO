@@ -104,8 +104,8 @@ Références:
 | CS | 15 |
 | DC | 2 |
 | RST | 4 |
-| MOSI | 23 |
-| SCLK | 18 |
+| MOSI/SDA | 23 |
+| SCLK/SCL | 18 |
 
 ### Nextion et pont série
 
@@ -129,6 +129,12 @@ Valeurs runtime actuelles du profil Supervisor:
 
 - extinction backlight: `10000 ms`
 - appui long reset Wi-Fi: `3000 ms`
+
+Comportement actuel:
+
+- l'écran TFT se rallume lors d'une détection de présence par le capteur PIR raccordé sur GPIO `36`
+- le reset Wi-Fi par appui long correspond au bouton `wifiResetPin` du Supervisor
+- dans l'état actuel de `src/Board/SupervisorBoardRev1.h`, ce bouton est désactivé (`pin = -1`), donc aucun bouton matériel de reset Wi-Fi n'est câblé par défaut
 
 ## 5. Vérifications au premier démarrage
 

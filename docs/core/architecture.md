@@ -26,6 +26,23 @@ Les dépendances inter-modules passent par des services C simples:
 - champ `ctx`
 - enregistrement dans `ServiceRegistry`
 
+Le champ `ctx` est le pointeur de contexte du service.
+
+Dans l'implémentation actuelle, il pointe le plus souvent vers l'instance du module qui porte le service. Les fonctions du contrat reçoivent ce pointeur en premier argument, puis le recastent vers le type attendu pour accéder à l'état interne du module sans exposer directement la classe C++ dans le contrat public.
+
+Exemple de principe:
+
+```cpp
+struct MyService {
+    bool (*doThing)(void* ctx, int value);
+    void* ctx;
+};
+```
+
+Le nom `ctx` est l'abréviation de `context`. Ce nom est utilisé parce que les services sont définis comme des interfaces C légères basées sur des pointeurs de fonctions. Dans ce modèle, `ctx` joue le rôle d'instance associée au contrat, de la même manière qu'un `this` implicite dans une méthode C++.
+
+Le champ `ctx` n'est pas fortement typé: son type public est toujours `void*`. Le respect du contrat repose donc sur le développeur au moment de l'initialisation du service et du cast effectué dans les callbacks. Si un service reçoit un `ctx` qui ne correspond pas au type attendu, l'erreur ne sera pas bloquée par le compilateur et le comportement en exécution devient indéfini.
+
 ### Configuration
 
 La configuration persistante suit ce chemin:
@@ -42,7 +59,7 @@ L'état runtime suit ce chemin:
 1. écriture dans `DataStore`
 2. publication `EventId::DataChanged`
 3. consommation éventuelle par d'autres modules
-4. publication MQTT si une route runtime est concernée
+4. publication MQTT uniquement si un provider runtime MQTT est enregistré et si au moins une route déclarée par ce provider est concernée par la `DataKey` modifiée
 
 ## Flux principal
 
@@ -108,6 +125,8 @@ La chaîne de logs actuelle est:
 2. `LogDispatcherModule`: distribution vers les sinks
 3. `LogSerialSinkModule`: sortie série
 4. `LogAlarmSinkModule`: conversion de certains logs en alarmes
+
+Le logging fonctionne de manière asynchrone. Les modules produisent des entrées de log et les poussent dans le buffer central porté par `LogHubModule`. Ces entrées sont ensuite consommées par `LogDispatcherModule`, qui les redistribue vers les sinks enregistrés. Chaque sink applique ensuite son propre traitement, par exemple l'émission sur le port série pour `LogSerialSinkModule` ou la transformation en alarmes pour `LogAlarmSinkModule`.
 
 ## Transport MQTT
 
