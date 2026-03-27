@@ -5,9 +5,11 @@
 
 #include "I2CCfgClientModule.h"
 #include "Core/ErrorCodes.h"
+#include "Modules/Network/I2CCfgClientModule/I2CCfgClientRuntime.h"
 #define LOG_MODULE_ID ((LogModuleId)LogModuleIdValue::I2cCfgClientModule)
 #include "Core/ModuleLog.h"
 
+#include <ArduinoJson.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -185,6 +187,7 @@ void I2CCfgClientModule::init(ConfigStore& cfg, ServiceRegistry& services)
     logHub_ = services.get<LogHubService>(ServiceId::LogHub);
     cfgSvc_ = services.get<ConfigStoreService>(ServiceId::ConfigStore);
     cmdSvc_ = services.get<CommandService>(ServiceId::Command);
+    dsSvc_ = services.get<DataStoreService>(ServiceId::DataStore);
     if (!runtimeCacheMutex_) runtimeCacheMutex_ = xSemaphoreCreateMutex();
     if (!requestMutex_) requestMutex_ = xSemaphoreCreateMutex();
     if (!transportMutex_) transportMutex_ = xSemaphoreCreateMutex();
@@ -337,6 +340,7 @@ void I2CCfgClientModule::markRemoteUnavailable_()
 {
     reachable_ = false;
     retryAfterMs_ = millis() + kRemoteRetryCooldownMs;
+    publishFlowRemoteReady_(false);
 }
 
 void I2CCfgClientModule::markRemoteAvailable_()
@@ -386,6 +390,7 @@ void I2CCfgClientModule::invalidateRuntimeCache_()
         runtimeCacheFetchedAtMs_ = 0U;
         memset(runtimeStatusDomainCache_, 0, sizeof(runtimeStatusDomainCache_));
         memset(runtimeStatusDomainCacheValid_, 0, sizeof(runtimeStatusDomainCacheValid_));
+        publishFlowRemoteReady_(false);
         return;
     }
 
@@ -395,6 +400,7 @@ void I2CCfgClientModule::invalidateRuntimeCache_()
     memset(runtimeStatusDomainCache_, 0, sizeof(runtimeStatusDomainCache_));
     memset(runtimeStatusDomainCacheValid_, 0, sizeof(runtimeStatusDomainCacheValid_));
     xSemaphoreGive(runtimeCacheMutex_);
+    publishFlowRemoteReady_(false);
 }
 
 bool I2CCfgClientModule::refreshRuntimeCacheIfNeeded_(bool force)
@@ -474,7 +480,152 @@ bool I2CCfgClientModule::refreshRuntimeCacheIfNeeded_(bool force)
     }
 
     xSemaphoreGive(runtimeCacheMutex_);
+    if (ok) {
+        publishFlowRemoteSnapshotFromCache_();
+    }
     return ok || hadCache;
+}
+
+void I2CCfgClientModule::publishFlowRemoteReady_(bool ready)
+{
+    if (!dsSvc_ || !dsSvc_->store) return;
+    DataStore& ds = *dsSvc_->store;
+    (void)setFlowRemoteReady(ds, ready);
+    if (!ready) {
+        (void)setFlowRemoteLinkOk(ds, false);
+    }
+}
+
+bool I2CCfgClientModule::parseFlowRemoteSnapshotFromCache_(FlowRemoteRuntimeData& out)
+{
+    if (!runtimeCacheMutex_) return false;
+    if (xSemaphoreTake(runtimeCacheMutex_, pdMS_TO_TICKS(200)) != pdTRUE) return false;
+
+    FlowRemoteRuntimeData snapshot{};
+    snapshot.ready = runtimeCacheValid_;
+    StaticJsonDocument<640> doc;
+
+    auto parseDomain = [&](FlowStatusDomain domain) -> JsonObjectConst {
+        const uint8_t idx = runtimeStatusDomainCacheIndex_(domain);
+        const bool valid = idx < (sizeof(runtimeStatusDomainCacheValid_) / sizeof(runtimeStatusDomainCacheValid_[0])) &&
+                           runtimeStatusDomainCacheValid_[idx] &&
+                           runtimeStatusDomainCache_[idx][0] != '\0';
+        if (!valid) return JsonObjectConst();
+        doc.clear();
+        const DeserializationError err = deserializeJson(doc, runtimeStatusDomainCache_[idx]);
+        if (err || !doc.is<JsonObjectConst>()) {
+            doc.clear();
+            return JsonObjectConst();
+        }
+        JsonObjectConst root = doc.as<JsonObjectConst>();
+        if (!(root["ok"] | false)) {
+            doc.clear();
+            return JsonObjectConst();
+        }
+        return root;
+    };
+
+    JsonObjectConst root = parseDomain(FlowStatusDomain::System);
+    if (root.isNull()) {
+        xSemaphoreGive(runtimeCacheMutex_);
+        return false;
+    }
+    snprintf(snapshot.firmware, sizeof(snapshot.firmware), "%s", root["fw"] | "");
+    {
+        JsonObjectConst flowHeap = root["heap"];
+        if (!flowHeap.isNull()) {
+            snapshot.hasHeapFrag = true;
+            snapshot.heapFragPct = (uint8_t)(flowHeap["frag"] | 0U);
+        }
+    }
+
+    root = parseDomain(FlowStatusDomain::Wifi);
+    if (root.isNull()) {
+        xSemaphoreGive(runtimeCacheMutex_);
+        return false;
+    }
+    {
+        JsonObjectConst flowWifi = root["wifi"];
+        snapshot.hasRssi = flowWifi["hrss"] | false;
+        snapshot.rssiDbm = (int32_t)(flowWifi["rssi"] | -127);
+    }
+
+    root = parseDomain(FlowStatusDomain::Mqtt);
+    if (root.isNull()) {
+        xSemaphoreGive(runtimeCacheMutex_);
+        return false;
+    }
+    {
+        JsonObjectConst flowMqtt = root["mqtt"];
+        snapshot.mqttReady = flowMqtt["rdy"] | false;
+        snapshot.mqttRxDrop = (uint32_t)(flowMqtt["rxdrp"] | 0U);
+        snapshot.mqttParseFail = (uint32_t)(flowMqtt["prsf"] | 0U);
+    }
+
+    root = parseDomain(FlowStatusDomain::I2c);
+    if (root.isNull()) {
+        xSemaphoreGive(runtimeCacheMutex_);
+        return false;
+    }
+    {
+        JsonObjectConst i2c = root["i2c"];
+        snapshot.linkOk = i2c["lnk"] | false;
+        snapshot.i2cReqCount = (uint32_t)(i2c["req"] | 0U);
+        snapshot.i2cBadReqCount = (uint32_t)(i2c["breq"] | 0U);
+        snapshot.i2cLastReqAgoMs = (uint32_t)(i2c["ago"] | 0U);
+    }
+
+    root = parseDomain(FlowStatusDomain::Pool);
+    if (root.isNull()) {
+        xSemaphoreGive(runtimeCacheMutex_);
+        return false;
+    }
+    {
+        JsonObjectConst pool = root["pool"];
+        if (!pool.isNull()) {
+            snapshot.hasPoolModes = pool["has"] | false;
+            snapshot.filtrationAuto = pool["auto"] | false;
+            snapshot.winterMode = pool["wint"] | false;
+            snapshot.phAutoMode = pool["pha"] | false;
+            snapshot.orpAutoMode = pool["ora"] | false;
+            snapshot.filtrationOn = pool["fil"] | false;
+            snapshot.phPumpOn = pool["php"] | false;
+            snapshot.chlorinePumpOn = pool["clp"] | false;
+
+            JsonVariantConst phVar = pool["ph"];
+            if (!phVar.isNull()) {
+                snapshot.hasPh = true;
+                snapshot.phValue = phVar.as<float>();
+            }
+            JsonVariantConst orpVar = pool["orp"];
+            if (!orpVar.isNull()) {
+                snapshot.hasOrp = true;
+                snapshot.orpValue = orpVar.as<float>();
+            }
+            JsonVariantConst waterTempVar = pool["wat"];
+            if (!waterTempVar.isNull()) {
+                snapshot.hasWaterTemp = true;
+                snapshot.waterTemp = waterTempVar.as<float>();
+            }
+            JsonVariantConst airTempVar = pool["air"];
+            if (!airTempVar.isNull()) {
+                snapshot.hasAirTemp = true;
+                snapshot.airTemp = airTempVar.as<float>();
+            }
+        }
+    }
+
+    xSemaphoreGive(runtimeCacheMutex_);
+    out = snapshot;
+    return true;
+}
+
+void I2CCfgClientModule::publishFlowRemoteSnapshotFromCache_()
+{
+    if (!dsSvc_ || !dsSvc_->store) return;
+    FlowRemoteRuntimeData snapshot{};
+    if (!parseFlowRemoteSnapshotFromCache_(snapshot)) return;
+    applyFlowRemoteRuntimeSnapshot(*dsSvc_->store, snapshot);
 }
 
 bool I2CCfgClientModule::pingFlow_(uint8_t& statusOut)

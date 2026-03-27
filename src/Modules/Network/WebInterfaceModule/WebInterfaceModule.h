@@ -50,8 +50,8 @@ private:
     // Keep UART framing aligned with core log entry limits.
     static constexpr size_t kSerialLogLineChars =
         (size_t)LOG_MSG_MAX + (size_t)LOG_MODULE_NAME_MAX + 64U;
-    static constexpr size_t kLineBufferSize = kSerialLogLineChars * 4U;
-    static constexpr size_t kUartRxBufferSize = kLineBufferSize * 2U;
+    static constexpr size_t kLineBufferSize = kSerialLogLineChars * 3U;
+    static constexpr size_t kUartRxBufferSize = kLineBufferSize + kSerialLogLineChars;
 
     // Server and network integration
     void startServer_();
@@ -120,8 +120,8 @@ private:
     const FirmwareUpdateService* fwUpdateSvc_ = nullptr;
     ServiceRegistry* services_ = nullptr;
 
-    static constexpr size_t kLocalLogLineMax = 240;
-    static constexpr UBaseType_t kLocalLogQueueLen = 64;
+    static constexpr size_t kLocalLogLineMax = 192;
+    static constexpr UBaseType_t kLocalLogQueueLen = 24;
     QueueHandle_t localLogQueue_ = nullptr;
 
     char lineBuf_[kLineBufferSize] = {0};

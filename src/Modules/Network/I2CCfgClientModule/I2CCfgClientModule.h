@@ -18,6 +18,7 @@
 #include "Core/ConfigTypes.h"
 #include "Core/NvsKeys.h"
 #include "Core/Services/Services.h"
+#include "Modules/Network/I2CCfgClientModule/I2CCfgClientModuleDataModel.h"
 #include <freertos/semphr.h>
 
 class I2CCfgClientModule : public ModulePassive {
@@ -27,11 +28,12 @@ public:
     uint8_t taskCount() const override { return 1; }
     const ModuleTaskSpec* taskSpecs() const override { return singleLoopTaskSpec(); }
 
-    uint8_t dependencyCount() const override { return 3; }
+    uint8_t dependencyCount() const override { return 4; }
     ModuleId dependency(uint8_t i) const override {
         if (i == 0) return ModuleId::LogHub;
         if (i == 1) return ModuleId::ConfigStore;
         if (i == 2) return ModuleId::Command;
+        if (i == 3) return ModuleId::DataStore;
         return ModuleId::Unknown;
     }
 
@@ -78,6 +80,7 @@ private:
     const LogHubService* logHub_ = nullptr;
     const ConfigStoreService* cfgSvc_ = nullptr;
     const CommandService* cmdSvc_ = nullptr;
+    const DataStoreService* dsSvc_ = nullptr;
     I2cLink link_{};
     bool ready_ = false;
     bool reachable_ = false;
@@ -133,6 +136,9 @@ private:
     bool priorityI2cWindowActive_() const;
     void invalidateRuntimeCache_();
     bool refreshRuntimeCacheIfNeeded_(bool force = false);
+    void publishFlowRemoteReady_(bool ready);
+    bool parseFlowRemoteSnapshotFromCache_(FlowRemoteRuntimeData& out);
+    void publishFlowRemoteSnapshotFromCache_();
     bool fetchRuntimeStatusDomainUncached_(FlowStatusDomain domain, char* out, size_t outLen);
     static uint8_t runtimeStatusDomainCacheIndex_(FlowStatusDomain domain);
 

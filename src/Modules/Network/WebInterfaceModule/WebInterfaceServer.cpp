@@ -25,7 +25,6 @@
 #include "Core/DataKeys.h"
 #include "Core/EventBus/EventPayloads.h"
 #include "Modules/Network/WifiModule/WifiRuntime.h"
-#include "WebInterfaceMenuIcons.h"
 
 #ifndef FLOW_WEB_HIDE_MENU_SVG
 #define FLOW_WEB_HIDE_MENU_SVG 0
@@ -111,10 +110,26 @@ void addNoCacheHeaders_(AsyncWebServerResponse* response)
     response->addHeader("Expires", "0");
 }
 
+void addShortLivedAssetCacheHeaders_(AsyncWebServerResponse* response)
+{
+    if (!response) return;
+    response->addHeader("Cache-Control", "public, max-age=3600");
+}
+
 void addVersionedAssetCacheHeaders_(AsyncWebServerResponse* response)
 {
     if (!response) return;
     response->addHeader("Cache-Control", "public, max-age=31536000, immutable");
+}
+
+void addCacheAwareAssetHeaders_(AsyncWebServerRequest* request, AsyncWebServerResponse* response)
+{
+    if (!request || !response) return;
+    if (request->hasParam("v")) {
+        addVersionedAssetCacheHeaders_(response);
+    } else {
+        addShortLivedAssetCacheHeaders_(response);
+    }
 }
 
 int flowCfgApplyHttpStatus_(const char* ackJson)
@@ -535,6 +550,48 @@ void WebInterfaceModule::startServer_()
         LOGI("SPIFFS mounted for web assets");
     }
 
+    auto beginSpiffsAssetResponse =
+        [this](AsyncWebServerRequest* request,
+               const char* assetPath,
+               const char* contentType,
+               bool cacheAware,
+               const char* gzipOverridePath = nullptr) -> AsyncWebServerResponse* {
+        if (!request || !assetPath || !contentType || !spiffsReady_) return nullptr;
+
+        const size_t assetPathLen = strlen(assetPath);
+        if (assetPathLen == 0U || assetPathLen >= 112U) return nullptr;
+
+        char gzipPath[128] = {0};
+        const char* servedPath = assetPath;
+        bool hasGzip = false;
+        if (gzipOverridePath && gzipOverridePath[0] != '\0') {
+            if (SPIFFS.exists(gzipOverridePath)) {
+                servedPath = gzipOverridePath;
+                hasGzip = true;
+            }
+        } else {
+            const int gzipPathLen = snprintf(gzipPath, sizeof(gzipPath), "%s.gz", assetPath);
+            if ((gzipPathLen > 0) && ((size_t)gzipPathLen < sizeof(gzipPath)) && SPIFFS.exists(gzipPath)) {
+                servedPath = gzipPath;
+                hasGzip = true;
+            }
+        }
+        if (!SPIFFS.exists(servedPath)) return nullptr;
+
+        AsyncWebServerResponse* response = request->beginResponse(SPIFFS, servedPath, contentType);
+        if (!response) return nullptr;
+        response->addHeader("Vary", "Accept-Encoding");
+        if (hasGzip) {
+            response->addHeader("Content-Encoding", "gzip");
+        }
+        if (cacheAware) {
+            addCacheAwareAssetHeaders_(request, response);
+        } else {
+            addNoCacheHeaders_(response);
+        }
+        return response;
+    };
+
     server_.on("/assets/favicon.png", HTTP_GET, [this](AsyncWebServerRequest* request) {
         if (!spiffsReady_ || !SPIFFS.exists("/assets/Logos_Favicon.png")) {
             request->send(404, "text/plain", "Not found");
@@ -549,42 +606,6 @@ void WebInterfaceModule::startServer_()
         }
         request->send(SPIFFS, "/assets/Logos_Texte_v2.png", "image/png");
     });
-    server_.on("/assets/flowio-logotext.svg", HTTP_GET, [this](AsyncWebServerRequest* request) {
-        if (!spiffsReady_ || !SPIFFS.exists("/assets/flowio_logotext.svg")) {
-            request->send(404, "text/plain", "Not found");
-            return;
-        }
-        AsyncWebServerResponse* response =
-            request->beginResponse(SPIFFS, "/assets/flowio_logotext.svg", "image/svg+xml");
-        addNoCacheHeaders_(response);
-        request->send(response);
-    });
-
-    server_.on("/assets/icon-journaux.svg", HTTP_GET, [](AsyncWebServerRequest* request) {
-        sendProgmemLiteral_(request, "image/svg+xml", kMenuIconJournauxSvg);
-    });
-    server_.on("/assets/icon-status.svg", HTTP_GET, [](AsyncWebServerRequest* request) {
-        sendProgmemLiteral_(request, "image/svg+xml", kMenuIconStatusSvg);
-    });
-    server_.on("/assets/icon-upgrade.svg", HTTP_GET, [](AsyncWebServerRequest* request) {
-        sendProgmemLiteral_(request, "image/svg+xml", kMenuIconUpgradeSvg);
-    });
-    server_.on("/assets/icon-config.svg", HTTP_GET, [](AsyncWebServerRequest* request) {
-        sendProgmemLiteral_(request, "image/svg+xml", kMenuIconConfigSvg);
-    });
-    server_.on("/assets/icon-connections.svg", HTTP_GET, [](AsyncWebServerRequest* request) {
-        sendProgmemLiteral_(request, "image/svg+xml", kMenuIconConnectionsSvg);
-    });
-    server_.on("/assets/icon-system.svg", HTTP_GET, [](AsyncWebServerRequest* request) {
-        sendProgmemLiteral_(request, "image/svg+xml", kMenuIconSystemSvg);
-    });
-    server_.on("/assets/icon-control.svg", HTTP_GET, [](AsyncWebServerRequest* request) {
-        sendProgmemLiteral_(request, "image/svg+xml", kMenuIconControlSvg);
-    });
-    server_.on("/assets/icon-settings.svg", HTTP_GET, [](AsyncWebServerRequest* request) {
-        sendProgmemLiteral_(request, "image/svg+xml", kMenuIconSettingsSvg);
-    });
-
     auto webInterfaceLandingUrl = [this]() -> String {
         NetworkAccessMode mode = NetworkAccessMode::None;
         if (!netAccessSvc_ && services_) {
@@ -604,50 +625,76 @@ void WebInterfaceModule::startServer_()
         request->redirect(webInterfaceLandingUrl());
     });
 
-    server_.on("/webinterface/app.css", HTTP_GET, [this](AsyncWebServerRequest* request) {
-        if (!spiffsReady_ || !SPIFFS.exists("/webinterface/app.css")) {
+    server_.on("/webinterface/app.css", HTTP_GET, [this, beginSpiffsAssetResponse](AsyncWebServerRequest* request) {
+        AsyncWebServerResponse* response =
+            beginSpiffsAssetResponse(request, "/webinterface/app.css", "text/css", true);
+        if (!response) {
             request->send(404, "text/plain", "Not found");
             return;
         }
-        AsyncWebServerResponse* response = request->beginResponse(SPIFFS, "/webinterface/app.css", "text/css");
-        addNoCacheHeaders_(response);
         request->send(response);
     });
-    server_.on("/webinterface/app.js", HTTP_GET, [this](AsyncWebServerRequest* request) {
-        if (!spiffsReady_ || !SPIFFS.exists("/webinterface/app.js")) {
+    server_.on("/webinterface/app.js", HTTP_GET, [this, beginSpiffsAssetResponse](AsyncWebServerRequest* request) {
+        AsyncWebServerResponse* response =
+            beginSpiffsAssetResponse(request, "/webinterface/app.js", "application/javascript", true);
+        if (!response) {
             request->send(404, "text/plain", "Not found");
             return;
         }
-        AsyncWebServerResponse* response =
-            request->beginResponse(SPIFFS, "/webinterface/app.js", "application/javascript");
-        addNoCacheHeaders_(response);
         request->send(response);
     });
-    server_.on("/webinterface/cfgdocs.fr.json", HTTP_GET, [this](AsyncWebServerRequest* request) {
-        if (spiffsReady_ && SPIFFS.exists("/webinterface/cfgdocs.fr.json")) {
+    server_.on("/webinterface/runtimeui.json", HTTP_GET, [this, beginSpiffsAssetResponse](AsyncWebServerRequest* request) {
+        AsyncWebServerResponse* response =
+            beginSpiffsAssetResponse(request, "/webinterface/runtimeui.json", "application/json", true);
+        if (!response) {
+            request->send(404, "text/plain", "Not found");
+            return;
+        }
+        request->send(response);
+    });
+    auto registerWebSvgRoute = [this, beginSpiffsAssetResponse](const char* assetPath) {
+        server_.on(assetPath, HTTP_GET, [this, beginSpiffsAssetResponse, assetPath](AsyncWebServerRequest* request) {
             AsyncWebServerResponse* response =
-                request->beginResponse(SPIFFS, "/webinterface/cfgdocs.fr.json", "application/json");
-            addVersionedAssetCacheHeaders_(response);
+                beginSpiffsAssetResponse(request, assetPath, "image/svg+xml", true);
+            if (!response) {
+                request->send(404, "text/plain", "Not found");
+                return;
+            }
+            request->send(response);
+        });
+    };
+    registerWebSvgRoute("/webinterface/i/m.svg");
+    registerWebSvgRoute("/webinterface/i/t.svg");
+    registerWebSvgRoute("/webinterface/i/s.svg");
+    registerWebSvgRoute("/webinterface/i/d.svg");
+    registerWebSvgRoute("/webinterface/i/e.svg");
+    registerWebSvgRoute("/webinterface/i/f.svg");
+    registerWebSvgRoute("/webinterface/i/u.svg");
+    server_.on("/webinterface/cfgdocs.fr.json", HTTP_GET, [this, beginSpiffsAssetResponse](AsyncWebServerRequest* request) {
+        AsyncWebServerResponse* response =
+            beginSpiffsAssetResponse(
+                request, "/webinterface/cfgdocs.fr.json", "application/json", true, "/webinterface/cfgdocs.jz");
+        if (response) {
             request->send(response);
             return;
         }
-        AsyncWebServerResponse* response =
+        AsyncWebServerResponse* fallbackResponse =
             request->beginResponse(200, "application/json", "{\"_meta\":{\"generated\":false},\"docs\":{}}");
-        addNoCacheHeaders_(response);
-        request->send(response);
+        addNoCacheHeaders_(fallbackResponse);
+        request->send(fallbackResponse);
     });
-    server_.on("/webinterface/cfgmods.fr.json", HTTP_GET, [this](AsyncWebServerRequest* request) {
-        if (spiffsReady_ && SPIFFS.exists("/webinterface/cfgmods.fr.json")) {
-            AsyncWebServerResponse* response =
-                request->beginResponse(SPIFFS, "/webinterface/cfgmods.fr.json", "application/json");
-            addVersionedAssetCacheHeaders_(response);
+    server_.on("/webinterface/cfgmods.fr.json", HTTP_GET, [this, beginSpiffsAssetResponse](AsyncWebServerRequest* request) {
+        AsyncWebServerResponse* response =
+            beginSpiffsAssetResponse(
+                request, "/webinterface/cfgmods.fr.json", "application/json", true, "/webinterface/cfgmods.jz");
+        if (response) {
             request->send(response);
             return;
         }
-        AsyncWebServerResponse* response =
+        AsyncWebServerResponse* fallbackResponse =
             request->beginResponse(200, "application/json", "{\"_meta\":{\"generated\":false},\"docs\":{}}");
-        addNoCacheHeaders_(response);
-        request->send(response);
+        addNoCacheHeaders_(fallbackResponse);
+        request->send(fallbackResponse);
     });
     server_.on("/api/web/meta", HTTP_GET, [this](AsyncWebServerRequest* request) {
         HttpLatencyScope latency(request, "/api/web/meta");
@@ -674,7 +721,7 @@ void WebInterfaceModule::startServer_()
         addNoCacheHeaders_(response);
         request->send(response);
     });
-    server_.on("/webinterface", HTTP_GET, [this](AsyncWebServerRequest* request) {
+    server_.on("/webinterface", HTTP_GET, [this, beginSpiffsAssetResponse](AsyncWebServerRequest* request) {
         HttpLatencyScope latency(request, "/webinterface");
         if (!request->hasParam("page")) {
             NetworkAccessMode mode = NetworkAccessMode::None;
@@ -693,8 +740,11 @@ void WebInterfaceModule::startServer_()
         }
         if (spiffsReady_ && SPIFFS.exists("/webinterface/index.html")) {
             AsyncWebServerResponse* response =
-                request->beginResponse(SPIFFS, "/webinterface/index.html", "text/html");
-            addNoCacheHeaders_(response);
+                beginSpiffsAssetResponse(request, "/webinterface/index.html", "text/html", false);
+            if (!response) {
+                request->send(500, "text/plain", "Failed to load web interface");
+                return;
+            }
             request->send(response);
             return;
         }
@@ -1235,16 +1285,15 @@ void WebInterfaceModule::startServer_()
         request->send(200, "application/json", domainBuf);
     });
 
-    server_.on("/api/runtime/manifest", HTTP_GET, [this](AsyncWebServerRequest* request) {
+    server_.on("/api/runtime/manifest", HTTP_GET, [this, beginSpiffsAssetResponse](AsyncWebServerRequest* request) {
         HttpLatencyScope latency(request, "/api/runtime/manifest");
-        if (!spiffsReady_ || !SPIFFS.exists("/webinterface/runtimeui.json")) {
+        AsyncWebServerResponse* response =
+            beginSpiffsAssetResponse(request, "/webinterface/runtimeui.json", "application/json", true);
+        if (!response) {
             request->send(503, "application/json",
                           "{\"ok\":false,\"err\":{\"code\":\"NotReady\",\"where\":\"runtime.manifest\"}}");
             return;
         }
-        AsyncWebServerResponse* response =
-            request->beginResponse(SPIFFS, "/webinterface/runtimeui.json", "application/json");
-        addNoCacheHeaders_(response);
         request->send(response);
     });
 

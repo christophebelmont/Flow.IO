@@ -55,8 +55,42 @@ constexpr uint8_t PoolDeviceMetricsReservedCount = 8;
 /** @brief End-exclusive bound for pool-device metrics key range. */
 constexpr DataKey PoolDeviceMetricsEndExclusive = PoolDeviceMetricsBase + PoolDeviceMetricsReservedCount;
 
+/** @brief Reserved base for mirrored Flow runtime keys on Supervisor. */
+constexpr DataKey FlowRemoteBase = 128;
+constexpr DataKey FlowRemoteReady = FlowRemoteBase + 0;
+constexpr DataKey FlowRemoteLinkOk = FlowRemoteBase + 1;
+constexpr DataKey FlowRemoteFirmware = FlowRemoteBase + 2;
+constexpr DataKey FlowRemoteHasRssi = FlowRemoteBase + 3;
+constexpr DataKey FlowRemoteRssiDbm = FlowRemoteBase + 4;
+constexpr DataKey FlowRemoteHasHeapFrag = FlowRemoteBase + 5;
+constexpr DataKey FlowRemoteHeapFragPct = FlowRemoteBase + 6;
+constexpr DataKey FlowRemoteMqttReady = FlowRemoteBase + 7;
+constexpr DataKey FlowRemoteMqttRxDrop = FlowRemoteBase + 8;
+constexpr DataKey FlowRemoteMqttParseFail = FlowRemoteBase + 9;
+constexpr DataKey FlowRemoteI2cReqCount = FlowRemoteBase + 10;
+constexpr DataKey FlowRemoteI2cBadReqCount = FlowRemoteBase + 11;
+constexpr DataKey FlowRemoteI2cLastReqAgoMs = FlowRemoteBase + 12;
+constexpr DataKey FlowRemoteHasPoolModes = FlowRemoteBase + 13;
+constexpr DataKey FlowRemoteFiltrationAuto = FlowRemoteBase + 14;
+constexpr DataKey FlowRemoteWinterMode = FlowRemoteBase + 15;
+constexpr DataKey FlowRemotePhAutoMode = FlowRemoteBase + 16;
+constexpr DataKey FlowRemoteOrpAutoMode = FlowRemoteBase + 17;
+constexpr DataKey FlowRemoteFiltrationOn = FlowRemoteBase + 18;
+constexpr DataKey FlowRemotePhPumpOn = FlowRemoteBase + 19;
+constexpr DataKey FlowRemoteChlorinePumpOn = FlowRemoteBase + 20;
+constexpr DataKey FlowRemoteHasPh = FlowRemoteBase + 21;
+constexpr DataKey FlowRemotePhValue = FlowRemoteBase + 22;
+constexpr DataKey FlowRemoteHasOrp = FlowRemoteBase + 23;
+constexpr DataKey FlowRemoteOrpValue = FlowRemoteBase + 24;
+constexpr DataKey FlowRemoteHasWaterTemp = FlowRemoteBase + 25;
+constexpr DataKey FlowRemoteWaterTemp = FlowRemoteBase + 26;
+constexpr DataKey FlowRemoteHasAirTemp = FlowRemoteBase + 27;
+constexpr DataKey FlowRemoteAirTemp = FlowRemoteBase + 28;
+constexpr uint8_t FlowRemoteReservedCount = 32;
+constexpr DataKey FlowRemoteEndExclusive = FlowRemoteBase + FlowRemoteReservedCount;
+
 /** @brief Upper bound for currently reserved keys. */
-constexpr DataKey ReservedMax = 127;
+constexpr DataKey ReservedMax = FlowRemoteEndExclusive - 1;
 
 static_assert(WifiReady < TimeReady, "DataKey ordering invariant broken");
 static_assert(TimeReady < MqttReady, "DataKey ordering invariant broken");
@@ -64,6 +98,8 @@ static_assert(MqttOversizeDrop < HaPublished, "DataKey ranges overlap");
 static_assert(HaDeviceId < IoBase, "HA fixed keys overlap IO key range");
 static_assert(IoEndExclusive <= PoolDeviceStateBase, "IO and pool-device key ranges overlap");
 static_assert(PoolDeviceStateEndExclusive <= PoolDeviceMetricsBase, "Pool-device state and metrics ranges overlap");
-static_assert(PoolDeviceMetricsEndExclusive <= ReservedMax, "Pool-device key range exceeds reserved max");
+static_assert(PoolDeviceMetricsEndExclusive <= FlowRemoteBase, "Pool-device and flow-remote key ranges overlap");
+static_assert((FlowRemoteBase + FlowRemoteReservedCount) == FlowRemoteEndExclusive, "Flow remote key bounds inconsistent");
+static_assert(FlowRemoteEndExclusive <= (ReservedMax + 1), "Flow remote key range exceeds reserved max");
 
 }  // namespace DataKeys

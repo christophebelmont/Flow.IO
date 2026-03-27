@@ -30,6 +30,8 @@
       --btn-fg-hover: #FFFFFF;
       --term-bg: #081629;
       --term-fg: #DDEBF5;
+      --flowio-brand-url: url('/webinterface/i/f.svg');
+      --drawer-width: 228px;
     }
     * { box-sizing: border-box; }
     body {
@@ -38,21 +40,6 @@
       font-family: "Inter", "Segoe UI", Roboto, Arial, sans-serif;
       background: var(--md-bg);
       color: var(--md-on-surface);
-    }
-    /* Temporary icon mask for UI review. */
-    .menu-item .ico,
-    .status-card-icon,
-    .status-bool,
-    .app-icon-shell,
-    .btn-icon-only,
-    .password-toggle svg,
-    .control-title-root-btn svg,
-    .control-field-apply svg,
-    .control-crumb-arrows {
-      display: none !important;
-    }
-    .menu-item {
-      gap: 0;
     }
     @keyframes skeleton-shimmer {
       0% { background-position: 200% 0; }
@@ -69,7 +56,7 @@
     }
     .app { display: flex; min-height: 100vh; }
     .drawer {
-      width: 252px;
+      width: var(--drawer-width);
       padding: 12px;
       border-right: 1px solid var(--sidebar-divider);
       background: var(--sidebar-bg);
@@ -92,21 +79,29 @@
       justify-content: center;
       transition: background 0.16s ease, color 0.16s ease, border-color 0.16s ease;
     }
-    .menu-btn svg {
-      width: 20px;
-      height: 20px;
-      display: block;
+    .menu-btn {
+      font-size: 20px;
+      font-weight: 700;
     }
     .menu-btn:hover {
       background: linear-gradient(90deg, var(--btn-grad-hover-start) 0%, var(--btn-grad-hover-end) 100%);
       color: #FFFFFF;
     }
     .drawer-user {
-      font-size: 18px;
-      font-weight: 700;
-      color: var(--menu-inactive-fg);
-      line-height: 1;
-      white-space: nowrap;
+      display: inline-flex;
+      align-items: center;
+      min-width: 0;
+      height: 30px;
+    }
+    .brand-wordmark {
+      display: block;
+      width: 108px;
+      height: 24px;
+      background-image: var(--flowio-brand-url);
+      background-repeat: no-repeat;
+      background-position: center 100%;
+      background-size: 100% auto;
+      filter: drop-shadow(0 6px 10px rgba(11, 31, 58, 0.08));
     }
     .drawer.collapsed .drawer-user { display: none; }
     .menu-group { display: grid; gap: 6px; margin-top: 10px; }
@@ -118,6 +113,16 @@
       gap: 8px;
       justify-content: flex-start;
       padding: 16px 4px 2px 2px;
+    }
+    .brand-mark {
+      width: 62px;
+      height: 56px;
+      flex: 0 0 auto;
+      background-image: var(--flowio-brand-url);
+      background-repeat: no-repeat;
+      background-position: center 0;
+      background-size: 114% auto;
+      filter: drop-shadow(0 8px 12px rgba(11, 31, 58, 0.12));
     }
     .app-icon-shell {
       width: 122px;
@@ -189,30 +194,45 @@
       font-weight: 700;
     }
     .menu-item .ico {
-      width: 22px;
-      text-align: center;
+      width: 20px;
+      height: 20px;
       display: inline-flex;
       justify-content: center;
       align-items: center;
-      font-size: 10px;
-      font-weight: 800;
-      letter-spacing: 0.08em;
+      color: var(--menu-inactive-fg);
+      transition: color 0.16s ease;
+      flex: 0 0 20px;
+      background-color: currentColor;
+      -webkit-mask-position: center;
+      -webkit-mask-repeat: no-repeat;
+      -webkit-mask-size: contain;
+      mask-position: center;
+      mask-repeat: no-repeat;
+      mask-size: contain;
     }
-    .menu-item .ico-svg {
-      font-size: 22px;
-      width: 22px;
-      height: 22px;
-      display: block;
-      opacity: 0.86;
-      filter: brightness(0) saturate(100%) invert(69%) sepia(11%) saturate(517%) hue-rotate(183deg) brightness(87%) contrast(88%);
-      transition: opacity 0.16s ease, filter 0.16s ease;
+    .menu-item:hover .ico,
+    .menu-item.active .ico {
+      color: var(--menu-active-fg);
     }
-    .menu-item:hover .ico-svg {
-      opacity: 1;
+    .icon-measures {
+      -webkit-mask-image: url('/webinterface/i/m.svg');
+      mask-image: url('/webinterface/i/m.svg');
     }
-    .menu-item.active .ico-svg {
-      opacity: 1;
-      filter: brightness(0) saturate(100%) invert(59%) sepia(35%) saturate(782%) hue-rotate(140deg) brightness(93%) contrast(91%);
+    .icon-terminal {
+      -webkit-mask-image: url('/webinterface/i/t.svg');
+      mask-image: url('/webinterface/i/t.svg');
+    }
+    .icon-system {
+      -webkit-mask-image: url('/webinterface/i/s.svg');
+      mask-image: url('/webinterface/i/s.svg');
+    }
+    .icon-flowcfg {
+      -webkit-mask-image: url('/webinterface/i/d.svg');
+      mask-image: url('/webinterface/i/d.svg');
+    }
+    .icon-supervisorcfg {
+      -webkit-mask-image: url('/webinterface/i/e.svg');
+      mask-image: url('/webinterface/i/e.svg');
     }
     .drawer.collapsed .menu-item .label { display: none; }
     body.menu-icons-disabled .menu-item .ico {
@@ -224,7 +244,7 @@
     @media (min-width: 901px) {
       body.menu-icons-disabled .drawer,
       body.menu-icons-disabled .drawer.collapsed {
-        width: 252px;
+        width: var(--drawer-width);
         padding-left: 12px;
         padding-right: 12px;
       }
@@ -273,11 +293,18 @@
         padding-right: 0;
         justify-content: center;
       }
-      .drawer.collapsed .menu-item .ico { width: auto; }
+      .drawer.collapsed .menu-item .ico {
+        width: 20px;
+        height: 20px;
+      }
       .drawer.collapsed .app-icon-shell {
         display: inline-flex;
         width: 44px;
         flex: 0 0 44px;
+      }
+      .drawer.collapsed .brand-mark {
+        width: 42px;
+        height: 46px;
       }
       .drawer.collapsed .drawer-footer {
         justify-content: center;
@@ -297,10 +324,19 @@
     }
     .mobile-topbar { display: none; }
     .mobile-topbar .mobile-title {
-      font-size: 16px;
-      font-weight: 700;
-      color: var(--menu-inactive-fg);
-      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      min-width: 0;
+      height: 24px;
+    }
+    .mobile-wordmark {
+      display: block;
+      width: 108px;
+      height: 24px;
+      background-image: var(--flowio-brand-url);
+      background-repeat: no-repeat;
+      background-position: center 100%;
+      background-size: 100% auto;
     }
     .page { display: none; }
     .page.active { display: block; }
@@ -412,11 +448,10 @@
       color: #d14c66;
       box-shadow: inset 0 0 0 1px rgba(209, 76, 102, 0.16);
     }
-    .status-card-icon svg {
-      width: 22px;
-      height: 22px;
-      display: block;
-      fill: currentColor;
+    .status-card-icon {
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.06em;
     }
     .status-kv {
       display: grid;
@@ -443,34 +478,15 @@
       width: 16px;
       height: 16px;
       vertical-align: middle;
-    }
-    .status-bool svg {
-      width: 16px;
-      height: 16px;
-      display: block;
-    }
-    .status-bool circle,
-    .status-bool path {
-      fill: none;
-      stroke-linecap: round;
-      stroke-linejoin: round;
+      font-size: 9px;
+      font-weight: 800;
+      letter-spacing: 0.02em;
     }
     .status-bool.is-true {
       color: #2f9e68;
     }
     .status-bool.is-false {
       color: #d14c66;
-    }
-    .status-bool.is-true circle,
-    .status-bool.is-false circle {
-      stroke: currentColor;
-      stroke-width: 1.4;
-      opacity: 0.9;
-    }
-    .status-bool.is-true path,
-    .status-bool.is-false path {
-      stroke: currentColor;
-      stroke-width: 1.8;
     }
     .status-toggle-readonly {
       pointer-events: none;
@@ -803,7 +819,11 @@
     }
     .password-toggle:hover { background: rgba(0,194,209,0.16); opacity: 1; }
     .password-toggle:focus-visible { outline: 2px solid rgba(0,194,209,0.5); }
-    .password-toggle svg { width: 18px; height: 18px; display: block; }
+    .password-toggle {
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.03em;
+    }
     input, select {
       width: 100%;
       max-width: 100%;
@@ -862,11 +882,8 @@
       display: inline-flex;
       align-items: center;
       justify-content: center;
-    }
-    .btn-icon-only svg {
-      width: 18px;
-      height: 18px;
-      display: block;
+      font-size: 18px;
+      font-weight: 700;
     }
     .btn-compact {
       min-height: 36px;
@@ -992,10 +1009,17 @@
       cursor: pointer;
       flex: 0 0 auto;
     }
-    .control-title-root-btn svg {
+    .crumb-root-icon {
       width: 20px;
       height: 20px;
       display: block;
+      background-color: currentColor;
+      -webkit-mask-position: center;
+      -webkit-mask-repeat: no-repeat;
+      -webkit-mask-size: contain;
+      mask-position: center;
+      mask-repeat: no-repeat;
+      mask-size: contain;
     }
     .control-title-root-btn:hover {
       color: #FFFFFF;
@@ -1056,9 +1080,18 @@
       background: rgba(175, 195, 210, 0.14);
     }
     .control-crumb-arrows {
-      display: inline-block;
-      width: 11px;
+      width: 14px;
       height: 14px;
+      display: inline-block;
+      background-color: currentColor;
+      -webkit-mask-image: url('/webinterface/i/u.svg');
+      -webkit-mask-position: center;
+      -webkit-mask-repeat: no-repeat;
+      -webkit-mask-size: contain;
+      mask-image: url('/webinterface/i/u.svg');
+      mask-position: center;
+      mask-repeat: no-repeat;
+      mask-size: contain;
     }
     .control-crumb-menu {
       position: absolute;
@@ -1447,14 +1480,50 @@
       }
       .drawer {
         position: fixed; left: 0; top: 0; bottom: 0;
-        width: min(252px, calc(100vw - 32px));
+        width: min(var(--drawer-width), calc(100vw - 40px));
         transform: translateX(-104%);
         transition: transform 0.2s ease;
         box-shadow: 0 10px 28px rgba(1, 12, 25, 0.55);
         overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+      }
+      .menu-group {
+        min-height: 0;
+      }
+      .drawer-footer {
+        position: sticky;
+        bottom: 0;
+        z-index: 1;
+        width: 100%;
+        margin-top: auto;
+        padding: 14px 6px calc(10px + env(safe-area-inset-bottom, 0px)) 6px;
+        border-top: 1px solid var(--sidebar-divider);
+        background: linear-gradient(180deg, rgba(254,254,254,0.94) 0%, rgba(254,254,254,1) 24%);
+      }
+      .brand-wordmark {
+        width: 104px;
+        height: 22px;
+        background-position: center 100%;
+        background-size: 100% auto;
+      }
+      .brand-mark {
+        width: 58px;
+        height: 52px;
+      }
+      .app-footer-copy {
+        width: 100%;
+      }
+      .app-runtime-meta {
+        justify-content: center;
+        width: 100%;
+      }
+      .app-runtime-line {
+        white-space: normal;
+        text-align: center;
       }
       .drawer.mobile-open { transform: translateX(0); }
-      .drawer.collapsed { width: 252px; }
+      .drawer.collapsed { width: var(--drawer-width); }
       .drawer.collapsed .drawer-user, .drawer.collapsed .menu-item .label { display: inline; }
       .drawer.collapsed .app-meta { display: inline; }
       .drawer.collapsed .app-runtime-meta { display: flex; }

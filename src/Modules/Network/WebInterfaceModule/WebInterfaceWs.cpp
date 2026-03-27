@@ -75,7 +75,7 @@ void WebInterfaceModule::onWsLogEvent_(AsyncWebSocket*,
 {
     if (type == WS_EVT_CONNECT) {
         if (client) {
-            client->setCloseClientOnQueueFull(false);
+            client->setCloseClientOnQueueFull(true);
             client->keepAlivePeriod(15);
             client->text("[webinterface] logs supervisor connectes");
         }

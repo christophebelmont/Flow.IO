@@ -6,6 +6,9 @@
 #include "Modules/SupervisorHMIModule/SupervisorHMIModule.h"
 
 #include "Board/BoardSpec.h"
+#include "Core/DataKeys.h"
+#include "Core/EventBus/EventPayloads.h"
+#include "Modules/Network/I2CCfgClientModule/I2CCfgClientRuntime.h"
 #define LOG_MODULE_ID ((LogModuleId)LogModuleIdValue::HMIModule)
 #include "Core/ModuleLog.h"
 
@@ -168,15 +171,27 @@ uint32_t SupervisorHMIModule::currentPageCycle_() const
     return (uint32_t)(millis() / kPageRotateMs);
 }
 
+void SupervisorHMIModule::onEventStatic_(const Event& e, void* user)
+{
+    SupervisorHMIModule* self = static_cast<SupervisorHMIModule*>(user);
+    if (self) self->onEvent_(e);
+}
+
 void SupervisorHMIModule::init(ConfigStore&, ServiceRegistry& services)
 {
     logHub_ = services.get<LogHubService>(ServiceId::LogHub);
     cfgSvc_ = services.get<ConfigStoreService>(ServiceId::ConfigStore);
+    eventBusSvc_ = services.get<EventBusService>(ServiceId::EventBus);
+    dsSvc_ = services.get<DataStoreService>(ServiceId::DataStore);
     wifiSvc_ = services.get<WifiService>(ServiceId::Wifi);
     netAccessSvc_ = services.get<NetworkAccessService>(ServiceId::NetworkAccess);
     fwUpdateSvc_ = services.get<FirmwareUpdateService>(ServiceId::FirmwareUpdate);
-    flowCfgSvc_ = services.get<FlowCfgRemoteService>(ServiceId::FlowCfg);
+    eventBus_ = eventBusSvc_ ? eventBusSvc_->bus : nullptr;
     (void)logHub_;
+
+    if (eventBus_) {
+        eventBus_->subscribe(EventId::DataChanged, &SupervisorHMIModule::onEventStatic_, this);
+    }
 
     if (pirPin_ >= 0) {
         int pirMode = INPUT;
@@ -205,6 +220,7 @@ void SupervisorHMIModule::init(ConfigStore&, ServiceRegistry& services)
     copyText_(view_.fwState, sizeof(view_.fwState), "idle");
     copyText_(view_.fwTarget, sizeof(view_.fwTarget), "none");
     setDefaultBanner_();
+    refreshFlowStatusFromDataStore_();
 
     LOGI("Supervisor HMI initialized tft_cs=%d tft_dc=%d tft_rst=%d tft_bl=%d tft_mosi=%d tft_sclk=%d rot=%d colstart=%d rowstart=%d pir=%d pir_active_high=%d wifi_reset=%d",
          (int)driverCfg_.csPin,
@@ -219,6 +235,15 @@ void SupervisorHMIModule::init(ConfigStore&, ServiceRegistry& services)
          (int)pirPin_,
          (int)(pirActiveHigh_ ? 1 : 0),
          (int)wifiResetPin_);
+}
+
+void SupervisorHMIModule::onEvent_(const Event& e)
+{
+    if (e.id != EventId::DataChanged) return;
+    if (!e.payload || e.len < sizeof(DataChangedPayload)) return;
+    const DataChangedPayload* p = static_cast<const DataChangedPayload*>(e.payload);
+    if (p->id < DataKeys::FlowRemoteBase || p->id >= DataKeys::FlowRemoteEndExclusive) return;
+    flowRuntimeDirty_ = true;
 }
 
 void SupervisorHMIModule::pollWifiAndNetwork_()
@@ -272,202 +297,39 @@ void SupervisorHMIModule::pollFirmwareStatus_()
     fwBusyOrPending_ = view_.fwBusy || view_.fwPending;
 }
 
-void SupervisorHMIModule::pollFlowStatus_()
+void SupervisorHMIModule::refreshFlowStatusFromDataStore_()
 {
-    if (!flowCfgSvc_ || !flowCfgSvc_->runtimeStatusDomainJson) return;
-    if (flowCfgSvc_->isReady && !flowCfgSvc_->isReady(flowCfgSvc_->ctx)) return;
-
-    SupervisorHmiViewModel nextView = view_;
-    bool anyDomainOk = false;
-    StaticJsonDocument<640> doc;
-
-    auto fetchDomain = [&](FlowStatusDomain domain) -> JsonObjectConst {
-        memset(flowStatusScratchBuf_, 0, sizeof(flowStatusScratchBuf_));
-        if (!flowCfgSvc_->runtimeStatusDomainJson(flowCfgSvc_->ctx, domain, flowStatusScratchBuf_, sizeof(flowStatusScratchBuf_))) {
-            doc.clear();
-            return JsonObjectConst();
-        }
-        doc.clear();
-        const DeserializationError err = deserializeJson(doc, flowStatusScratchBuf_);
-        if (!err && doc.is<JsonObjectConst>()) {
-            JsonObjectConst root = doc.as<JsonObjectConst>();
-            if (root["ok"] | false) {
-                anyDomainOk = true;
-                return root;
-            }
-        }
-        doc.clear();
-        return JsonObjectConst();
-    };
-
-    {
-        JsonObjectConst root = fetchDomain(FlowStatusDomain::System);
-        if (!root.isNull()) {
-            nextView.flowFirmware[0] = '\0';
-            nextView.flowHasHeapFrag = false;
-            nextView.flowHeapFragPct = 0;
-            copyText_(nextView.flowFirmware, sizeof(nextView.flowFirmware), root["fw"] | "");
-            JsonObjectConst flowHeap = root["heap"];
-            if (!flowHeap.isNull()) {
-                nextView.flowHasHeapFrag = true;
-                nextView.flowHeapFragPct = (uint8_t)(flowHeap["frag"] | 0U);
-            }
-        }
-    }
-
-    {
-        JsonObjectConst root = fetchDomain(FlowStatusDomain::Wifi);
-        if (!root.isNull()) {
-            nextView.flowHasRssi = false;
-            nextView.flowRssiDbm = -127;
-            JsonObjectConst flowWifi = root["wifi"];
-            nextView.flowHasRssi = flowWifi["hrss"] | false;
-            nextView.flowRssiDbm = (int32_t)(flowWifi["rssi"] | -127);
-        }
-    }
-
-    {
-        JsonObjectConst root = fetchDomain(FlowStatusDomain::Mqtt);
-        if (!root.isNull()) {
-            nextView.flowMqttReady = false;
-            nextView.flowMqttRxDrop = 0;
-            nextView.flowMqttParseFail = 0;
-            JsonObjectConst flowMqtt = root["mqtt"];
-            nextView.flowMqttReady = flowMqtt["rdy"] | false;
-            nextView.flowMqttRxDrop = (uint32_t)(flowMqtt["rxdrp"] | 0U);
-            nextView.flowMqttParseFail = (uint32_t)(flowMqtt["prsf"] | 0U);
-        }
-    }
-
-    {
-        JsonObjectConst root = fetchDomain(FlowStatusDomain::I2c);
-        if (!root.isNull()) {
-            nextView.flowLinkOk = false;
-            nextView.flowI2cReqCount = 0;
-            nextView.flowI2cBadReqCount = 0;
-            nextView.flowI2cLastReqAgoMs = 0;
-            JsonObjectConst i2c = root["i2c"];
-            nextView.flowLinkOk = i2c["lnk"] | false;
-            nextView.flowI2cReqCount = (uint32_t)(i2c["req"] | 0U);
-            nextView.flowI2cBadReqCount = (uint32_t)(i2c["breq"] | 0U);
-            nextView.flowI2cLastReqAgoMs = (uint32_t)(i2c["ago"] | 0U);
-        }
-    }
-
-    {
-        JsonObjectConst root = fetchDomain(FlowStatusDomain::Pool);
-        if (!root.isNull()) {
-            nextView.flowHasPoolModes = false;
-            nextView.flowFiltrationAuto = false;
-            nextView.flowWinterMode = false;
-            nextView.flowPhAutoMode = false;
-            nextView.flowOrpAutoMode = false;
-            nextView.flowFiltrationOn = false;
-            nextView.flowPhPumpOn = false;
-            nextView.flowChlorinePumpOn = false;
-            nextView.flowHasPh = false;
-            nextView.flowPhValue = 0.0f;
-            nextView.flowHasOrp = false;
-            nextView.flowOrpValue = 0.0f;
-            nextView.flowHasWaterTemp = false;
-            nextView.flowWaterTemp = 0.0f;
-            nextView.flowHasAirTemp = false;
-            nextView.flowAirTemp = 0.0f;
-            JsonObjectConst poolMode = root["pool"];
-            if (!poolMode.isNull()) {
-                nextView.flowHasPoolModes = poolMode["has"] | false;
-                nextView.flowFiltrationAuto = poolMode["auto"] | false;
-                nextView.flowWinterMode = poolMode["wint"] | false;
-                nextView.flowPhAutoMode = poolMode["pha"] | false;
-                nextView.flowOrpAutoMode = poolMode["ora"] | false;
-                nextView.flowFiltrationOn = poolMode["fil"] | false;
-                nextView.flowPhPumpOn = poolMode["php"] | false;
-                nextView.flowChlorinePumpOn = poolMode["clp"] | false;
-                JsonVariantConst phVar = poolMode["ph"];
-                if (!phVar.isNull()) {
-                    nextView.flowHasPh = true;
-                    nextView.flowPhValue = phVar.as<float>();
-                }
-                JsonVariantConst orpVar = poolMode["orp"];
-                if (!orpVar.isNull()) {
-                    nextView.flowHasOrp = true;
-                    nextView.flowOrpValue = orpVar.as<float>();
-                }
-                JsonVariantConst waterTempVar = poolMode["wat"];
-                if (!waterTempVar.isNull()) {
-                    nextView.flowHasWaterTemp = true;
-                    nextView.flowWaterTemp = waterTempVar.as<float>();
-                }
-                JsonVariantConst airTempVar = poolMode["air"];
-                if (!airTempVar.isNull()) {
-                    nextView.flowHasAirTemp = true;
-                    nextView.flowAirTemp = airTempVar.as<float>();
-                }
-            }
-        }
-    }
-
-    nextView.flowAlarmActCount = 0;
-    nextView.flowAlarmAckCount = 0;
-    nextView.flowAlarmClrCount = 0;
-    for (size_t i = 0; i < kSupervisorAlarmSlotCount; ++i) {
-        switch (nextView.flowAlarmStates[i]) {
-            case SupervisorAlarmState::Active:
-                ++nextView.flowAlarmActCount;
-                break;
-            case SupervisorAlarmState::Acked:
-                ++nextView.flowAlarmAckCount;
-                break;
-            case SupervisorAlarmState::Clear:
-            default:
-                ++nextView.flowAlarmClrCount;
-                break;
-        }
-    }
-
-    if (!anyDomainOk) return;
-
-    nextView.flowCfgReady = true;
-    view_.flowCfgReady = nextView.flowCfgReady;
-    view_.flowLinkOk = nextView.flowLinkOk;
-    copyText_(view_.flowFirmware, sizeof(view_.flowFirmware), nextView.flowFirmware);
-    view_.flowHasRssi = nextView.flowHasRssi;
-    view_.flowRssiDbm = nextView.flowRssiDbm;
-    view_.flowHasHeapFrag = nextView.flowHasHeapFrag;
-    view_.flowHeapFragPct = nextView.flowHeapFragPct;
-    view_.flowMqttReady = nextView.flowMqttReady;
-    view_.flowMqttRxDrop = nextView.flowMqttRxDrop;
-    view_.flowMqttParseFail = nextView.flowMqttParseFail;
-    view_.flowI2cReqCount = nextView.flowI2cReqCount;
-    view_.flowI2cBadReqCount = nextView.flowI2cBadReqCount;
-    view_.flowI2cLastReqAgoMs = nextView.flowI2cLastReqAgoMs;
-    view_.flowHasPoolModes = nextView.flowHasPoolModes;
-    view_.flowFiltrationAuto = nextView.flowFiltrationAuto;
-    view_.flowWinterMode = nextView.flowWinterMode;
-    view_.flowPhAutoMode = nextView.flowPhAutoMode;
-    view_.flowOrpAutoMode = nextView.flowOrpAutoMode;
-    view_.flowFiltrationOn = nextView.flowFiltrationOn;
-    view_.flowPhPumpOn = nextView.flowPhPumpOn;
-    view_.flowChlorinePumpOn = nextView.flowChlorinePumpOn;
-    view_.flowHasPh = nextView.flowHasPh;
-    view_.flowPhValue = nextView.flowPhValue;
-    view_.flowHasOrp = nextView.flowHasOrp;
-    view_.flowOrpValue = nextView.flowOrpValue;
-    view_.flowHasWaterTemp = nextView.flowHasWaterTemp;
-    view_.flowWaterTemp = nextView.flowWaterTemp;
-    view_.flowHasAirTemp = nextView.flowHasAirTemp;
-    view_.flowAirTemp = nextView.flowAirTemp;
-    view_.flowAlarmActiveCount = nextView.flowAlarmActiveCount;
-    view_.flowAlarmCodeCount = nextView.flowAlarmCodeCount;
-    for (size_t i = 0; i < (sizeof(view_.flowAlarmCodes) / sizeof(view_.flowAlarmCodes[0])); ++i) {
-        copyText_(view_.flowAlarmCodes[i], sizeof(view_.flowAlarmCodes[i]), nextView.flowAlarmCodes[i]);
-    }
-    view_.flowAlarmActCount = nextView.flowAlarmActCount;
-    view_.flowAlarmAckCount = nextView.flowAlarmAckCount;
-    view_.flowAlarmClrCount = nextView.flowAlarmClrCount;
-    for (size_t i = 0; i < kSupervisorAlarmSlotCount; ++i) {
-        view_.flowAlarmStates[i] = nextView.flowAlarmStates[i];
-    }
+    if (!dsSvc_ || !dsSvc_->store) return;
+    const FlowRemoteRuntimeData& flow = flowRemoteRuntime(*dsSvc_->store);
+    view_.flowCfgReady = flow.ready;
+    view_.flowLinkOk = flow.linkOk;
+    copyText_(view_.flowFirmware, sizeof(view_.flowFirmware), flow.firmware);
+    view_.flowHasRssi = flow.hasRssi;
+    view_.flowRssiDbm = flow.rssiDbm;
+    view_.flowHasHeapFrag = flow.hasHeapFrag;
+    view_.flowHeapFragPct = flow.heapFragPct;
+    view_.flowMqttReady = flow.mqttReady;
+    view_.flowMqttRxDrop = flow.mqttRxDrop;
+    view_.flowMqttParseFail = flow.mqttParseFail;
+    view_.flowI2cReqCount = flow.i2cReqCount;
+    view_.flowI2cBadReqCount = flow.i2cBadReqCount;
+    view_.flowI2cLastReqAgoMs = flow.i2cLastReqAgoMs;
+    view_.flowHasPoolModes = flow.hasPoolModes;
+    view_.flowFiltrationAuto = flow.filtrationAuto;
+    view_.flowWinterMode = flow.winterMode;
+    view_.flowPhAutoMode = flow.phAutoMode;
+    view_.flowOrpAutoMode = flow.orpAutoMode;
+    view_.flowFiltrationOn = flow.filtrationOn;
+    view_.flowPhPumpOn = flow.phPumpOn;
+    view_.flowChlorinePumpOn = flow.chlorinePumpOn;
+    view_.flowHasPh = flow.hasPh;
+    view_.flowPhValue = flow.phValue;
+    view_.flowHasOrp = flow.hasOrp;
+    view_.flowOrpValue = flow.orpValue;
+    view_.flowHasWaterTemp = flow.hasWaterTemp;
+    view_.flowWaterTemp = flow.waterTemp;
+    view_.flowHasAirTemp = flow.hasAirTemp;
+    view_.flowAirTemp = flow.airTemp;
 }
 
 void SupervisorHMIModule::triggerWifiReset_()
@@ -634,7 +496,11 @@ void SupervisorHMIModule::loop()
     if ((uint32_t)(now - lastFwPollMs_) >= kFwPollMs) {
         lastFwPollMs_ = now;
         pollFirmwareStatus_();
-        pollFlowStatus_();
+    }
+
+    if (flowRuntimeDirty_) {
+        flowRuntimeDirty_ = false;
+        refreshFlowStatusFromDataStore_();
     }
 
     updateWifiResetButton_();

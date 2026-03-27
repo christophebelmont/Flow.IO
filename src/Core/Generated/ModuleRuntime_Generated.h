@@ -9,6 +9,7 @@
 
 #include "Modules/IOModule/IORuntime.h"
 #include "Modules/Network/HAModule/HARuntime.h"
+#include "Modules/Network/I2CCfgClientModule/I2CCfgClientRuntime.h"
 #include "Modules/Network/MQTTModule/MQTTRuntime.h"
 #include "Modules/Network/TimeModule/TimeRuntime.h"
 #include "Modules/Network/WifiModule/WifiRuntime.h"
