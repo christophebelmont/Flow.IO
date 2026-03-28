@@ -7,6 +7,14 @@
     const appRuntimeMeta = document.getElementById('appRuntimeMeta');
     const appHeapSummary = document.getElementById('appHeapSummary');
     const flowWebAssetVersionStorageKey = 'flow_web_asset_version';
+    const deferredVisualAssetsStateKey = 'flow_web_deferred_visual_assets';
+    const deferredBrandAssetDelayMs = 320;
+    const deferredMenuAssetStartDelayMs = 520;
+    const deferredMenuAssetStepMs = 140;
+    const deferredBrandAssetReloadDelayMs = 2400;
+    const deferredMenuAssetReloadDelayMs = 1400;
+    const deferredMenuAssetReloadStepMs = 850;
+    const deferredMenuAssetReloadFallbackDelayMs = 6500;
     let webAssetVersion = '';
     let loadedWebAssetVersion = '';
     let supervisorFirmwareVersion = '-';
@@ -16,6 +24,10 @@
     let unifyStatusCardIcons = false;
     let flowStatusLiveTimer = null;
     let pageLoadToken = 0;
+    let deferredVisualAssetsScheduled = false;
+    let brandAssetsActivated = false;
+    let menuAssetsActivated = false;
+    let deferredMenuAssetsArmed = false;
 
     function applyMenuIconPreference(hidden) {
       hideMenuSvg = !!hidden;
@@ -50,11 +62,7 @@
     }
     webAssetVersion = loadedWebAssetVersion;
     if (!webAssetVersion) {
-      try {
-        webAssetVersion = String(localStorage.getItem(flowWebAssetVersionStorageKey) || '').trim();
-      } catch (err) {
-        webAssetVersion = '';
-      }
+      webAssetVersion = getStorageValue(localStorage, flowWebAssetVersionStorageKey);
     }
 
     supervisorFirmwareVersion = resolveSupervisorFirmwareVersion();
@@ -64,20 +72,250 @@
       return path + '?v=' + encodeURIComponent(webAssetVersion);
     }
 
+    function getStorageValue(storage, key) {
+      try {
+        return String(storage.getItem(key) || '').trim();
+      } catch (err) {
+        return '';
+      }
+    }
+
+    function setStorageValue(storage, key, value) {
+      try {
+        storage.setItem(key, value);
+      } catch (err) {
+      }
+    }
+
+    async function fetchJsonResponse(url, options, fetchImpl) {
+      const resolvedFetch = typeof fetchImpl === 'function' ? fetchImpl : fetch;
+      const res = await resolvedFetch(url, options);
+      const data = await res.json().catch(() => null);
+      return { res, data };
+    }
+
+    function ensureOkJsonResponse(response, message) {
+      if (!response.res.ok || !response.data || response.data.ok !== true) {
+        throw new Error(message);
+      }
+      return response.data;
+    }
+
+    async function fetchOkJson(url, options, message, fetchImpl) {
+      return ensureOkJsonResponse(await fetchJsonResponse(url, options, fetchImpl), message);
+    }
+
+    function createUrlEncodedBody(values) {
+      const body = new URLSearchParams();
+      Object.keys(values || {}).forEach((key) => {
+        const value = values[key];
+        body.set(key, value === null || typeof value === 'undefined' ? '' : String(value));
+      });
+      return body.toString();
+    }
+
+    function createFormPostOptions(values) {
+      return {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+        body: createUrlEncodedBody(values)
+      };
+    }
+
+    function runAsyncTaskSafely(task) {
+      return Promise.resolve().then(task).catch(() => {});
+    }
+
+    function createIntervalRunner(task, delayMs) {
+      let timer = null;
+      return {
+        start() {
+          if (timer) return;
+          timer = setInterval(() => {
+            runAsyncTaskSafely(task);
+          }, delayMs);
+        },
+        stop() {
+          if (!timer) return;
+          clearInterval(timer);
+          timer = null;
+        }
+      };
+    }
+
+    function createTimeoutRunner(task) {
+      let timer = null;
+      return {
+        schedule(delayMs) {
+          this.stop();
+          timer = setTimeout(() => {
+            timer = null;
+            runAsyncTaskSafely(task);
+          }, delayMs);
+        },
+        stop() {
+          if (!timer) return;
+          clearTimeout(timer);
+          timer = null;
+        }
+      };
+    }
+
+    function bindClickAction(el, handler) {
+      if (!el) return;
+      el.addEventListener('click', () => {
+        runAsyncTaskSafely(handler);
+      });
+    }
+
+    function getActivePageId() {
+      const active = document.querySelector('.page.active');
+      return active ? active.id : '';
+    }
+
+    function buildNodeGrid(className, items) {
+      const nodes = (items || []).filter((item) => item && typeof item.nodeType === 'number');
+      if (nodes.length === 0) return null;
+      const wrapper = document.createElement('div');
+      wrapper.className = className;
+      nodes.forEach((node) => wrapper.appendChild(node));
+      return wrapper;
+    }
+
+    function currentDeferredVisualAssetsVersion() {
+      return (webAssetVersion || loadedWebAssetVersion || 'noversion').trim() || 'noversion';
+    }
+
+    function getDeferredVisualAssetsWarmState() {
+      return getStorageValue(localStorage, deferredVisualAssetsStateKey);
+    }
+
+    function hasWarmDeferredVisualAssets() {
+      return getDeferredVisualAssetsWarmState() === currentDeferredVisualAssetsVersion();
+    }
+
+    function markDeferredVisualAssetsWarm() {
+      setStorageValue(localStorage, deferredVisualAssetsStateKey, currentDeferredVisualAssetsVersion());
+    }
+
+    function navigationType() {
+      try {
+        const navEntries = performance.getEntriesByType('navigation');
+        if (navEntries && navEntries[0] && typeof navEntries[0].type === 'string') {
+          return navEntries[0].type;
+        }
+      } catch (err) {
+      }
+      try {
+        if (performance && performance.navigation) {
+          if (performance.navigation.type === 1) return 'reload';
+          if (performance.navigation.type === 0) return 'navigate';
+        }
+      } catch (err) {
+      }
+      return '';
+    }
+
+    function isReloadNavigation() {
+      return navigationType() === 'reload';
+    }
+
+    function setDeferredVisualAssetUrl(varName, path) {
+      document.documentElement.style.setProperty(varName, "url('" + versionedWebAssetUrl(path) + "')");
+    }
+
+    function activateBrandAssets() {
+      if (brandAssetsActivated) return;
+      brandAssetsActivated = true;
+      setDeferredVisualAssetUrl('--flowio-brand-url', '/webinterface/i/f.svg');
+    }
+
+    function activateMenuAssets(deferred, stepDelayMs) {
+      if (menuAssetsActivated || hideMenuSvg) return;
+      menuAssetsActivated = true;
+      const stepMs = Math.max(0, Number(stepDelayMs) || deferredMenuAssetStepMs);
+      const steps = [
+        ['--menu-icon-measures-url', '/webinterface/i/m.svg'],
+        ['--menu-icon-terminal-url', '/webinterface/i/t.svg'],
+        ['--menu-icon-system-url', '/webinterface/i/s.svg'],
+        ['--menu-icon-flowcfg-url', '/webinterface/i/d.svg'],
+        ['--menu-icon-supervisorcfg-url', '/webinterface/i/e.svg']
+      ];
+      if (!deferred) {
+        steps.forEach((entry) => {
+          setDeferredVisualAssetUrl(entry[0], entry[1]);
+        });
+        markDeferredVisualAssetsWarm();
+        return;
+      }
+      steps.forEach((entry, index) => {
+        setTimeout(() => {
+          setDeferredVisualAssetUrl(entry[0], entry[1]);
+          if (index === steps.length - 1) {
+            markDeferredVisualAssetsWarm();
+          }
+        }, deferred ? (index * stepMs) : 0);
+      });
+    }
+
+    function armDeferredMenuAssets(startDelayMs, stepDelayMs, fallbackDelayMs) {
+      if (deferredMenuAssetsArmed || menuAssetsActivated || hideMenuSvg || !drawer) return;
+      deferredMenuAssetsArmed = true;
+      let triggered = false;
+      const trigger = () => {
+        if (triggered) return;
+        triggered = true;
+        setTimeout(() => {
+          activateMenuAssets(true, stepDelayMs);
+        }, Math.max(0, Number(startDelayMs) || 0));
+      };
+      drawer.addEventListener('pointerenter', trigger, { once: true });
+      drawer.addEventListener('touchstart', trigger, { once: true, passive: true });
+      drawer.addEventListener('click', trigger, { once: true });
+      setTimeout(trigger, Math.max(0, Number(fallbackDelayMs) || 0));
+    }
+
+    function scheduleDeferredVisualAssets() {
+      if (deferredVisualAssetsScheduled) return;
+      deferredVisualAssetsScheduled = true;
+      if (hasWarmDeferredVisualAssets() && !isReloadNavigation()) {
+        activateBrandAssets();
+        activateMenuAssets(false);
+        return;
+      }
+
+      const isReload = isReloadNavigation();
+      const brandDelayMs = isReload ? deferredBrandAssetReloadDelayMs : deferredBrandAssetDelayMs;
+      setTimeout(() => {
+        activateBrandAssets();
+        if (hideMenuSvg) {
+          markDeferredVisualAssetsWarm();
+        }
+      }, brandDelayMs);
+
+      if (isReload) {
+        armDeferredMenuAssets(
+          deferredMenuAssetReloadDelayMs,
+          deferredMenuAssetReloadStepMs,
+          deferredMenuAssetReloadFallbackDelayMs
+        );
+        return;
+      }
+
+      setTimeout(() => {
+        activateMenuAssets(true, deferredMenuAssetStepMs);
+      }, deferredMenuAssetStartDelayMs);
+    }
+
     async function loadWebMeta() {
       try {
-        const res = await fetch('/api/web/meta', { cache: 'no-store' });
-        const data = await res.json().catch(() => null);
-        if (!res.ok || !data || data.ok !== true) return;
+        const data = await fetchOkJson('/api/web/meta', { cache: 'no-store' }, 'meta web indisponible');
 
         if (typeof data.web_asset_version === 'string') {
           const announcedVersion = data.web_asset_version.trim();
           if (announcedVersion) {
             webAssetVersion = announcedVersion;
-            try {
-              localStorage.setItem(flowWebAssetVersionStorageKey, announcedVersion);
-            } catch (err) {
-            }
+            setStorageValue(localStorage, flowWebAssetVersionStorageKey, announcedVersion);
             if (loadedWebAssetVersion && loadedWebAssetVersion !== announcedVersion) {
               const reloadKey = 'flow_web_asset_reload_once';
               try {
@@ -101,6 +339,10 @@
         }
         applyMenuIconPreference(!!data.hide_menu_svg);
         applyStatusIconPreference(!!data.unify_status_card_icons);
+        if (hasWarmDeferredVisualAssets()) {
+          activateBrandAssets();
+          activateMenuAssets(false);
+        }
         if (typeof data.firmware_version === 'string') {
           const trimmed = data.firmware_version.trim();
           if (trimmed) {
@@ -136,16 +378,11 @@
     }
 
     function startUpgradeStatusPolling() {
-      if (upgradeStatusPollTimer) return;
-      upgradeStatusPollTimer = setInterval(() => {
-        refreshUpgradeStatus().catch(() => {});
-      }, 4000);
+      upgradeStatusPoller.start();
     }
 
     function stopUpgradeStatusPolling() {
-      if (!upgradeStatusPollTimer) return;
-      clearInterval(upgradeStatusPollTimer);
-      upgradeStatusPollTimer = null;
+      upgradeStatusPoller.stop();
     }
 
     let flowRemoteFetchQueue = Promise.resolve();
@@ -289,12 +526,12 @@
     const flowPath = document.getElementById('flowPath');
     const nextionPath = document.getElementById('nextionPath');
     const supervisorPath = document.getElementById('supervisorPath');
-    const cfgdocsPath = document.getElementById('cfgdocsPath');
+    const spiffsPath = document.getElementById('spiffsPath');
     const saveCfgBtn = document.getElementById('saveCfg');
     const upSupervisorBtn = document.getElementById('upSupervisor');
     const upFlowBtn = document.getElementById('upFlow');
     const upNextionBtn = document.getElementById('upNextion');
-    const upCfgdocsBtn = document.getElementById('upCfgdocs');
+    const upSpiffsBtn = document.getElementById('upSpiffs');
     const refreshStateBtn = document.getElementById('refreshState');
     const upgradeStatusText = document.getElementById('upgradeStatusText');
     const upgradeProgressBar = document.getElementById('upgradeProgressBar');
@@ -330,8 +567,6 @@
     const supCfgApplyBtn = document.getElementById('supCfgApply');
     const supCfgFields = document.getElementById('supCfgFields');
     const supCfgStatus = document.getElementById('supCfgStatus');
-    let wifiScanPollTimer = null;
-    let upgradeStatusPollTimer = null;
     let flowCfgCurrentModule = '';
     let flowCfgCurrentData = {};
     let flowCfgChildrenCache = {};
@@ -361,12 +596,20 @@
     };
     let runtimeManifestCache = null;
     let poolMeasureEntries = [];
-    let poolMeasuresTimer = null;
-    let drawerRuntimeTimer = null;
 
     const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
     let logSource = 'flow';
     let logSocket = null;
+    const upgradeStatusPoller = createIntervalRunner(() => refreshUpgradeStatus(), 4000);
+    const poolMeasuresPoller = createIntervalRunner(() => {
+      if (getActivePageId() !== 'page-pool-measures' || document.hidden) return;
+      return refreshPoolMeasures(false);
+    }, 10000);
+    const drawerRuntimePoller = createIntervalRunner(() => {
+      if (document.hidden || !isDrawerRuntimeMetaVisible()) return;
+      return loadWebMeta();
+    }, 15000);
+    const wifiScanPoller = createTimeoutRunner(() => refreshWifiScanStatus(false));
 
     function setWsStatusText(status) {
       const sourceLabel = logSource === 'supervisor' ? 'Supervisor' : 'Flow.IO';
@@ -566,42 +809,31 @@
 
     async function loadUpgradeConfig() {
       try {
-        const res = await fetch('/api/fwupdate/config', { cache: 'no-store' });
-        const data = await res.json();
-        if (data && data.ok) {
-          updateHost.value = data.update_host || '';
-          flowPath.value = data.flowio_path || '';
-          supervisorPath.value = data.supervisor_path || '';
-          nextionPath.value = data.nextion_path || '';
-          cfgdocsPath.value = data.cfgdocs_path || '';
-        }
+        const data = await fetchOkJson('/api/fwupdate/config', { cache: 'no-store' }, 'configuration firmware indisponible');
+        updateHost.value = data.update_host || '';
+        flowPath.value = data.flowio_path || '';
+        supervisorPath.value = data.supervisor_path || '';
+        nextionPath.value = data.nextion_path || '';
+        spiffsPath.value = data.spiffs_path || data.cfgdocs_path || '';
       } catch (err) {
         setUpgradeMessage('Échec du chargement de la configuration : ' + err);
       }
     }
 
     async function saveUpgradeConfig() {
-      const body = new URLSearchParams();
-      body.set('update_host', updateHost.value.trim());
-      body.set('flowio_path', flowPath.value.trim());
-      body.set('supervisor_path', supervisorPath.value.trim());
-      body.set('nextion_path', nextionPath.value.trim());
-      body.set('cfgdocs_path', cfgdocsPath.value.trim());
-      const res = await fetch('/api/fwupdate/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-        body: body.toString()
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.ok) throw new Error('échec enregistrement');
+      await fetchOkJson('/api/fwupdate/config', createFormPostOptions({
+        update_host: updateHost.value.trim(),
+        flowio_path: flowPath.value.trim(),
+        supervisor_path: supervisorPath.value.trim(),
+        nextion_path: nextionPath.value.trim(),
+        spiffs_path: spiffsPath.value.trim()
+      }), 'échec enregistrement');
       setUpgradeMessage('Configuration enregistrée.');
     }
 
     async function refreshUpgradeStatus() {
       try {
-        const res = await fetch('/api/fwupdate/status', { cache: 'no-store' });
-        const data = await res.json();
-        if (data && data.ok) updateUpgradeView(data);
+        updateUpgradeView(await fetchOkJson('/api/fwupdate/status', { cache: 'no-store' }, 'échec lecture état'));
       } catch (err) {
         setUpgradeMessage('Échec de lecture de l\'état : ' + err);
       }
@@ -613,10 +845,8 @@
         let endpoint = '/fwupdate/nextion';
         if (target === 'supervisor') endpoint = '/fwupdate/supervisor';
         else if (target === 'flowio') endpoint = '/fwupdate/flowio';
-        else if (target === 'cfgdocs') endpoint = '/fwupdate/cfgdocs';
-        const res = await fetch(endpoint, { method: 'POST' });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok || !data.ok) throw new Error('échec démarrage');
+        else if (target === 'spiffs') endpoint = '/fwupdate/spiffs';
+        await fetchOkJson(endpoint, { method: 'POST' }, 'échec démarrage');
         setUpgradeProgress(1);
         setUpgradeMessage('Demande de mise à jour acceptée pour ' + target + '.');
         await refreshUpgradeStatus();
@@ -749,12 +979,7 @@
     }
 
     function buildFlowReadonlyStateGrid(items) {
-      const nodes = (items || []).filter((item) => item && typeof item.nodeType === 'number');
-      if (nodes.length === 0) return null;
-      const wrapper = document.createElement('div');
-      wrapper.className = 'status-state-grid';
-      nodes.forEach((node) => wrapper.appendChild(node));
-      return wrapper;
+      return buildNodeGrid('status-state-grid', items);
     }
 
     function fmtFlowUptime(ms) {
@@ -1065,12 +1290,7 @@
     }
 
     function buildFlowArcGaugeGrid(items) {
-      const nodes = (items || []).filter((item) => item && typeof item.nodeType === 'number');
-      if (nodes.length === 0) return null;
-      const wrapper = document.createElement('div');
-      wrapper.className = 'status-arc-grid';
-      nodes.forEach((node) => wrapper.appendChild(node));
-      return wrapper;
+      return buildNodeGrid('status-arc-grid', items);
     }
 
     window.FlowWebComponents = Object.assign({}, window.FlowWebComponents, {
@@ -1247,14 +1467,12 @@
       }
 
       try {
-        const res = await fetchFlowRemoteQueued(
+        const data = await fetchOkJson(
           '/api/flow/status/domain?d=' + encodeURIComponent(domainKey),
-          { cache: 'no-store' }
+          { cache: 'no-store' },
+          'statut ' + domainKey + ' indisponible',
+          fetchFlowRemoteQueued
         );
-        const data = await res.json().catch(() => null);
-        if (!res.ok || !data || data.ok !== true) {
-          throw new Error('statut ' + domainKey + ' indisponible');
-        }
         cacheEntry.data = data;
         cacheEntry.fetchedAt = Date.now();
         return data;
@@ -1617,9 +1835,7 @@
     }
 
     function stopPoolMeasuresTimer() {
-      if (!poolMeasuresTimer) return;
-      clearInterval(poolMeasuresTimer);
-      poolMeasuresTimer = null;
+      poolMeasuresPoller.stop();
     }
 
     function showPoolMeasuresError(err) {
@@ -1628,23 +1844,15 @@
     }
 
     function startPoolMeasuresTimer() {
-      if (poolMeasuresTimer) return;
-      poolMeasuresTimer = setInterval(() => {
-        const activePage = document.querySelector('.page.active');
-        if (!activePage || activePage.id !== 'page-pool-measures' || document.hidden) return;
-        refreshPoolMeasures(false).catch(() => {});
-      }, 10000);
+      poolMeasuresPoller.start();
     }
 
     async function loadRuntimeManifest(forceRefresh) {
       if (!forceRefresh && runtimeManifestCache && Array.isArray(runtimeManifestCache.values)) {
         return runtimeManifestCache;
       }
-      const res = await fetch(versionedWebAssetUrl('/webinterface/runtimeui.json'));
-      const data = await res.json().catch(() => null);
-      if (!res.ok || !data || data.ok !== true || !Array.isArray(data.values)) {
-        throw new Error('manifeste runtime indisponible');
-      }
+      const data = await fetchOkJson(versionedWebAssetUrl('/webinterface/runtimeui.json'), undefined, 'manifeste runtime indisponible');
+      if (!Array.isArray(data.values)) throw new Error('manifeste runtime indisponible');
       runtimeManifestCache = data;
       return data;
     }
@@ -1670,11 +1878,7 @@
     }
 
     function startDrawerRuntimeTimer() {
-      if (drawerRuntimeTimer) return;
-      drawerRuntimeTimer = setInterval(() => {
-        if (document.hidden || !isDrawerRuntimeMetaVisible()) return;
-        loadWebMeta().catch(() => {});
-      }, 15000);
+      drawerRuntimePoller.start();
     }
 
     function runtimeManifestMeasureEntries(manifest) {
@@ -1735,15 +1939,12 @@
     }
 
     async function fetchRuntimeValues(ids) {
-      const res = await fetchFlowRemoteQueued('/api/runtime/values', {
+      const data = await fetchOkJson('/api/runtime/values', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids: ids })
-      });
-      const data = await res.json().catch(() => null);
-      if (!res.ok || !data || data.ok !== true || !Array.isArray(data.values)) {
-        throw new Error('lecture runtime indisponible');
-      }
+      }, 'lecture runtime indisponible', fetchFlowRemoteQueued);
+      if (!Array.isArray(data.values)) throw new Error('lecture runtime indisponible');
       return data.values;
     }
 
@@ -2014,17 +2215,11 @@
     }
 
     function stopWifiScanPolling() {
-      if (wifiScanPollTimer) {
-        clearTimeout(wifiScanPollTimer);
-        wifiScanPollTimer = null;
-      }
+      wifiScanPoller.stop();
     }
 
     function scheduleWifiScanPolling() {
-      stopWifiScanPolling();
-      wifiScanPollTimer = setTimeout(() => {
-        refreshWifiScanStatus(false);
-      }, 1200);
+      wifiScanPoller.schedule(1200);
     }
 
     function renderWifiScanList(data) {
@@ -2099,16 +2294,9 @@
     }
 
     async function requestWifiScan(force) {
-      const body = new URLSearchParams();
-      body.set('force', force ? '1' : '0');
-      const res = await fetch('/api/wifi/scan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-        body: body.toString()
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.ok) throw new Error('échec démarrage scan');
-      return data;
+      return fetchOkJson('/api/wifi/scan', createFormPostOptions({
+        force: force ? '1' : '0'
+      }), 'échec démarrage scan');
     }
 
     async function refreshWifiScanStatus(triggerScan) {
@@ -2116,9 +2304,7 @@
         if (triggerScan) {
           await requestWifiScan(true);
         }
-        const res = await fetch('/api/wifi/scan', { cache: 'no-store' });
-        const data = await res.json();
-        if (!res.ok || !data || data.ok !== true) throw new Error('échec lecture état');
+        const data = await fetchOkJson('/api/wifi/scan', { cache: 'no-store' }, 'échec lecture état');
 
         renderWifiScanList(data);
         updateWifiScanStatusText(data, null);
@@ -2136,32 +2322,22 @@
 
     async function loadWifiConfig() {
       try {
-        const res = await fetch('/api/wifi/config', { cache: 'no-store' });
-        const data = await res.json();
-        if (data && data.ok) {
-          wifiEnabled.checked = toBool(data.enabled);
-          wifiSsid.value = data.ssid || '';
-          wifiPass.value = data.pass || '';
-          wifiConfigStatus.textContent = 'Configuration WiFi chargée.';
-        }
+        const data = await fetchOkJson('/api/wifi/config', { cache: 'no-store' }, 'chargement wifi indisponible');
+        wifiEnabled.checked = toBool(data.enabled);
+        wifiSsid.value = data.ssid || '';
+        wifiPass.value = data.pass || '';
+        wifiConfigStatus.textContent = 'Configuration WiFi chargée.';
       } catch (err) {
         wifiConfigStatus.textContent = 'Chargement WiFi échoué: ' + err;
       }
     }
 
     async function saveWifiConfig() {
-      const body = new URLSearchParams();
-      body.set('enabled', wifiEnabled.checked ? '1' : '0');
-      body.set('ssid', wifiSsid.value.trim());
-      body.set('pass', wifiPass.value);
-
-      const res = await fetch('/api/wifi/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-        body: body.toString()
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.ok) throw new Error('échec application');
+      await fetchOkJson('/api/wifi/config', createFormPostOptions({
+        enabled: wifiEnabled.checked ? '1' : '0',
+        ssid: wifiSsid.value.trim(),
+        pass: wifiPass.value
+      }), 'échec application');
       wifiConfigStatus.textContent = 'Configuration WiFi appliquée (reconnexion en cours).';
     }
 
@@ -3171,11 +3347,7 @@
       if (target === 'flow' && action === 'reboot') endpoint = '/api/flow/system/reboot';
       else if (target === 'flow' && action === 'factory_reset') endpoint = '/api/flow/system/factory-reset';
       else if (target === 'supervisor' && action === 'factory_reset') endpoint = '/api/system/factory-reset';
-      const res = (target === 'flow')
-        ? await fetchFlowRemoteQueued(endpoint, { method: 'POST' })
-        : await fetch(endpoint, { method: 'POST' });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.ok) throw new Error('échec action');
+      await fetchOkJson(endpoint, { method: 'POST' }, 'échec action', target === 'flow' ? fetchFlowRemoteQueued : fetch);
       if (target === 'flow' && action === 'factory_reset') {
         systemStatusText.textContent = 'Réinitialisation usine de Flow.IO lancée. Redémarrage en cours...';
       } else if (target === 'flow' && action === 'reboot') {
@@ -3187,24 +3359,30 @@
       }
     }
 
-    saveCfgBtn.addEventListener('click', async () => {
-      try {
-        await saveUpgradeConfig();
-      } catch (err) {
-        setUpgradeMessage('Échec de l\'enregistrement : ' + err);
-      }
-    });
-    if (flowStatusRefreshBtn) {
-      flowStatusRefreshBtn.addEventListener('click', async () => {
+    function initUpgradeBindings() {
+      bindClickAction(saveCfgBtn, async () => {
+        try {
+          await saveUpgradeConfig();
+        } catch (err) {
+          setUpgradeMessage('Échec de l\'enregistrement : ' + err);
+        }
+      });
+      bindClickAction(upSupervisorBtn, () => startUpgrade('supervisor'));
+      bindClickAction(upFlowBtn, () => startUpgrade('flowio'));
+      bindClickAction(upNextionBtn, () => startUpgrade('nextion'));
+      bindClickAction(upSpiffsBtn, () => startUpgrade('spiffs'));
+      bindClickAction(refreshStateBtn, () => refreshUpgradeStatus());
+    }
+
+    function initStatusBindings() {
+      bindClickAction(flowStatusRefreshBtn, async () => {
         try {
           await refreshFlowStatus(true);
         } catch (err) {
           flowStatusChip.textContent = 'erreur lecture statut';
         }
       });
-    }
-    if (poolMeasuresRefreshBtn) {
-      poolMeasuresRefreshBtn.addEventListener('click', async () => {
+      bindClickAction(poolMeasuresRefreshBtn, async () => {
         try {
           await refreshPoolMeasures(true);
         } catch (err) {
@@ -3212,113 +3390,116 @@
         }
       });
     }
-    upSupervisorBtn.addEventListener('click', () => startUpgrade('supervisor'));
-    upFlowBtn.addEventListener('click', () => startUpgrade('flowio'));
-    upNextionBtn.addEventListener('click', () => startUpgrade('nextion'));
-    upCfgdocsBtn.addEventListener('click', () => startUpgrade('cfgdocs'));
-    refreshStateBtn.addEventListener('click', refreshUpgradeStatus);
-    if (toggleWifiPassBtn && wifiPass) {
-      mettreAJourEtatVisibiliteMotDePasse(
-        wifiPass,
-        toggleWifiPassBtn,
-        'Afficher le mot de passe WiFi',
-        'Masquer le mot de passe WiFi'
-      );
-      toggleWifiPassBtn.addEventListener('click', () => {
-        basculerVisibiliteMotDePasse(
+
+    function initWifiBindings() {
+      if (toggleWifiPassBtn && wifiPass) {
+        mettreAJourEtatVisibiliteMotDePasse(
           wifiPass,
           toggleWifiPassBtn,
           'Afficher le mot de passe WiFi',
           'Masquer le mot de passe WiFi'
         );
+        toggleWifiPassBtn.addEventListener('click', () => {
+          basculerVisibiliteMotDePasse(
+            wifiPass,
+            toggleWifiPassBtn,
+            'Afficher le mot de passe WiFi',
+            'Masquer le mot de passe WiFi'
+          );
+        });
+      }
+      wifiSsidList.addEventListener('change', () => {
+        const picked = (wifiSsidList.value || '').trim();
+        if (picked.length > 0) {
+          wifiSsid.value = picked;
+        }
+      });
+      bindClickAction(scanWifiBtn, () => refreshWifiScanStatus(true));
+      bindClickAction(applyWifiCfgBtn, async () => {
+        try {
+          await saveWifiConfig();
+        } catch (err) {
+          wifiConfigStatus.textContent = 'Application WiFi échouée: ' + err;
+        }
       });
     }
-    wifiSsidList.addEventListener('change', () => {
-      const picked = (wifiSsidList.value || '').trim();
-      if (picked.length > 0) {
-        wifiSsid.value = picked;
-      }
-    });
-    scanWifiBtn.addEventListener('click', () => {
-      refreshWifiScanStatus(true);
-    });
-    applyWifiCfgBtn.addEventListener('click', async () => {
-      try {
-        await saveWifiConfig();
-      } catch (err) {
-        wifiConfigStatus.textContent = 'Application WiFi échouée: ' + err;
-      }
-    });
-    rebootSupervisorBtn.addEventListener('click', async () => {
-      try {
-        await callSystemAction('supervisor', 'reboot');
-      } catch (err) {
-        systemStatusText.textContent = 'Redémarrage du Superviseur échoué : ' + err;
-      }
-    });
-    rebootFlowBtn.addEventListener('click', async () => {
-      try {
-        await callSystemAction('flow', 'reboot');
-      } catch (err) {
-        systemStatusText.textContent = 'Redémarrage de Flow.IO échoué : ' + err;
-      }
-    });
-    flowFactoryResetBtn.addEventListener('click', async () => {
-      if (!confirm('Confirmer la réinitialisation usine de Flow.IO ? Cette action efface la configuration distante.')) return;
-      try {
-        await callSystemAction('flow', 'factory_reset');
-      } catch (err) {
-        systemStatusText.textContent = 'Réinitialisation usine de Flow.IO échouée : ' + err;
-      }
-    });
-    flowCfgRefreshBtn.addEventListener('click', async () => {
-      await ensureFlowCfgLoaded(true);
-    });
-    flowCfgApplyBtn.addEventListener('click', async () => {
-      await appliquerFlowCfg();
-    });
-    supCfgRefreshBtn.addEventListener('click', async () => {
-      await chargerSupervisorCfgModules(true);
-    });
-    supCfgModuleSelect.addEventListener('change', async () => {
-      const selected = nettoyerNomFlowCfg(supCfgModuleSelect.value);
-      await chargerSupervisorCfgModule(selected);
-    });
-    supCfgApplyBtn.addEventListener('click', async () => {
-      await appliquerSupervisorCfg();
-    });
 
-    document.addEventListener('click', (event) => {
-      if (!flowCfgTitle.contains(event.target)) {
-        closeFlowCfgCrumbMenus();
-      }
-    });
-    document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape') {
-        closeFlowCfgCrumbMenus();
-      }
-    });
-    document.addEventListener('visibilitychange', () => {
-      const active = document.querySelector('.page.active');
-      const onUpgradePage = !!active && active.id === 'page-system';
-      const onTerminalPage = !!active && active.id === 'page-terminal';
-      if (document.hidden || !onUpgradePage) {
-        stopUpgradeStatusPolling();
-      } else {
-        startUpgradeStatusPolling();
-      }
-      if (document.hidden || !active || active.id !== 'page-pool-measures') {
-        stopPoolMeasuresTimer();
-      } else {
-        startPoolMeasuresTimer();
-      }
-      if (document.hidden || !onTerminalPage) {
-        closeLogSocket();
-        setWsStatusText('inactif');
-      } else if (terminalActive) {
-        connectLogSocket();
-      }
-    });
+    function initSystemBindings() {
+      bindClickAction(rebootSupervisorBtn, async () => {
+        try {
+          await callSystemAction('supervisor', 'reboot');
+        } catch (err) {
+          systemStatusText.textContent = 'Redémarrage du Superviseur échoué : ' + err;
+        }
+      });
+      bindClickAction(rebootFlowBtn, async () => {
+        try {
+          await callSystemAction('flow', 'reboot');
+        } catch (err) {
+          systemStatusText.textContent = 'Redémarrage de Flow.IO échoué : ' + err;
+        }
+      });
+      bindClickAction(flowFactoryResetBtn, async () => {
+        if (!confirm('Confirmer la réinitialisation usine de Flow.IO ? Cette action efface la configuration distante.')) return;
+        try {
+          await callSystemAction('flow', 'factory_reset');
+        } catch (err) {
+          systemStatusText.textContent = 'Réinitialisation usine de Flow.IO échouée : ' + err;
+        }
+      });
+    }
+
+    function initConfigBindings() {
+      bindClickAction(flowCfgRefreshBtn, () => ensureFlowCfgLoaded(true));
+      bindClickAction(flowCfgApplyBtn, () => appliquerFlowCfg());
+      bindClickAction(supCfgRefreshBtn, () => chargerSupervisorCfgModules(true));
+      supCfgModuleSelect.addEventListener('change', async () => {
+        const selected = nettoyerNomFlowCfg(supCfgModuleSelect.value);
+        await chargerSupervisorCfgModule(selected);
+      });
+      bindClickAction(supCfgApplyBtn, () => appliquerSupervisorCfg());
+    }
+
+    function initGlobalUiBindings() {
+      document.addEventListener('click', (event) => {
+        if (!flowCfgTitle.contains(event.target)) {
+          closeFlowCfgCrumbMenus();
+        }
+      });
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+          closeFlowCfgCrumbMenus();
+        }
+      });
+      document.addEventListener('visibilitychange', () => {
+        const activePageId = getActivePageId();
+        const onUpgradePage = activePageId === 'page-system';
+        const onTerminalPage = activePageId === 'page-terminal';
+        if (document.hidden || !onUpgradePage) {
+          stopUpgradeStatusPolling();
+        } else {
+          startUpgradeStatusPolling();
+        }
+        if (document.hidden || activePageId !== 'page-pool-measures') {
+          stopPoolMeasuresTimer();
+        } else {
+          startPoolMeasuresTimer();
+        }
+        if (document.hidden || !onTerminalPage) {
+          closeLogSocket();
+          setWsStatusText('inactif');
+        } else if (terminalActive) {
+          connectLogSocket();
+        }
+      });
+    }
+
+    initUpgradeBindings();
+    initStatusBindings();
+    initWifiBindings();
+    initSystemBindings();
+    initConfigBindings();
+    initGlobalUiBindings();
 
     setUpgradeProgress(0);
     startDrawerRuntimeTimer();
@@ -3334,3 +3515,4 @@
     } else {
       setTimeout(startInitialUi, 16);
     }
+    scheduleDeferredVisualAssets();

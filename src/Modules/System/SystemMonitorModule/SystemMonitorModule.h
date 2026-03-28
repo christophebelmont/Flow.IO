@@ -46,6 +46,32 @@ public:
     void setModuleManager(ModuleManager* mm) { moduleManager = mm; }
 
 private:
+    static constexpr uint32_t kHeapWatchSamplePeriodMs = 50U;
+    static constexpr uint32_t kHeapWatchTripFreeBytes = 2048U;
+    static constexpr uint32_t kHeapWatchRecoverFreeBytes = 8192U;
+    static constexpr uint32_t kHeapWatchDumpDelayMs = 1500U;
+    static constexpr size_t kHeapWatchSampleCount = 160U;
+    static constexpr size_t kHeapWatchDumpSampleCount = 24U;
+    static constexpr size_t kHeapWatchTaskNameLen = 12U;
+#ifdef CONFIG_HEAP_TASK_TRACKING
+    static constexpr size_t kHeapWatchTaskTotalsMax = 12U;
+#endif
+
+    struct HeapWatchSample {
+        uint32_t uptimeMs = 0;
+        uint32_t freeBytes = 0;
+        uint32_t minFreeBytes = 0;
+        uint32_t largestFreeBlock = 0;
+    };
+
+#ifdef CONFIG_HEAP_TASK_TRACKING
+    struct HeapWatchTaskTotal {
+        uint32_t sizeBytes = 0;
+        uint32_t blockCount = 0;
+        char taskName[kHeapWatchTaskNameLen] = {0};
+    };
+#endif
+
     struct SystemMonitorConfig {
         int32_t tracePeriodMs = 5000;
     };
@@ -60,17 +86,45 @@ private:
     bool haEntitiesRegistered_ = false;
 
     uint32_t lastJsonDumpMs = 0;
+    uint32_t lastHeapWatchSampleMs_ = 0;
+    uint32_t heapWatchLastSeenMinFree_ = UINT32_MAX;
+    uint32_t heapWatchTriggerMs_ = 0;
+    uint32_t heapWatchTriggerFreeBytes_ = 0;
+    uint32_t heapWatchTriggerMinFreeBytes_ = 0;
+    uint32_t heapWatchTriggerLargestFreeBlock_ = 0;
     uint32_t traceCycleStartMs_ = 0;
+    size_t heapWatchWriteIndex_ = 0;
+    size_t heapWatchCount_ = 0;
+    size_t heapWatchFrozenWriteIndex_ = 0;
+    size_t heapWatchFrozenCount_ = 0;
     bool bootInfoLogged_ = false;
+    bool heapWatchTripActive_ = false;
+    bool heapWatchDumpPending_ = false;
     bool stackLoggedThisCycle_ = false;
     bool heapLoggedThisCycle_ = false;
     bool buffersLoggedThisCycle_ = false;
     MqttConfigRouteProducer* cfgMqttPub_ = nullptr;
+    HeapWatchSample heapWatchSamples_[kHeapWatchSampleCount]{};
+    char heapWatchTriggerReason_[20] = {0};
+#ifdef CONFIG_HEAP_TASK_TRACKING
+    HeapWatchTaskTotal heapWatchTaskTotals_[kHeapWatchTaskTotalsMax]{};
+    size_t heapWatchTaskTotalCount_ = 0;
+#endif
 
     void logBootInfo();
     void logHeapStats();
     void logTaskStacks();
     void logTrackedBuffers();
+    void pollHeapWatch_(uint32_t now);
+    void appendHeapWatchSample_(const SystemStatsSnapshot& snap);
+    void armHeapWatchDump_(const SystemStatsSnapshot& snap, const char* reason);
+    void dumpHeapWatch_();
+    void dumpHeapWatchWindow_() const;
+    void logPendingHeapAllocFailure_();
+#ifdef CONFIG_HEAP_TASK_TRACKING
+    void captureHeapWatchTaskTotals_();
+    void dumpHeapWatchTaskTotals_() const;
+#endif
     void buildHealthJson(char* out, size_t outLen);
     void registerHaEntities_(ServiceRegistry& services);
 

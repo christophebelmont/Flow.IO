@@ -67,7 +67,7 @@ private:
         char flowioPath[64] = "/build/FlowIO/firmware.bin";
         char supervisorPath[64] = "/build/Supervisor/firmware.bin";
         char nextionPath[64] = "/build/Nextion.tft";
-        char cfgdocsPath[64] = "/webinterface/cfgdocs.fr.json";
+        char spiffsPath[64] = "/build/Supervisor/spiffs.bin";
     } cfgData_{};
 
     // CFGDOC: {"label":"Hôte serveur MAJ","help":"Adresse du serveur HTTP hébergeant les firmwares."}
@@ -90,10 +90,10 @@ private:
         NVS_KEY("up_nx_path"), "nextion_path", "fwupdate",
         ConfigType::CharArray, cfgData_.nextionPath, ConfigPersistence::Persistent, sizeof(cfgData_.nextionPath)
     };
-    // CFGDOC: {"label":"Chemin cfgdocs","help":"Chemin du fichier cfgdocs.fr.json sur le serveur MAJ."}
-    ConfigVariable<char, 2> cfgdocsPathVar_{
+    // CFGDOC: {"label":"Chemin image SPIFFS","help":"Chemin du fichier spiffs.bin sur le serveur MAJ."}
+    ConfigVariable<char, 2> spiffsPathVar_{
         NVS_KEY("up_cfgdocs_path"), "cfgdocs_path", "fwupdate",
-        ConfigType::CharArray, cfgData_.cfgdocsPath, ConfigPersistence::Persistent, sizeof(cfgData_.cfgdocsPath)
+        ConfigType::CharArray, cfgData_.spiffsPath, ConfigPersistence::Persistent, sizeof(cfgData_.spiffsPath)
     };
 
     ServiceRegistry* services_ = nullptr;
@@ -121,7 +121,7 @@ private:
     static bool cmdFlowIo_(void* userCtx, const CommandRequest& req, char* reply, size_t replyLen);
     static bool cmdSupervisor_(void* userCtx, const CommandRequest& req, char* reply, size_t replyLen);
     static bool cmdNextion_(void* userCtx, const CommandRequest& req, char* reply, size_t replyLen);
-    static bool cmdCfgDocs_(void* userCtx, const CommandRequest& req, char* reply, size_t replyLen);
+    static bool cmdSpiffs_(void* userCtx, const CommandRequest& req, char* reply, size_t replyLen);
 
     bool startUpdate_(FirmwareUpdateTarget target, const char* url, char* errOut, size_t errOutLen);
     bool statusJson_(char* out, size_t outLen);
@@ -130,14 +130,14 @@ private:
                     const char* flowioPath,
                     const char* supervisorPath,
                     const char* nextionPath,
-                    const char* cfgdocsPath,
+                    const char* spiffsPath,
                     char* errOut,
                     size_t errOutLen);
     bool runJob_(const UpdateJob& job);
     bool runFlowIoUpdate_(const char* url, char* errOut, size_t errOutLen);
     bool runSupervisorUpdate_(const char* url, char* errOut, size_t errOutLen);
     bool runNextionUpdate_(const char* url, char* errOut, size_t errOutLen);
-    bool runCfgDocsUpdate_(const char* url, char* errOut, size_t errOutLen);
+    bool runSpiffsUpdate_(const char* url, char* errOut, size_t errOutLen);
     bool resolveUrl_(FirmwareUpdateTarget target,
                      const char* explicitUrl,
                      char* out,

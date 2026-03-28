@@ -184,7 +184,7 @@ const char* FirmwareUpdateModule::targetStr_(FirmwareUpdateTarget t)
         case FirmwareUpdateTarget::FlowIO: return "flowio";
         case FirmwareUpdateTarget::Nextion: return "nextion";
         case FirmwareUpdateTarget::Supervisor: return "supervisor";
-        case FirmwareUpdateTarget::CfgDocs: return "cfgdocs";
+        case FirmwareUpdateTarget::Spiffs: return "spiffs";
         default: return "unknown";
     }
 }
@@ -262,8 +262,8 @@ bool FirmwareUpdateModule::resolveUrl_(FirmwareUpdateTarget target,
         case FirmwareUpdateTarget::Nextion:
             path = cfgData_.nextionPath;
             break;
-        case FirmwareUpdateTarget::CfgDocs:
-            path = cfgData_.cfgdocsPath;
+        case FirmwareUpdateTarget::Spiffs:
+            path = cfgData_.spiffsPath;
             break;
         default:
             break;
@@ -359,28 +359,29 @@ bool FirmwareUpdateModule::configJson_(char* out, size_t outLen) const
     char flowPath[sizeof(cfgData_.flowioPath)] = {0};
     char supPath[sizeof(cfgData_.supervisorPath)] = {0};
     char nxPath[sizeof(cfgData_.nextionPath)] = {0};
-    char cfgdocsPath[sizeof(cfgData_.cfgdocsPath)] = {0};
+    char spiffsPath[sizeof(cfgData_.spiffsPath)] = {0};
     snprintf(host, sizeof(host), "%s", cfgData_.updateHost);
     snprintf(flowPath, sizeof(flowPath), "%s", cfgData_.flowioPath);
     snprintf(supPath, sizeof(supPath), "%s", cfgData_.supervisorPath);
     snprintf(nxPath, sizeof(nxPath), "%s", cfgData_.nextionPath);
-    snprintf(cfgdocsPath, sizeof(cfgdocsPath), "%s", cfgData_.cfgdocsPath);
+    snprintf(spiffsPath, sizeof(spiffsPath), "%s", cfgData_.spiffsPath);
     sanitizeJsonString_(host);
     sanitizeJsonString_(flowPath);
     sanitizeJsonString_(supPath);
     sanitizeJsonString_(nxPath);
-    sanitizeJsonString_(cfgdocsPath);
+    sanitizeJsonString_(spiffsPath);
 
     const int n = snprintf(out,
                            outLen,
                            "{\"ok\":true,\"update_host\":\"%s\",\"flowio_path\":\"%s\","
                            "\"supervisor_path\":\"%s\",\"nextion_path\":\"%s\","
-                           "\"cfgdocs_path\":\"%s\"}",
+                           "\"spiffs_path\":\"%s\",\"cfgdocs_path\":\"%s\"}",
                            host,
                            flowPath,
                            supPath,
                            nxPath,
-                           cfgdocsPath);
+                           spiffsPath,
+                           spiffsPath);
     return n > 0 && (size_t)n < outLen;
 }
 
@@ -388,7 +389,7 @@ bool FirmwareUpdateModule::setConfig_(const char* updateHost,
                                       const char* flowioPath,
                                       const char* supervisorPath,
                                       const char* nextionPath,
-                                      const char* cfgdocsPath,
+                                      const char* spiffsPath,
                                       char* errOut,
                                       size_t errOutLen)
 {
@@ -432,9 +433,9 @@ bool FirmwareUpdateModule::setConfig_(const char* updateHost,
             return false;
         }
     }
-    if (cfgdocsPath) {
-        if (!cfgStore_->set(cfgdocsPathVar_, cfgdocsPath)) {
-            writeSimpleError_(errOut, errOutLen, "set cfgdocs_path failed");
+    if (spiffsPath) {
+        if (!cfgStore_->set(spiffsPathVar_, spiffsPath)) {
+            writeSimpleError_(errOut, errOutLen, "set spiffs_path failed");
             return false;
         }
     }
@@ -729,9 +730,9 @@ bool FirmwareUpdateModule::runNextionUpdate_(const char* url, char* errOut, size
     return true;
 }
 
-bool FirmwareUpdateModule::runCfgDocsUpdate_(const char* url, char* errOut, size_t errOutLen)
+bool FirmwareUpdateModule::runSpiffsUpdate_(const char* url, char* errOut, size_t errOutLen)
 {
-    setStatus_(UpdateState::Downloading, FirmwareUpdateTarget::CfgDocs, 0, "downloading");
+    setStatus_(UpdateState::Downloading, FirmwareUpdateTarget::Spiffs, 0, "downloading");
 
     HTTPClient http;
     configureDownloadHttp_(http);
@@ -750,110 +751,88 @@ bool FirmwareUpdateModule::runCfgDocsUpdate_(const char* url, char* errOut, size
         return false;
     }
 
-    if (!SPIFFS.begin(false)) {
-        writeSimpleError_(errOut, errOutLen, "spiffs mount failed");
-        http.end();
-        return false;
-    }
-
-    static constexpr const char* kFinalPath = "/webinterface/cfgdocs.fr.json";
-    static constexpr const char* kTmpPath = "/webinterface/cfgdocs.fr.json.tmp";
-    static constexpr const char* kBakPath = "/webinterface/cfgdocs.fr.json.bak";
-
-    setStatus_(UpdateState::Flashing, FirmwareUpdateTarget::CfgDocs, 0, "writing spiffs");
+    setStatus_(UpdateState::Flashing, FirmwareUpdateTarget::Spiffs, 0, "flashing spiffs");
     portENTER_CRITICAL(&lock_);
     activeTotalBytes_ = (contentLength > 0) ? (uint32_t)contentLength : 0U;
     activeSentBytes_ = 0;
     portEXIT_CRITICAL(&lock_);
 
-    (void)SPIFFS.remove(kTmpPath);
-    File out = SPIFFS.open(kTmpPath, FILE_WRITE);
-    if (!out) {
-        writeSimpleError_(errOut, errOutLen, "spiffs open temp failed");
-        http.end();
-        return false;
+    attachWebInterfaceSvcIfNeeded_();
+    if (webInterfaceSvc_ && webInterfaceSvc_->setPaused) {
+        webInterfaceSvc_->setPaused(webInterfaceSvc_->ctx, true);
+    }
+
+    char failMsg[128] = {0};
+    const size_t beginSize = (contentLength > 0) ? (size_t)contentLength : (size_t)UPDATE_SIZE_UNKNOWN;
+    if (!Update.begin(beginSize, U_SPIFFS)) {
+        snprintf(failMsg, sizeof(failMsg), "spiffs begin failed (%u)", (unsigned)Update.getError());
     }
 
     WiFiClient* stream = http.getStreamPtr();
     uint8_t buf[Limits::FirmwareUpdate::Http::StreamChunkBytes];
     int32_t remaining = contentLength;
     uint32_t lastReadMs = millis();
-    char failMsg[128] = {0};
+    if (failMsg[0] == '\0') {
+        while (http.connected() && (contentLength <= 0 || remaining > 0)) {
+            const size_t avail = stream ? stream->available() : 0;
+            if (avail == 0U) {
+                if (contentLength <= 0 && stream && !stream->connected()) {
+                    break;
+                }
+                if ((millis() - lastReadMs) > Limits::FirmwareUpdate::Http::StreamReadTimeoutMs) {
+                    snprintf(failMsg, sizeof(failMsg), "spiffs stream timeout");
+                    break;
+                }
+                delay(1);
+                continue;
+            }
 
-    while (http.connected() && (contentLength <= 0 || remaining > 0)) {
-        const size_t avail = stream ? stream->available() : 0;
-        if (avail == 0U) {
-            if (contentLength <= 0 && stream && !stream->connected()) {
+            const size_t toRead = (avail > sizeof(buf)) ? sizeof(buf) : avail;
+            const int rd = stream->readBytes((char*)buf, toRead);
+            if (rd <= 0) {
+                delay(1);
+                continue;
+            }
+            lastReadMs = millis();
+
+            const size_t wr = Update.write(buf, (size_t)rd);
+            if (wr != (size_t)rd) {
+                snprintf(failMsg, sizeof(failMsg), "spiffs write failed (%u)", (unsigned)Update.getError());
                 break;
             }
-            if ((millis() - lastReadMs) > Limits::FirmwareUpdate::Http::StreamReadTimeoutMs) {
-                snprintf(failMsg, sizeof(failMsg), "stream timeout");
-                break;
+
+            onProgressChunk_((uint32_t)wr);
+
+            if (contentLength > 0) {
+                remaining -= rd;
+                if (remaining <= 0) break;
             }
-            delay(1);
-            continue;
-        }
-
-        const size_t toRead = (avail > sizeof(buf)) ? sizeof(buf) : avail;
-        const int rd = stream->readBytes((char*)buf, toRead);
-        if (rd <= 0) {
-            delay(1);
-            continue;
-        }
-        lastReadMs = millis();
-
-        const size_t wr = out.write(buf, (size_t)rd);
-        if (wr != (size_t)rd) {
-            snprintf(failMsg, sizeof(failMsg), "spiffs write failed");
-            break;
-        }
-
-        onProgressChunk_((uint32_t)wr);
-
-        if (contentLength > 0) {
-            remaining -= rd;
-            if (remaining <= 0) break;
         }
     }
-
-    out.flush();
-    out.close();
     http.end();
 
     if (failMsg[0] == '\0' && contentLength > 0 && remaining > 0) {
         snprintf(failMsg, sizeof(failMsg), "incomplete download");
     }
+    if (failMsg[0] == '\0' && !Update.end()) {
+        snprintf(failMsg, sizeof(failMsg), "spiffs end failed (%u)", (unsigned)Update.getError());
+    }
+    if (failMsg[0] == '\0' && !Update.isFinished()) {
+        snprintf(failMsg, sizeof(failMsg), "spiffs not finished");
+    }
+
+    if (webInterfaceSvc_ && webInterfaceSvc_->setPaused) {
+        webInterfaceSvc_->setPaused(webInterfaceSvc_->ctx, false);
+    }
+
     if (failMsg[0] != '\0') {
-        (void)SPIFFS.remove(kTmpPath);
         writeSimpleError_(errOut, errOutLen, failMsg);
         return false;
     }
 
-    if (!validateCfgDocsFile_(SPIFFS, kTmpPath, errOut, errOutLen)) {
-        (void)SPIFFS.remove(kTmpPath);
-        return false;
-    }
-
-    const bool hadFinal = SPIFFS.exists(kFinalPath);
-    (void)SPIFFS.remove(kBakPath);
-    if (hadFinal && !SPIFFS.rename(kFinalPath, kBakPath)) {
-        (void)SPIFFS.remove(kTmpPath);
-        writeSimpleError_(errOut, errOutLen, "backup rename failed");
-        return false;
-    }
-    if (!SPIFFS.rename(kTmpPath, kFinalPath)) {
-        if (hadFinal) {
-            (void)SPIFFS.rename(kBakPath, kFinalPath);
-        }
-        (void)SPIFFS.remove(kTmpPath);
-        writeSimpleError_(errOut, errOutLen, "final rename failed");
-        return false;
-    }
-    if (hadFinal) {
-        (void)SPIFFS.remove(kBakPath);
-    }
-
-    setStatus_(UpdateState::Done, FirmwareUpdateTarget::CfgDocs, 100, "cfgdocs updated");
+    setStatus_(UpdateState::Done, FirmwareUpdateTarget::Spiffs, 100, "spiffs update complete; rebooting");
+    delay(700);
+    ESP.restart();
     return true;
 }
 
@@ -876,8 +855,8 @@ bool FirmwareUpdateModule::runJob_(const UpdateJob& job)
         case FirmwareUpdateTarget::Nextion:
             ok = runNextionUpdate_(job.url, err, sizeof(err));
             break;
-        case FirmwareUpdateTarget::CfgDocs:
-            ok = runCfgDocsUpdate_(job.url, err, sizeof(err));
+        case FirmwareUpdateTarget::Spiffs:
+            ok = runSpiffsUpdate_(job.url, err, sizeof(err));
             break;
         default:
             snprintf(err, sizeof(err), "unsupported target");
@@ -965,7 +944,7 @@ bool FirmwareUpdateModule::cmdNextion_(void* userCtx, const CommandRequest& req,
     return true;
 }
 
-bool FirmwareUpdateModule::cmdCfgDocs_(void* userCtx, const CommandRequest& req, char* reply, size_t replyLen)
+bool FirmwareUpdateModule::cmdSpiffs_(void* userCtx, const CommandRequest& req, char* reply, size_t replyLen)
 {
     FirmwareUpdateModule* self = static_cast<FirmwareUpdateModule*>(userCtx);
     if (!self) return false;
@@ -973,14 +952,14 @@ bool FirmwareUpdateModule::cmdCfgDocs_(void* userCtx, const CommandRequest& req,
     char url[kUrlLen] = {0};
     const char* explicitUrl = self->parseUrlArg_(req, url, sizeof(url)) ? url : nullptr;
     char err[120] = {0};
-    if (!self->startUpdate_(FirmwareUpdateTarget::CfgDocs, explicitUrl, err, sizeof(err))) {
-        if (!writeErrorJson(reply, replyLen, ErrorCode::Failed, "fw.update.cfgdocs")) {
+    if (!self->startUpdate_(FirmwareUpdateTarget::Spiffs, explicitUrl, err, sizeof(err))) {
+        if (!writeErrorJson(reply, replyLen, ErrorCode::Failed, "fw.update.spiffs")) {
             snprintf(reply, replyLen, "{\"ok\":false}");
         }
         return false;
     }
 
-    snprintf(reply, replyLen, "{\"ok\":true,\"queued\":true,\"target\":\"cfgdocs\"}");
+    snprintf(reply, replyLen, "{\"ok\":true,\"queued\":true,\"target\":\"spiffs\"}");
     return true;
 }
 
@@ -997,7 +976,7 @@ void FirmwareUpdateModule::init(ConfigStore& cfg, ServiceRegistry& services)
     cfg.registerVar(flowioPathVar_);
     cfg.registerVar(supervisorPathVar_);
     cfg.registerVar(nextionPathVar_);
-    cfg.registerVar(cfgdocsPathVar_);
+    cfg.registerVar(spiffsPathVar_);
 
     if (!services.add(ServiceId::FirmwareUpdate, &firmwareUpdateSvc_)) {
         LOGE("service registration failed: %s", toString(ServiceId::FirmwareUpdate));
@@ -1008,7 +987,8 @@ void FirmwareUpdateModule::init(ConfigStore& cfg, ServiceRegistry& services)
         cmdSvc_->registerHandler(cmdSvc_->ctx, "fw.update.flowio", &FirmwareUpdateModule::cmdFlowIo_, this);
         cmdSvc_->registerHandler(cmdSvc_->ctx, "fw.update.supervisor", &FirmwareUpdateModule::cmdSupervisor_, this);
         cmdSvc_->registerHandler(cmdSvc_->ctx, "fw.update.nextion", &FirmwareUpdateModule::cmdNextion_, this);
-        cmdSvc_->registerHandler(cmdSvc_->ctx, "fw.update.cfgdocs", &FirmwareUpdateModule::cmdCfgDocs_, this);
+        cmdSvc_->registerHandler(cmdSvc_->ctx, "fw.update.spiffs", &FirmwareUpdateModule::cmdSpiffs_, this);
+        cmdSvc_->registerHandler(cmdSvc_->ctx, "fw.update.cfgdocs", &FirmwareUpdateModule::cmdSpiffs_, this);
     }
 
     setStatus_(UpdateState::Idle, FirmwareUpdateTarget::FlowIO, 0, "idle");

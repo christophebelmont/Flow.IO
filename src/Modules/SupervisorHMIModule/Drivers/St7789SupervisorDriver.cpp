@@ -41,6 +41,8 @@ static constexpr uint16_t kColorBadgeDarkOff = rgb565_(71, 85, 105);
 static constexpr uint16_t kColorStatusGreen = rgb565_(48, 163, 104);
 static constexpr uint16_t kColorStatusOrange = rgb565_(246, 186, 74);
 static constexpr uint16_t kColorStatusRed = rgb565_(213, 75, 111);
+static constexpr uint16_t kColorCheckFill = rgb565_(176, 239, 143);
+static constexpr uint16_t kColorCheckMark = rgb565_(0, 144, 69);
 static constexpr uint16_t kColorSystemFill = rgb565_(236, 252, 240);
 static constexpr uint16_t kColorSystemBorder = rgb565_(197, 238, 208);
 static constexpr uint16_t kColorSystemText = rgb565_(36, 156, 88);
@@ -409,8 +411,19 @@ void drawSystemStatus_(SupervisorSt7789& d,
                        int16_t w,
                        uint8_t state)
 {
-    const char* label = "Systeme normal";
     d.fillRect(x, y, w, 24, panelColor_(swapBytes, kColorGaugeCardBg));
+    if (state >= 2U) {
+        const int16_t cx = (int16_t)(x + (w / 2));
+        const int16_t cy = (int16_t)(y + 12);
+        d.fillCircle(cx, cy, 10, panelColor_(swapBytes, kColorCheckFill));
+        for (int8_t off = -1; off <= 1; ++off) {
+            d.drawLine((int16_t)(cx - 5), (int16_t)(cy + off), (int16_t)(cx - 1), (int16_t)(cy + 4 + off), panelColor_(swapBytes, kColorCheckMark));
+            d.drawLine((int16_t)(cx - 1), (int16_t)(cy + 4 + off), (int16_t)(cx + 6), (int16_t)(cy - 4 + off), panelColor_(swapBytes, kColorCheckMark));
+        }
+        return;
+    }
+
+    const char* label = (state == 1U) ? "MQTT off" : "Flow indispo";
     setGfxFont_(d, swapBytes, &FreeSansBold9pt7b, systemStateColor_(state), kColorGaugeCardBg);
     const int16_t tw = gfxTextWidth_(d, label);
     d.setCursor((int16_t)(x + ((w - tw) / 2)), (int16_t)(gfxBaselineCenteredInBox_(d, label, y, 24) + 1));
@@ -670,7 +683,7 @@ void drawMeasureGauge_(SupervisorSt7789& d,
 
 void drawMeasuresBody_(SupervisorSt7789& d, bool swapBytes, int16_t w, int16_t h, const SupervisorHmiViewModel& vm)
 {
-    const int16_t heroY = (int16_t)(kHeaderH + 8);
+    const int16_t heroY = (int16_t)(kHeaderH + 4);
     const int16_t heroH = 46;
     const int16_t heroX = kSidePad;
     const int16_t heroW = (int16_t)(w - (2 * kSidePad));
@@ -692,9 +705,9 @@ void drawMeasuresBody_(SupervisorSt7789& d, bool swapBytes, int16_t w, int16_t h
                       heroStatusW,
                       systemState);
 
-    const int16_t bodyTop = (int16_t)(heroY + heroH + 8);
-    const int16_t bodyBottomPad = 8;
-    const int16_t gap = 6;
+    const int16_t bodyTop = (int16_t)(heroY + heroH + 6);
+    const int16_t bodyBottomPad = 6;
+    const int16_t gap = 4;
     const int16_t cardW = (int16_t)((w - (2 * kSidePad) - gap) / 2);
     const int16_t cardH = (int16_t)((h - bodyTop - bodyBottomPad - gap) / 2);
     const int16_t xLeft = kSidePad;

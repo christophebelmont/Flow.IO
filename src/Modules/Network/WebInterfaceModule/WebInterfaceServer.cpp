@@ -34,6 +34,10 @@
 #define FLOW_WEB_UNIFY_STATUS_CARD_ICONS 0
 #endif
 
+#ifndef FLOW_WEB_HEAP_FORENSICS
+#define FLOW_WEB_HEAP_FORENSICS 0
+#endif
+
 static void sanitizeJsonString_(char* s)
 {
     if (!s) return;
@@ -96,6 +100,94 @@ constexpr uint32_t kHttpLatencyInfoMs = 40U;
 constexpr uint32_t kHttpLatencyWarnMs = 120U;
 constexpr uint32_t kHttpLatencyFlowCfgInfoMs = 200U;
 constexpr uint32_t kHttpLatencyFlowCfgWarnMs = 900U;
+
+const char* httpMethodName_(uint8_t method);
+
+struct HeapForensicSnapshot {
+    uint32_t freeBytes = 0;
+    uint32_t minFreeBytes = 0;
+    uint32_t largestFreeBlock = 0;
+};
+
+struct SpiffsAssetForensicMeta {
+    char assetName[24] = {0};
+    uint32_t sizeBytes = 0;
+    bool gzip = false;
+};
+
+HeapForensicSnapshot captureHeapForensicSnapshot_()
+{
+    HeapForensicSnapshot snap{};
+    snap.freeBytes = (uint32_t)heap_caps_get_free_size(MALLOC_CAP_8BIT);
+    snap.minFreeBytes = (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);
+    snap.largestFreeBlock = (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    return snap;
+}
+
+const char* pathBaseName_(const char* path)
+{
+    if (!path || path[0] == '\0') return "-";
+    const char* slash = strrchr(path, '/');
+    return (slash && slash[1] != '\0') ? (slash + 1) : path;
+}
+
+void fillSpiffsAssetForensicMeta_(SpiffsAssetForensicMeta* out,
+                                  const char* servedPath,
+                                  uint32_t sizeBytes,
+                                  bool gzip)
+{
+    if (!out) return;
+    snprintf(out->assetName, sizeof(out->assetName), "%s", pathBaseName_(servedPath));
+    out->sizeBytes = sizeBytes;
+    out->gzip = gzip;
+}
+
+#if FLOW_WEB_HEAP_FORENSICS
+void logHttpHeapForensic_(AsyncWebServerRequest* req,
+                          const char* route,
+                          uint32_t startUs,
+                          const HeapForensicSnapshot& startHeap)
+{
+    const HeapForensicSnapshot endHeap = captureHeapForensicSnapshot_();
+    const uint32_t elapsedUs = micros() - startUs;
+    const long deltaFree = (long)endHeap.freeBytes - (long)startHeap.freeBytes;
+    const uint32_t lowWaterDrop =
+        (startHeap.minFreeBytes > endHeap.minFreeBytes) ? (startHeap.minFreeBytes - endHeap.minFreeBytes) : 0U;
+    const char* method = req ? httpMethodName_(req->method()) : "?";
+    LOGW("HTTPfx %s %s us=%lu f0=%lu f1=%lu df=%ld m1=%lu lo=%lu",
+         method,
+         route ? route : "?",
+         (unsigned long)elapsedUs,
+         (unsigned long)startHeap.freeBytes,
+         (unsigned long)endHeap.freeBytes,
+         deltaFree,
+         (unsigned long)endHeap.minFreeBytes,
+         (unsigned long)lowWaterDrop);
+}
+
+void logSpiffsAssetHeapForensic_(const char* stage,
+                                 const SpiffsAssetForensicMeta& meta,
+                                 uint32_t startUs,
+                                 const HeapForensicSnapshot& startHeap)
+{
+    const HeapForensicSnapshot endHeap = captureHeapForensicSnapshot_();
+    const uint32_t elapsedUs = micros() - startUs;
+    const long deltaFree = (long)endHeap.freeBytes - (long)startHeap.freeBytes;
+    const uint32_t lowWaterDrop =
+        (startHeap.minFreeBytes > endHeap.minFreeBytes) ? (startHeap.minFreeBytes - endHeap.minFreeBytes) : 0U;
+    LOGW("ASfx %s %s u=%lu f0=%lu f1=%lu d=%ld m=%lu l=%lu s=%lu z=%u",
+         stage ? stage : "?",
+         meta.assetName[0] ? meta.assetName : "-",
+         (unsigned long)elapsedUs,
+         (unsigned long)startHeap.freeBytes,
+         (unsigned long)endHeap.freeBytes,
+         deltaFree,
+         (unsigned long)endHeap.minFreeBytes,
+         (unsigned long)lowWaterDrop,
+         (unsigned long)meta.sizeBytes,
+         meta.gzip ? 1U : 0U);
+}
+#endif
 
 const char* webAssetVersion_()
 {
@@ -423,6 +515,9 @@ struct HttpLatencyScope {
     uint32_t startUs;
     uint32_t infoMs;
     uint32_t warnMs;
+#if FLOW_WEB_HEAP_FORENSICS
+    HeapForensicSnapshot startHeap;
+#endif
 
     HttpLatencyScope(AsyncWebServerRequest* request,
                      const char* routePath,
@@ -432,10 +527,18 @@ struct HttpLatencyScope {
           route(routePath),
           startUs(micros()),
           infoMs(infoThresholdMs),
-          warnMs((warnThresholdMs > infoThresholdMs) ? warnThresholdMs : (infoThresholdMs + 1U)) {}
+          warnMs((warnThresholdMs > infoThresholdMs) ? warnThresholdMs : (infoThresholdMs + 1U))
+    {
+#if FLOW_WEB_HEAP_FORENSICS
+        startHeap = captureHeapForensicSnapshot_();
+#endif
+    }
 
     ~HttpLatencyScope()
     {
+#if FLOW_WEB_HEAP_FORENSICS
+        logHttpHeapForensic_(req, route, startUs, startHeap);
+#endif
         const uint32_t elapsedUs = micros() - startUs;
         const uint32_t elapsedMs = elapsedUs / 1000U;
         if (elapsedMs < infoMs) return;
@@ -555,11 +658,18 @@ void WebInterfaceModule::startServer_()
                const char* assetPath,
                const char* contentType,
                bool cacheAware,
-               const char* gzipOverridePath = nullptr) -> AsyncWebServerResponse* {
+               const char* gzipOverridePath = nullptr,
+               SpiffsAssetForensicMeta* forensicMeta = nullptr) -> AsyncWebServerResponse* {
         if (!request || !assetPath || !contentType || !spiffsReady_) return nullptr;
 
         const size_t assetPathLen = strlen(assetPath);
         if (assetPathLen == 0U || assetPathLen >= 112U) return nullptr;
+
+#if FLOW_WEB_HEAP_FORENSICS
+        const uint32_t forensicStartUs = micros();
+        const HeapForensicSnapshot forensicStartHeap = captureHeapForensicSnapshot_();
+        SpiffsAssetForensicMeta localMeta{};
+#endif
 
         char gzipPath[128] = {0};
         const char* servedPath = assetPath;
@@ -578,8 +688,26 @@ void WebInterfaceModule::startServer_()
         }
         if (!SPIFFS.exists(servedPath)) return nullptr;
 
+#if FLOW_WEB_HEAP_FORENSICS
+        uint32_t servedSize = 0U;
+        File servedFile = SPIFFS.open(servedPath, FILE_READ);
+        if (servedFile) {
+            servedSize = (uint32_t)servedFile.size();
+            servedFile.close();
+        }
+        fillSpiffsAssetForensicMeta_(&localMeta, servedPath, servedSize, hasGzip);
+        if (forensicMeta) {
+            *forensicMeta = localMeta;
+        }
+#endif
+
         AsyncWebServerResponse* response = request->beginResponse(SPIFFS, servedPath, contentType);
-        if (!response) return nullptr;
+        if (!response) {
+#if FLOW_WEB_HEAP_FORENSICS
+            logSpiffsAssetHeapForensic_("null", localMeta, forensicStartUs, forensicStartHeap);
+#endif
+            return nullptr;
+        }
         response->addHeader("Vary", "Accept-Encoding");
         if (hasGzip) {
             response->addHeader("Content-Encoding", "gzip");
@@ -589,7 +717,27 @@ void WebInterfaceModule::startServer_()
         } else {
             addNoCacheHeaders_(response);
         }
+#if FLOW_WEB_HEAP_FORENSICS
+        logSpiffsAssetHeapForensic_("prep", localMeta, forensicStartUs, forensicStartHeap);
+#endif
         return response;
+    };
+
+    auto sendPreparedAssetResponse =
+        [](AsyncWebServerRequest* request,
+           AsyncWebServerResponse* response,
+           const SpiffsAssetForensicMeta* forensicMeta = nullptr) {
+        if (!request || !response) return;
+#if FLOW_WEB_HEAP_FORENSICS
+        const uint32_t forensicStartUs = micros();
+        const HeapForensicSnapshot forensicStartHeap = captureHeapForensicSnapshot_();
+#endif
+        request->send(response);
+#if FLOW_WEB_HEAP_FORENSICS
+        if (forensicMeta) {
+            logSpiffsAssetHeapForensic_("send", *forensicMeta, forensicStartUs, forensicStartHeap);
+        }
+#endif
     };
 
     server_.on("/assets/favicon.png", HTTP_GET, [this](AsyncWebServerRequest* request) {
@@ -625,42 +773,46 @@ void WebInterfaceModule::startServer_()
         request->redirect(webInterfaceLandingUrl());
     });
 
-    server_.on("/webinterface/app.css", HTTP_GET, [this, beginSpiffsAssetResponse](AsyncWebServerRequest* request) {
+    server_.on("/webinterface/app.css", HTTP_GET, [this, beginSpiffsAssetResponse, sendPreparedAssetResponse](AsyncWebServerRequest* request) {
+        SpiffsAssetForensicMeta forensicMeta{};
         AsyncWebServerResponse* response =
-            beginSpiffsAssetResponse(request, "/webinterface/app.css", "text/css", true);
+            beginSpiffsAssetResponse(request, "/webinterface/app.css", "text/css", true, nullptr, &forensicMeta);
         if (!response) {
             request->send(404, "text/plain", "Not found");
             return;
         }
-        request->send(response);
+        sendPreparedAssetResponse(request, response, &forensicMeta);
     });
-    server_.on("/webinterface/app.js", HTTP_GET, [this, beginSpiffsAssetResponse](AsyncWebServerRequest* request) {
+    server_.on("/webinterface/app.js", HTTP_GET, [this, beginSpiffsAssetResponse, sendPreparedAssetResponse](AsyncWebServerRequest* request) {
+        SpiffsAssetForensicMeta forensicMeta{};
         AsyncWebServerResponse* response =
-            beginSpiffsAssetResponse(request, "/webinterface/app.js", "application/javascript", true);
+            beginSpiffsAssetResponse(request, "/webinterface/app.js", "application/javascript", true, nullptr, &forensicMeta);
         if (!response) {
             request->send(404, "text/plain", "Not found");
             return;
         }
-        request->send(response);
+        sendPreparedAssetResponse(request, response, &forensicMeta);
     });
-    server_.on("/webinterface/runtimeui.json", HTTP_GET, [this, beginSpiffsAssetResponse](AsyncWebServerRequest* request) {
+    server_.on("/webinterface/runtimeui.json", HTTP_GET, [this, beginSpiffsAssetResponse, sendPreparedAssetResponse](AsyncWebServerRequest* request) {
+        SpiffsAssetForensicMeta forensicMeta{};
         AsyncWebServerResponse* response =
-            beginSpiffsAssetResponse(request, "/webinterface/runtimeui.json", "application/json", true);
+            beginSpiffsAssetResponse(request, "/webinterface/runtimeui.json", "application/json", true, nullptr, &forensicMeta);
         if (!response) {
             request->send(404, "text/plain", "Not found");
             return;
         }
-        request->send(response);
+        sendPreparedAssetResponse(request, response, &forensicMeta);
     });
-    auto registerWebSvgRoute = [this, beginSpiffsAssetResponse](const char* assetPath) {
-        server_.on(assetPath, HTTP_GET, [this, beginSpiffsAssetResponse, assetPath](AsyncWebServerRequest* request) {
+    auto registerWebSvgRoute = [this, beginSpiffsAssetResponse, sendPreparedAssetResponse](const char* assetPath) {
+        server_.on(assetPath, HTTP_GET, [this, beginSpiffsAssetResponse, sendPreparedAssetResponse, assetPath](AsyncWebServerRequest* request) {
+            SpiffsAssetForensicMeta forensicMeta{};
             AsyncWebServerResponse* response =
-                beginSpiffsAssetResponse(request, assetPath, "image/svg+xml", true);
+                beginSpiffsAssetResponse(request, assetPath, "image/svg+xml", true, nullptr, &forensicMeta);
             if (!response) {
                 request->send(404, "text/plain", "Not found");
                 return;
             }
-            request->send(response);
+            sendPreparedAssetResponse(request, response, &forensicMeta);
         });
     };
     registerWebSvgRoute("/webinterface/i/m.svg");
@@ -670,12 +822,13 @@ void WebInterfaceModule::startServer_()
     registerWebSvgRoute("/webinterface/i/e.svg");
     registerWebSvgRoute("/webinterface/i/f.svg");
     registerWebSvgRoute("/webinterface/i/u.svg");
-    server_.on("/webinterface/cfgdocs.fr.json", HTTP_GET, [this, beginSpiffsAssetResponse](AsyncWebServerRequest* request) {
+    server_.on("/webinterface/cfgdocs.fr.json", HTTP_GET, [this, beginSpiffsAssetResponse, sendPreparedAssetResponse](AsyncWebServerRequest* request) {
+        SpiffsAssetForensicMeta forensicMeta{};
         AsyncWebServerResponse* response =
             beginSpiffsAssetResponse(
-                request, "/webinterface/cfgdocs.fr.json", "application/json", true, "/webinterface/cfgdocs.jz");
+                request, "/webinterface/cfgdocs.fr.json", "application/json", true, "/webinterface/cfgdocs.jz", &forensicMeta);
         if (response) {
-            request->send(response);
+            sendPreparedAssetResponse(request, response, &forensicMeta);
             return;
         }
         AsyncWebServerResponse* fallbackResponse =
@@ -683,12 +836,13 @@ void WebInterfaceModule::startServer_()
         addNoCacheHeaders_(fallbackResponse);
         request->send(fallbackResponse);
     });
-    server_.on("/webinterface/cfgmods.fr.json", HTTP_GET, [this, beginSpiffsAssetResponse](AsyncWebServerRequest* request) {
+    server_.on("/webinterface/cfgmods.fr.json", HTTP_GET, [this, beginSpiffsAssetResponse, sendPreparedAssetResponse](AsyncWebServerRequest* request) {
+        SpiffsAssetForensicMeta forensicMeta{};
         AsyncWebServerResponse* response =
             beginSpiffsAssetResponse(
-                request, "/webinterface/cfgmods.fr.json", "application/json", true, "/webinterface/cfgmods.jz");
+                request, "/webinterface/cfgmods.fr.json", "application/json", true, "/webinterface/cfgmods.jz", &forensicMeta);
         if (response) {
-            request->send(response);
+            sendPreparedAssetResponse(request, response, &forensicMeta);
             return;
         }
         AsyncWebServerResponse* fallbackResponse =
@@ -721,7 +875,7 @@ void WebInterfaceModule::startServer_()
         addNoCacheHeaders_(response);
         request->send(response);
     });
-    server_.on("/webinterface", HTTP_GET, [this, beginSpiffsAssetResponse](AsyncWebServerRequest* request) {
+    server_.on("/webinterface", HTTP_GET, [this, beginSpiffsAssetResponse, sendPreparedAssetResponse](AsyncWebServerRequest* request) {
         HttpLatencyScope latency(request, "/webinterface");
         if (!request->hasParam("page")) {
             NetworkAccessMode mode = NetworkAccessMode::None;
@@ -739,13 +893,14 @@ void WebInterfaceModule::startServer_()
             }
         }
         if (spiffsReady_ && SPIFFS.exists("/webinterface/index.html")) {
+            SpiffsAssetForensicMeta forensicMeta{};
             AsyncWebServerResponse* response =
-                beginSpiffsAssetResponse(request, "/webinterface/index.html", "text/html", false);
+                beginSpiffsAssetResponse(request, "/webinterface/index.html", "text/html", false, nullptr, &forensicMeta);
             if (!response) {
                 request->send(500, "text/plain", "Failed to load web interface");
                 return;
             }
-            request->send(response);
+            sendPreparedAssetResponse(request, response, &forensicMeta);
             return;
         }
         AsyncWebServerResponse* response = request->beginResponse(200, "text/html", kWebInterfaceFallbackPage);
@@ -870,7 +1025,7 @@ void WebInterfaceModule::startServer_()
         String flowStr;
         String supStr;
         String nxStr;
-        String cfgdocsStr;
+        String spiffsStr;
         if (request->hasParam("update_host", true)) {
             hostStr = request->getParam("update_host", true)->value();
         }
@@ -883,8 +1038,10 @@ void WebInterfaceModule::startServer_()
         if (request->hasParam("nextion_path", true)) {
             nxStr = request->getParam("nextion_path", true)->value();
         }
-        if (request->hasParam("cfgdocs_path", true)) {
-            cfgdocsStr = request->getParam("cfgdocs_path", true)->value();
+        if (request->hasParam("spiffs_path", true)) {
+            spiffsStr = request->getParam("spiffs_path", true)->value();
+        } else if (request->hasParam("cfgdocs_path", true)) {
+            spiffsStr = request->getParam("cfgdocs_path", true)->value();
         }
 
         char err[96] = {0};
@@ -893,7 +1050,7 @@ void WebInterfaceModule::startServer_()
                                      flowStr.c_str(),
                                      supStr.c_str(),
                                      nxStr.c_str(),
-                                     cfgdocsStr.c_str(),
+                                     spiffsStr.c_str(),
                                      err,
                                      sizeof(err))) {
             request->send(409,
@@ -1285,16 +1442,17 @@ void WebInterfaceModule::startServer_()
         request->send(200, "application/json", domainBuf);
     });
 
-    server_.on("/api/runtime/manifest", HTTP_GET, [this, beginSpiffsAssetResponse](AsyncWebServerRequest* request) {
+    server_.on("/api/runtime/manifest", HTTP_GET, [this, beginSpiffsAssetResponse, sendPreparedAssetResponse](AsyncWebServerRequest* request) {
         HttpLatencyScope latency(request, "/api/runtime/manifest");
+        SpiffsAssetForensicMeta forensicMeta{};
         AsyncWebServerResponse* response =
-            beginSpiffsAssetResponse(request, "/webinterface/runtimeui.json", "application/json", true);
+            beginSpiffsAssetResponse(request, "/webinterface/runtimeui.json", "application/json", true, nullptr, &forensicMeta);
         if (!response) {
             request->send(503, "application/json",
                           "{\"ok\":false,\"err\":{\"code\":\"NotReady\",\"where\":\"runtime.manifest\"}}");
             return;
         }
-        request->send(response);
+        sendPreparedAssetResponse(request, response, &forensicMeta);
     });
 
     server_.on("/api/runtime/alarms", HTTP_GET, [this](AsyncWebServerRequest* request) {
@@ -1810,9 +1968,13 @@ void WebInterfaceModule::startServer_()
         HttpLatencyScope latency(request, "/fwupdate/nextion");
         handleUpdateRequest_(request, FirmwareUpdateTarget::Nextion);
     });
+    server_.on("/fwupdate/spiffs", HTTP_POST, [this](AsyncWebServerRequest* request) {
+        HttpLatencyScope latency(request, "/fwupdate/spiffs");
+        handleUpdateRequest_(request, FirmwareUpdateTarget::Spiffs);
+    });
     server_.on("/fwupdate/cfgdocs", HTTP_POST, [this](AsyncWebServerRequest* request) {
         HttpLatencyScope latency(request, "/fwupdate/cfgdocs");
-        handleUpdateRequest_(request, FirmwareUpdateTarget::CfgDocs);
+        handleUpdateRequest_(request, FirmwareUpdateTarget::Spiffs);
     });
 
     server_.onNotFound([webInterfaceLandingUrl](AsyncWebServerRequest* request) {

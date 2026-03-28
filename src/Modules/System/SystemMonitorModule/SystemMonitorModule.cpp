@@ -8,8 +8,15 @@
 #include "Core/Services/ILogger.h"
 #include <Arduino.h>
 #include <WiFi.h>                ///< only for RSSI (optional)
+#include <esp_heap_caps.h>
 #include <new>
 #include <string.h>
+#ifdef CONFIG_HEAP_TASK_TRACKING
+#include <esp_heap_task_info.h>
+#endif
+#ifndef FLOW_WEB_HEAP_FORENSICS
+#define FLOW_WEB_HEAP_FORENSICS 0
+#endif
 #define LOG_MODULE_ID ((LogModuleId)LogModuleIdValue::SystemMonitorModule)
 #include "Core/ModuleLog.h"
 
@@ -19,6 +26,36 @@ static constexpr uint8_t kSysMonCfgBranch = 1;
 static constexpr MqttConfigRouteProducer::Route kSysMonCfgRoutes[] = {
     {1, {(uint8_t)ConfigModuleId::SystemMonitor, kSysMonCfgBranch}, "sysmon", "sysmon", (uint8_t)MqttPublishPriority::Normal, nullptr},
 };
+
+volatile bool gHeapAllocFailedPending = false;
+volatile size_t gHeapAllocFailedSize = 0;
+volatile uint32_t gHeapAllocFailedCaps = 0;
+const char* volatile gHeapAllocFailedFunction = nullptr;
+
+void onHeapAllocFailed_(size_t size, uint32_t caps, const char* functionName)
+{
+    gHeapAllocFailedSize = size;
+    gHeapAllocFailedCaps = caps;
+    gHeapAllocFailedFunction = functionName;
+    gHeapAllocFailedPending = true;
+}
+
+#ifdef CONFIG_HEAP_TASK_TRACKING
+void copyTaskName_(char* out, size_t outLen, TaskHandle_t task)
+{
+    if (!out || outLen == 0U) return;
+    out[0] = '\0';
+
+    const char* name = task ? pcTaskGetName(task) : pcTaskGetName(nullptr);
+    if (!name || !name[0]) {
+        snprintf(out, outLen, "%s", "-");
+        return;
+    }
+
+    snprintf(out, outLen, "%s", name);
+}
+#endif
+
 }
 
 const char* SystemMonitorModule::wifiStateStr(WifiState st) {
@@ -42,6 +79,13 @@ void SystemMonitorModule::init(ConfigStore& cfg, ServiceRegistry& services) {
     cfgSvc  = services.get<ConfigStoreService>(ServiceId::ConfigStore);
     logHub  = services.get<LogHubService>(ServiceId::LogHub);
     haSvc_  = services.get<HAService>(ServiceId::Ha);
+
+#if FLOW_WEB_HEAP_FORENSICS
+    const esp_err_t allocHookErr = heap_caps_register_failed_alloc_callback(&onHeapAllocFailed_);
+    if (allocHookErr != ESP_OK) {
+        LOGW("Heap alloc-fail hook registration failed err=%d", (int)allocHookErr);
+    }
+#endif
 }
 
 void SystemMonitorModule::registerHaEntities_(ServiceRegistry& services)
@@ -321,6 +365,205 @@ void SystemMonitorModule::logTrackedBuffers()
     }
 }
 
+void SystemMonitorModule::appendHeapWatchSample_(const SystemStatsSnapshot& snap)
+{
+    HeapWatchSample& sample = heapWatchSamples_[heapWatchWriteIndex_];
+    sample.uptimeMs = snap.uptimeMs;
+    sample.freeBytes = snap.heap.freeBytes;
+    sample.minFreeBytes = snap.heap.minFreeBytes;
+    sample.largestFreeBlock = snap.heap.largestFreeBlock;
+
+    heapWatchWriteIndex_ = (heapWatchWriteIndex_ + 1U) % kHeapWatchSampleCount;
+    if (heapWatchCount_ < kHeapWatchSampleCount) {
+        ++heapWatchCount_;
+    }
+}
+
+void SystemMonitorModule::armHeapWatchDump_(const SystemStatsSnapshot& snap, const char* reason)
+{
+    heapWatchTripActive_ = true;
+    heapWatchDumpPending_ = true;
+    heapWatchTriggerMs_ = snap.uptimeMs;
+    heapWatchTriggerFreeBytes_ = snap.heap.freeBytes;
+    heapWatchTriggerMinFreeBytes_ = snap.heap.minFreeBytes;
+    heapWatchTriggerLargestFreeBlock_ = snap.heap.largestFreeBlock;
+    heapWatchFrozenWriteIndex_ = heapWatchWriteIndex_;
+    heapWatchFrozenCount_ = heapWatchCount_;
+    snprintf(heapWatchTriggerReason_, sizeof(heapWatchTriggerReason_), "%s", reason ? reason : "-");
+#ifdef CONFIG_HEAP_TASK_TRACKING
+    captureHeapWatchTaskTotals_();
+#endif
+    LOGW("HeapWatch trip captured reason=%s free=%lu min=%lu largest=%lu",
+         heapWatchTriggerReason_,
+         (unsigned long)heapWatchTriggerFreeBytes_,
+         (unsigned long)heapWatchTriggerMinFreeBytes_,
+         (unsigned long)heapWatchTriggerLargestFreeBlock_);
+}
+
+void SystemMonitorModule::dumpHeapWatchWindow_() const
+{
+    if (heapWatchFrozenCount_ == 0U) {
+        LOGW("HeapWatch window unavailable");
+        return;
+    }
+
+    const size_t sampleCount =
+        (heapWatchFrozenCount_ < kHeapWatchDumpSampleCount) ? heapWatchFrozenCount_ : kHeapWatchDumpSampleCount;
+    const size_t startIndex =
+        (heapWatchFrozenWriteIndex_ + kHeapWatchSampleCount - sampleCount) % kHeapWatchSampleCount;
+
+    for (size_t i = 0; i < sampleCount; ++i) {
+        const size_t idx = (startIndex + i) % kHeapWatchSampleCount;
+        const HeapWatchSample& sample = heapWatchSamples_[idx];
+        const long dtMs = (long)sample.uptimeMs - (long)heapWatchTriggerMs_;
+        LOGW("HeapWatch win dt=%ld free=%lu min=%lu largest=%lu",
+             dtMs,
+             (unsigned long)sample.freeBytes,
+             (unsigned long)sample.minFreeBytes,
+             (unsigned long)sample.largestFreeBlock);
+    }
+}
+
+#ifdef CONFIG_HEAP_TASK_TRACKING
+void SystemMonitorModule::captureHeapWatchTaskTotals_()
+{
+    heapWatchTaskTotalCount_ = 0U;
+
+    heap_task_totals_t totals[kHeapWatchTaskTotalsMax]{};
+    size_t numTotals = 0U;
+    heap_task_info_params_t params{};
+    params.caps[0] = 0;
+    params.mask[0] = 0;
+    params.totals = totals;
+    params.num_totals = &numTotals;
+    params.max_totals = kHeapWatchTaskTotalsMax;
+
+    heap_caps_get_per_task_info(&params);
+
+    const size_t totalCount = (numTotals < kHeapWatchTaskTotalsMax) ? numTotals : kHeapWatchTaskTotalsMax;
+    for (size_t i = 0; i < totalCount; ++i) {
+        heapWatchTaskTotals_[i].sizeBytes = (uint32_t)totals[i].size[0];
+        heapWatchTaskTotals_[i].blockCount = (uint32_t)totals[i].count[0];
+        copyTaskName_(heapWatchTaskTotals_[i].taskName, sizeof(heapWatchTaskTotals_[i].taskName), totals[i].task);
+    }
+    heapWatchTaskTotalCount_ = totalCount;
+    for (size_t i = 0; i < heapWatchTaskTotalCount_; ++i) {
+        size_t best = i;
+        for (size_t j = i + 1; j < heapWatchTaskTotalCount_; ++j) {
+            if (heapWatchTaskTotals_[j].sizeBytes > heapWatchTaskTotals_[best].sizeBytes) {
+                best = j;
+            }
+        }
+        if (best == i) continue;
+        HeapWatchTaskTotal tmp = heapWatchTaskTotals_[i];
+        heapWatchTaskTotals_[i] = heapWatchTaskTotals_[best];
+        heapWatchTaskTotals_[best] = tmp;
+    }
+}
+
+void SystemMonitorModule::dumpHeapWatchTaskTotals_() const
+{
+    if (heapWatchTaskTotalCount_ == 0U) {
+        LOGW("HeapWatch tasks unavailable");
+        return;
+    }
+
+    for (size_t i = 0; i < heapWatchTaskTotalCount_; ++i) {
+        const HeapWatchTaskTotal& total = heapWatchTaskTotals_[i];
+        if (total.sizeBytes == 0U && total.blockCount == 0U) continue;
+        LOGW("HeapWatch task=%s alloc=%lu blocks=%lu",
+             total.taskName[0] ? total.taskName : "-",
+             (unsigned long)total.sizeBytes,
+             (unsigned long)total.blockCount);
+    }
+}
+#endif
+
+void SystemMonitorModule::dumpHeapWatch_()
+{
+    LOGW("HeapWatch dump reason=%s trigger_free=%lu trigger_min=%lu trigger_largest=%lu captured=%u dump_last=%u sample_ms=%lu",
+         heapWatchTriggerReason_[0] ? heapWatchTriggerReason_ : "-",
+         (unsigned long)heapWatchTriggerFreeBytes_,
+         (unsigned long)heapWatchTriggerMinFreeBytes_,
+         (unsigned long)heapWatchTriggerLargestFreeBlock_,
+         (unsigned)heapWatchFrozenCount_,
+         (unsigned)kHeapWatchDumpSampleCount,
+         (unsigned long)kHeapWatchSamplePeriodMs);
+    dumpHeapWatchWindow_();
+#ifdef CONFIG_HEAP_TASK_TRACKING
+    dumpHeapWatchTaskTotals_();
+#endif
+    heapWatchDumpPending_ = false;
+}
+
+void SystemMonitorModule::pollHeapWatch_(uint32_t now)
+{
+    if (lastHeapWatchSampleMs_ != 0U && (uint32_t)(now - lastHeapWatchSampleMs_) < kHeapWatchSamplePeriodMs) {
+        return;
+    }
+    lastHeapWatchSampleMs_ = now;
+
+    SystemStatsSnapshot snap{};
+    SystemStats::collect(snap);
+    appendHeapWatchSample_(snap);
+
+    if (heapWatchLastSeenMinFree_ == UINT32_MAX) {
+        heapWatchLastSeenMinFree_ = snap.heap.minFreeBytes;
+    }
+
+    const bool currentFreeTrip = snap.heap.freeBytes <= kHeapWatchTripFreeBytes;
+    const bool minLowWaterTrip =
+        snap.heap.minFreeBytes <= kHeapWatchTripFreeBytes && snap.heap.minFreeBytes < heapWatchLastSeenMinFree_;
+
+    if (!heapWatchTripActive_ && !heapWatchDumpPending_) {
+        if (currentFreeTrip) {
+            armHeapWatchDump_(snap, "free");
+        } else if (minLowWaterTrip) {
+            armHeapWatchDump_(snap, "min_low");
+        }
+    }
+
+    if (snap.heap.minFreeBytes < heapWatchLastSeenMinFree_) {
+        heapWatchLastSeenMinFree_ = snap.heap.minFreeBytes;
+    }
+
+    if (heapWatchDumpPending_) {
+        const bool recovered = snap.heap.freeBytes >= kHeapWatchRecoverFreeBytes;
+        const bool timeout = (uint32_t)(snap.uptimeMs - heapWatchTriggerMs_) >= kHeapWatchDumpDelayMs;
+        if (recovered || timeout) {
+            dumpHeapWatch_();
+        }
+    }
+
+    if (heapWatchTripActive_ && snap.heap.freeBytes >= kHeapWatchRecoverFreeBytes) {
+        LOGI("HeapWatch recovered free=%lu min=%lu largest=%lu",
+             (unsigned long)snap.heap.freeBytes,
+             (unsigned long)snap.heap.minFreeBytes,
+             (unsigned long)snap.heap.largestFreeBlock);
+        heapWatchTripActive_ = false;
+    }
+}
+
+void SystemMonitorModule::logPendingHeapAllocFailure_()
+{
+    if (!gHeapAllocFailedPending) return;
+
+    const size_t size = gHeapAllocFailedSize;
+    const uint32_t caps = gHeapAllocFailedCaps;
+    const char* functionName = gHeapAllocFailedFunction;
+    gHeapAllocFailedPending = false;
+
+    SystemStatsSnapshot snap{};
+    SystemStats::collect(snap);
+    LOGW("Heap alloc failed size=%lu caps=0x%08lx func=%s free=%lu min=%lu largest=%lu",
+         (unsigned long)size,
+         (unsigned long)caps,
+         functionName ? functionName : "-",
+         (unsigned long)snap.heap.freeBytes,
+         (unsigned long)snap.heap.minFreeBytes,
+         (unsigned long)snap.heap.largestFreeBlock);
+}
+
 void SystemMonitorModule::buildHealthJson(char* out, size_t outLen) {
     SystemStatsSnapshot snap{};
     SystemStats::collect(snap);
@@ -363,6 +606,10 @@ void SystemMonitorModule::loop() {
     }
 
     const uint32_t now = millis();
+#if FLOW_WEB_HEAP_FORENSICS
+    pollHeapWatch_(now);
+    logPendingHeapAllocFailure_();
+#endif
     if (cfgStore_) {
         cfgStore_->logNvsWriteSummaryIfDue(now, 60000U);
     }
@@ -399,5 +646,5 @@ void SystemMonitorModule::loop() {
         buffersLoggedThisCycle_ = true;
     }
 
-    vTaskDelay(pdMS_TO_TICKS(200));
+    vTaskDelay(pdMS_TO_TICKS(25));
 }

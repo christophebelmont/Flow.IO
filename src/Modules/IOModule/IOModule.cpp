@@ -775,6 +775,12 @@ bool IOModule::processDigitalInputDefinition_(uint8_t slotIdx, uint32_t nowMs)
             inputEp->updateCount(totalCount, true, nowMs);
             slot.lastCount = totalCount;
             slot.lastValid = true;
+            if (dataStore_) {
+                uint8_t rtIdx = 0;
+                if (endpointIndexFromId_(slot.endpointId, rtIdx)) {
+                    (void)setIoEndpointInt(*dataStore_, rtIdx, totalCount, nowMs);
+                }
+            }
             markIoCycleChanged_(slot.ioId);
             if (slot.inDef.onCounterChanged) {
                 slot.inDef.onCounterChanged(slot.inDef.onCounterCtx, totalCount);
@@ -800,6 +806,12 @@ bool IOModule::processDigitalInputDefinition_(uint8_t slotIdx, uint32_t nowMs)
         inputEp->update(on, true, nowMs);
         slot.lastValue = on;
         slot.lastValid = true;
+        if (dataStore_) {
+            uint8_t rtIdx = 0;
+            if (endpointIndexFromId_(slot.endpointId, rtIdx)) {
+                (void)setIoEndpointBool(*dataStore_, rtIdx, on, nowMs);
+            }
+        }
         markIoCycleChanged_(slot.ioId);
         if (slot.inDef.onValueChanged) {
             slot.inDef.onValueChanged(slot.inDef.onValueCtx, on);
@@ -1454,7 +1466,7 @@ bool IOModule::configureRuntime_()
                     initialTotal = persistedTotal;
                 }
                 s.lastCount = initialTotal;
-                s.lastValid = true;
+                s.lastValid = false;
                 static_cast<DigitalSensorEndpoint*>(s.endpoint)->updateCount(initialTotal, true, millis());
             }
             registry_.add(s.endpoint);

@@ -231,9 +231,9 @@
       "module": "fwupdate",
       "name": "cfgdocs_path",
       "type": "CharArray",
-      "label": "Chemin cfgdocs",
-      "help": "Chemin du fichier cfgdocs.fr.json sur le serveur MAJ.",
-      "var": "cfgdocsPathVar_",
+      "label": "Chemin image SPIFFS",
+      "help": "Chemin du fichier spiffs.bin sur le serveur MAJ.",
+      "var": "spiffsPathVar_",
       "source": "cfgdoc"
     },
     "fwupdate/flowio_path": {

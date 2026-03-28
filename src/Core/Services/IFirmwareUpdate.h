@@ -11,7 +11,7 @@ enum class FirmwareUpdateTarget : uint8_t {
     FlowIO = 1,
     Nextion = 2,
     Supervisor = 3,
-    CfgDocs = 4
+    Spiffs = 4
 };
 
 struct FirmwareUpdateService {
@@ -23,7 +23,7 @@ struct FirmwareUpdateService {
                       const char* flowioPath,
                       const char* supervisorPath,
                       const char* nextionPath,
-                      const char* cfgdocsPath,
+                      const char* spiffsPath,
                       char* errOut,
                       size_t errOutLen);
     void* ctx;

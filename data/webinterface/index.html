@@ -38,7 +38,7 @@
       <nav class="menu-group">
         <button class="menu-item active" data-page="page-pool-measures"><span class="ico icon-measures" aria-hidden="true"></span><span class="label">Mesures</span></button>
         <button class="menu-item" data-page="page-terminal"><span class="ico icon-terminal" aria-hidden="true"></span><span class="label">Journaux</span></button>
-        <button class="menu-item" data-page="page-system"><span class="ico icon-system" aria-hidden="true"></span><span class="label">Système</span></button>
+        <button class="menu-item" data-page="page-system"><span class="ico icon-system" aria-hidden="true"></span><span class="label">Update</span></button>
         <button class="menu-item" data-page="page-control"><span class="ico icon-flowcfg" aria-hidden="true"></span><span class="label">Config Flow.IO</span></button>
         <button class="menu-item" data-page="page-local-config"><span class="ico icon-supervisorcfg" aria-hidden="true"></span><span class="label">Config Superviseur</span></button>
       </nav>
@@ -102,7 +102,7 @@
 
       <section id="page-system" class="page">
         <div class="topbar">
-          <h1>Système</h1>
+          <h1>Update</h1>
         </div>
         <div class="system-groups">
           <div class="card">
@@ -175,10 +175,10 @@
                   </div>
                 </div>
                 <div class="field full">
-                  <label for="cfgdocsPath">Chemin cfgdocs</label>
+                  <label for="spiffsPath">Chemin image SPIFFS</label>
                   <div class="field-inline-action">
-                    <input id="cfgdocsPath" placeholder="/webinterface/cfgdocs.fr.json" />
-                    <button id="upCfgdocs" class="btn-primary">Mettre à jour cfgdocs</button>
+                    <input id="spiffsPath" placeholder="/build/Supervisor/spiffs.bin" />
+                    <button id="upSpiffs" class="btn-primary">Mettre à jour SPIFFS</button>
                   </div>
                 </div>
               </div>
