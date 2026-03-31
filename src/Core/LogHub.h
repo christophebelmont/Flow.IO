@@ -43,10 +43,12 @@ public:
     void noteFormatTruncation(LogModuleId moduleId, uint32_t wrote);
 
 private:
+    static constexpr LogLevel kDefaultMinLevel = LogLevel::Info;
+
     struct ModuleRegistration {
         LogModuleId id = (LogModuleId)LogModuleIdValue::Unknown;
         char name[24] = {0};
-        int32_t minLevelRaw = (int32_t)LogLevel::Debug;
+        int32_t minLevelRaw = (int32_t)kDefaultMinLevel;
         char nvsKey[Limits::MaxNvsKeyLen + 1] = {0};
         char jsonName[20] = {0};
         ConfigVariable<int32_t, 0> minLevelVar{};

@@ -191,7 +191,7 @@ bool LogHub::registerModule(LogModuleId moduleId, const char* moduleName)
         if (moduleCount_ >= MAX_REGISTERED_MODULES) return false;
         slot = &modules_[moduleCount_++];
         slot->id = moduleId;
-        slot->minLevelRaw = (int32_t)LogLevel::Debug;
+        slot->minLevelRaw = (int32_t)kDefaultMinLevel;
     }
 
     strncpy(slot->name, moduleName, sizeof(slot->name) - 1);
@@ -230,7 +230,7 @@ bool LogHub::setModuleMinLevel(LogModuleId moduleId, LogLevel level)
 LogLevel LogHub::getModuleMinLevel(LogModuleId moduleId) const
 {
     const ModuleRegistration* slot = findModule_(moduleId);
-    if (!slot) return LogLevel::Debug;
+    if (!slot) return kDefaultMinLevel;
     return clampLevel_(slot->minLevelRaw);
 }
 
