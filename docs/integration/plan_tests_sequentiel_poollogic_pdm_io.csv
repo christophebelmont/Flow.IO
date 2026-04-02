@@ -1,0 +1,24 @@
+﻿Etape,Titre,Procedure,Tests_couverts
+1,Remise à zéro / configuration par défaut,Démarrer depuis usine et vérifier qu’aucune pompe n’est active; relever l’état initial de tous les flags auto et des switchs PDM.,A09
+2,Connectivité Wi-Fi,"Renseigner SSID/mot de passe Wi-Fi, sauvegarder, redémarrer si nécessaire, vérifier obtention IP et stabilité du lien.",Pré-requis pour tous les tests pilotés via UI/MQTT
+3,Connectivité MQTT,"Configurer broker, port, credentials, topics de base; vérifier connexion, publications runtime et réceptions de commandes.",Pré-requis d’observabilité
+4,Validation IO de base,"Vérifier présence/absence attendue des capteurs: pH, ORP, PSI, air temp, niveaux bidons; noter les capteurs manquants.","I01,I02,I03,G05,G06"
+5,Mappage PDM de base,"Vérifier que les sorties filtration, pH, ORP, robot sont bien bindées et que les interlocks attendus sont en place.","I05,I06,I07,I08"
+6,Forçage direct filtration,"Tester ON, OFF, idempotence, bascule rapide, disabled, IO error, max uptime.","D01,D02,D04,D06,D07,D08,D09,D10"
+7,Forçage direct pompe pH,"Tester ON, OFF, interlock filtration, disabled, IO error, max uptime, idempotence.","E01,E02,E03,E04,E05,E06,E07,E08,E09"
+8,Forçage direct pompe ORP,"Tester ON, OFF, interlock filtration, disabled, IO error, max uptime, idempotence.","F01,F02,F03,F04,F05,F06,F07,F08,F09"
+9,Activation mode auto filtration,Mettre auto_filtration=true avec planning connu; vérifier démarrage/arrêt selon plage.,"A01,A02,A10"
+10,Tests hiver / freeze filtration,Activer winterMode et injecter températures air sous seuil puis freeze hold.,"A03,A04,A08"
+11,Sécurité PSI sur filtration,"Avec filtration active, injecter défaut PSI après délai de grâce; vérifier coupure en auto puis en manuel.","A05,D05,I04"
+12,Mode manuel puis retour auto filtration,"Passer auto_filtration=false, vérifier que PoolLogic n’agit plus; puis repasser en auto et vérifier reprise planning.","A06,A07,I11"
+13,Activation auto pH,"Mettre auto_ph=true, filtration ON, délai non écoulé puis écoulé; injecter valeurs pH autour de la consigne.","B02,B03,B10"
+14,Robustesse capteur pH,Tester sonde absente/invalide puis retour valide.,"B04,B09,I01,I12"
+15,Sécurités pH,"Tester filtration OFF, PSI error, bidon pH vide, niveau instable, sens pH+/pH-.","B05,B06,B07,B08,G01,G02,G07"
+16,Forçage manuel pH puis retour auto,"Activer ph_pump_force=true, vérifier indépendance vis-à-vis de auto_ph; couper le forçage puis vérifier reprise auto.","E10,I09"
+17,Activation auto ORP,"Mettre auto_orp=true, filtration ON, délai non écoulé puis écoulé; injecter valeurs ORP autour de la consigne.","C02,C03,C08"
+18,Robustesse capteur ORP,Tester sonde absente/invalide puis retour valide.,"C04,C09,I02,I12"
+19,Sécurités ORP,"Tester filtration OFF, PSI error, électrolyse active, bidon chlore vide, niveau instable.","C05,C06,C07,C10,G03,G04,G08"
+20,Forçage manuel ORP puis retour auto,"Activer orp_pump_force=true, vérifier indépendance vis-à-vis de auto_orp; couper le forçage puis vérifier reprise auto.","F10,I10"
+21,Robot automatique,"Avec filtration auto, tester délai de départ, arrêt durée max, arrêt sur coupure filtration, cleaningDone, réarmement nouveau cycle.","H01,H02,H03,H04,H05,H06,H07"
+22,Robot en manuel global,Passer auto_filtration=false et vérifier que PoolLogic ne repilote pas le robot hors arrêt nécessaire.,H08
+23,Campagne de régression finale,"Rejouer un sous-ensemble critique après tous les réglages: sécurité PSI, interlocks PDM, niveaux bidons, reprise auto après forçage.","A05,B07,C07,I08,I09,I10,I11"
