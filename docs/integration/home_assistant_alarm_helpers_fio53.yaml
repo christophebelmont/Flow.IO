@@ -36,6 +36,21 @@
 # If alarm registration order changes in firmware, this mapping must be updated.
 
 - binary_sensor:
+      - name: fio53_alarm_any_active
+        unique_id: fio53_alarm_any_active
+        icon: mdi:alarm-multiple
+        availability: >
+          {{ states('sensor.fio53_alm_pack') not in ['unknown', 'unavailable', 'none'] }}
+        state: >
+          {% set pack = states('sensor.fio53_alm_pack') | int(0) %}
+          {% set ns = namespace(active=false) %}
+          {% for slot in range(0, 8) %}
+            {% if ((pack // (32 ** slot)) % 2) == 1 %}
+              {% set ns.active = true %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.active }}
+
       - name: fio53_psi_low_active
         unique_id: fio53_psi_low_active
         icon: mdi:alarm-light

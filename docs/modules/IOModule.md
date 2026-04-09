@@ -195,6 +195,48 @@ Paramètres principaux:
 - binding, `activeHigh`, `momentary`, `pulseMs` des sorties digitales
 - binding, `pullMode`, `edgeMode`, debounce des entrées digitales
 
+### Sémantique `activeHigh` / `edgeMode` pour les compteurs GPIO
+
+Pour les entrées digitales en mode compteur, le driver ne raisonne pas directement en "front physique brut sur le pin".
+Il convertit d'abord le niveau lu en un état logique `logicalOn`:
+
+- `activeHigh=true`:
+  `HIGH` = actif, `LOW` = inactif
+- `activeHigh=false`:
+  `LOW` = actif, `HIGH` = inactif
+
+Le champ `edgeMode` est ensuite appliqué sur cette transition logique:
+
+- `rising`: passage logique `inactif -> actif`
+- `falling`: passage logique `actif -> inactif`
+- `both`: les deux transitions logiques
+
+Conséquence importante:
+sur une entrée active bas (`activeHigh=false`), le front logique montant correspond physiquement à un front descendant sur le pin, et le front logique descendant correspond physiquement à un front montant sur le pin.
+
+Tableau complet du comportement actuel du driver compteur GPIO:
+
+| `activeHigh` | `edgeMode` | Interruption physique armée sur le pin | Transition logique effectivement comptée | Interprétation pratique |
+|---|---|---|---|---|
+| `true` | `falling` | front descendant | `actif -> inactif` | fin d'une impulsion active haut |
+| `true` | `rising` | front montant | `inactif -> actif` | début d'une impulsion active haut |
+| `true` | `both` | les deux fronts | les deux transitions | compte montée + descente |
+| `false` | `falling` | front montant | `actif -> inactif` | fin d'une impulsion active bas |
+| `false` | `rising` | front descendant | `inactif -> actif` | début d'une impulsion active bas |
+| `false` | `both` | les deux fronts | les deux transitions | compte descente + remontée |
+
+Exemples pratiques:
+
+- capteur avec pull-up externe et impulsion active bas:
+  `activeHigh=false`, `edgeMode=rising` comptera le début de l'impulsion, donc le front physique descendant
+- capteur avec pull-up externe et impulsion active bas:
+  `activeHigh=false`, `edgeMode=falling` comptera la fin de l'impulsion, donc le front physique montant
+- capteur avec impulsion active haut:
+  `activeHigh=true`, `edgeMode=rising` comptera le front physique montant
+
+Cette convention est cohérente avec une interprétation "métier" de `edgeMode` dans le domaine logique du signal.
+Elle peut toutefois surprendre si l'on s'attend à ce que `rising` et `falling` désignent toujours les fronts physiques bruts du GPIO.
+
 ## DataStore
 
 Le module publie ses valeurs runtime via `Modules/IOModule/IORuntime.h`.
