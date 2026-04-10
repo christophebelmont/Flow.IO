@@ -682,10 +682,6 @@ void PoolLogicModule::loop()
         vTaskDelay(pdMS_TO_TICKS(500));
         return;
     }
-    if (!startupReady_) {
-        vTaskDelay(pdMS_TO_TICKS(200));
-        return;
-    }
 
     // The loop only consumes latched scheduler events; actual work stays in the
     // task context to avoid doing heavy operations from event callbacks.

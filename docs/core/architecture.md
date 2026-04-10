@@ -7,7 +7,7 @@ Cette page décrit l'architecture actuellement utilisée par les firmwares `Flow
 Le runtime est organisé autour des briques suivantes:
 
 - `Module` et `ModulePassive`: cycle de vie des modules
-- `ModuleManager`: enregistrement, tri topologique, `init`, `onConfigLoaded`, démarrage des tâches
+- `ModuleManager`: enregistrement, tri topologique, `init`, `onConfigLoaded`, `onStart`, démarrage séquencé des tâches
 - `ServiceRegistry`: registre de services indexé par `ServiceId`
 - `ConfigStore`: configuration persistante en NVS avec import/export JSON
 - `DataStore`: état runtime partagé en RAM
@@ -86,9 +86,26 @@ Séquence de démarrage commune:
    - `init()`
    - `ConfigStore::loadPersistent()`
    - `onConfigLoaded()`
-   - démarrage des tâches des modules actifs
+   - préparation du séquenceur de démarrage non bloquant
+5. `Bootstrap::loop()` appelle `ModuleManager::tickStartup()`, qui relâche progressivement chaque module:
+   - quand `startDelayMs()` est écoulé
+   - et quand toutes ses dépendances ont déjà été relâchées
+6. lors du relâchement d'un module, `ModuleManager` appelle `onStart()`, puis démarre ses tâches éventuelles
+
+Ce mécanisme s'applique aussi aux modules passifs. Un module sans tâche peut donc déplacer son setup métier de `onConfigLoaded()` vers `onStart()` s'il doit être exécuté à un moment précis du boot.
 
 Dans `FlowIO`, le bootstrap enregistre ensuite les providers runtime MQTT et Runtime UI du profil.
+
+### Delais de sequencement retenus
+
+| Module | Delai (ms) | Effet |
+| --- | ---: | --- |
+| `eventbus` | `0` | disponibilité immédiate; `SystemStarted` est désormais posté depuis `onStart()` |
+| `mqtt` | `1500` | conserve le relâchement différé historique avant les tentatives de connexion |
+| `poollogic` | `10000` | conserve le démarrage différé historique de la boucle métier |
+| `ha` | `15000` | conserve le démarrage différé historique de l'auto-discovery Home Assistant |
+| `webinterface` | `10000` | conserve l'ancien warm-up fixe du serveur web Supervisor, désormais porté par `ModuleManager` |
+| autres modules | `0` | relâchement immédiat après `onConfigLoaded()` sauf override explicite |
 
 ## Répartition actuelle des responsabilités
 

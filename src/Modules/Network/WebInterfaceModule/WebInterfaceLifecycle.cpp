@@ -53,42 +53,18 @@ void WebInterfaceModule::loop()
         char ip[16] = {0};
         NetworkAccessMode mode = NetworkAccessMode::None;
         if (!getNetworkIp_(ip, sizeof(ip), &mode) || ip[0] == '\0' || mode == NetworkAccessMode::None) {
-            serverWarmupSinceMs_ = 0U;
-            serverWarmupLogged_ = false;
             vTaskDelay(pdMS_TO_TICKS(100));
             return;
         }
 
         const bool bootNetworkReady = (mode == NetworkAccessMode::AccessPoint) ? true : netReady_;
         if (!bootNetworkReady) {
-            serverWarmupSinceMs_ = 0U;
-            serverWarmupLogged_ = false;
-            vTaskDelay(pdMS_TO_TICKS(100));
-            return;
-        }
-
-        const uint32_t nowMs = millis();
-        if (serverWarmupSinceMs_ == 0U) {
-            serverWarmupSinceMs_ = nowMs;
-            if (!serverWarmupLogged_) {
-                const char* modeText = (mode == NetworkAccessMode::AccessPoint) ? "ap" : "station";
-                LOGI("Web warm-up armed mode=%s ip=%s delay=%lums",
-                     modeText,
-                     ip,
-                     (unsigned long)kStartupServerWarmupMs);
-                serverWarmupLogged_ = true;
-            }
-            vTaskDelay(pdMS_TO_TICKS(100));
-            return;
-        }
-
-        if ((uint32_t)(nowMs - serverWarmupSinceMs_) < kStartupServerWarmupMs) {
             vTaskDelay(pdMS_TO_TICKS(100));
             return;
         }
 
         const char* modeText = (mode == NetworkAccessMode::AccessPoint) ? "ap" : "station";
-        LOGI("Web warm-up complete mode=%s ip=%s starting server", modeText, ip);
+        LOGI("Web startup release mode=%s ip=%s starting server", modeText, ip);
         const uint32_t minHeapBeforeStart = (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);
         startServer_();
         const uint32_t minHeapAfterStart = (uint32_t)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);

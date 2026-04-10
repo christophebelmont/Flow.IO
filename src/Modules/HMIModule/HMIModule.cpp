@@ -12,7 +12,6 @@
 #include "Modules/IOModule/IORuntime.h"
 #include "Modules/Network/MQTTModule/MQTTRuntime.h"
 #include "Modules/Network/WifiModule/WifiRuntime.h"
-#include "Modules/PoolDeviceModule/PoolDeviceRuntime.h"
 #include <ArduinoJson.h>
 #include <stdio.h>
 #include <string.h>
@@ -264,29 +263,11 @@ void HMIModule::refreshWaterLevelFlag_()
     waterLevelLow_ = (levelOk == 0U);
 }
 
-void HMIModule::updatePumpRuntimeAlarmFromSlot_(uint8_t slot)
-{
-    if (!dsSvc_ || !dsSvc_->store) return;
-    PoolDeviceRuntimeStateEntry entry{};
-    const bool active =
-        poolDeviceRuntimeState(*dsSvc_->store, slot, entry) &&
-        entry.valid &&
-        entry.blockReason == POOL_DEVICE_BLOCK_MAX_UPTIME;
-
-    if (slot == PoolBinding::kDeviceSlotPhPump) {
-        phPumpRuntimeAlarm_ = active;
-    } else if (slot == PoolBinding::kDeviceSlotChlorinePump) {
-        chlorinePumpRuntimeAlarm_ = active;
-    }
-}
-
 void HMIModule::refreshRuntimeFlags_()
 {
     if (!dsSvc_ || !dsSvc_->store) return;
     wifiReady_ = wifiReady(*dsSvc_->store);
     mqttReady_ = mqttReady(*dsSvc_->store);
-    updatePumpRuntimeAlarmFromSlot_(PoolBinding::kDeviceSlotPhPump);
-    updatePumpRuntimeAlarmFromSlot_(PoolBinding::kDeviceSlotChlorinePump);
     refreshWaterLevelFlag_();
 }
 
@@ -296,6 +277,8 @@ void HMIModule::refreshAlarmFlags_()
     void* ctx = alarmSvc_->ctx;
     phTankLowAlarm_ = alarmSvc_->isActive(ctx, AlarmId::PoolPhTankLow);
     chlorineTankLowAlarm_ = alarmSvc_->isActive(ctx, AlarmId::PoolChlorineTankLow);
+    phPumpRuntimeAlarm_ = alarmSvc_->isActive(ctx, AlarmId::PoolPhPumpMaxUptime);
+    chlorinePumpRuntimeAlarm_ = alarmSvc_->isActive(ctx, AlarmId::PoolChlorinePumpMaxUptime);
     waterLevelLow_ = alarmSvc_->isActive(ctx, AlarmId::PoolWaterLevelLow);
     psiAlarm_ = alarmSvc_->isActive(ctx, AlarmId::PoolPsiLow) ||
                 alarmSvc_->isActive(ctx, AlarmId::PoolPsiHigh);
@@ -376,12 +359,6 @@ void HMIModule::onEvent_(const Event& e)
         if (p->id == DATAKEY_WIFI_READY || p->id == DATAKEY_MQTT_READY) {
             refreshRuntimeFlags_();
             ledDirty = true;
-        } else if (p->id == (DataKey)(DATAKEY_POOL_DEVICE_STATE_BASE + PoolBinding::kDeviceSlotPhPump)) {
-            updatePumpRuntimeAlarmFromSlot_(PoolBinding::kDeviceSlotPhPump);
-            ledDirty = true;
-        } else if (p->id == (DataKey)(DATAKEY_POOL_DEVICE_STATE_BASE + PoolBinding::kDeviceSlotChlorinePump)) {
-            updatePumpRuntimeAlarmFromSlot_(PoolBinding::kDeviceSlotChlorinePump);
-            ledDirty = true;
         } else if (poolLevelIoId_ != IO_ID_INVALID &&
                    p->id == (DataKey)(DATAKEY_IO_BASE + poolLevelIoId_)) {
             refreshWaterLevelFlag_();
@@ -397,6 +374,12 @@ void HMIModule::onEvent_(const Event& e)
             ledDirty = true;
         } else if (id == AlarmId::PoolChlorineTankLow) {
             chlorineTankLowAlarm_ = (e.id == EventId::AlarmRaised);
+            ledDirty = true;
+        } else if (id == AlarmId::PoolPhPumpMaxUptime) {
+            phPumpRuntimeAlarm_ = (e.id == EventId::AlarmRaised);
+            ledDirty = true;
+        } else if (id == AlarmId::PoolChlorinePumpMaxUptime) {
+            chlorinePumpRuntimeAlarm_ = (e.id == EventId::AlarmRaised);
             ledDirty = true;
         } else if (id == AlarmId::PoolWaterLevelLow) {
             waterLevelLow_ = (e.id == EventId::AlarmRaised);

@@ -4,6 +4,7 @@
  */
 #include "TimeModule.h"
 #include "Core/ErrorCodes.h"
+#include "Core/ModuleId.h"
 #include "Core/Runtime.h"
 #include "Core/CommandRegistry.h"
 #include "Core/SystemLimits.h"
@@ -1408,6 +1409,6 @@ void TimeModule::tickScheduler_()
              (unsigned)payload.activeMask,
              (unsigned long long)payload.epochSec);
 
-        (void)eventBus->post(EventId::SchedulerEventTriggered, &payload, sizeof(payload));
+        (void)eventBus->post(EventId::SchedulerEventTriggered, &payload, sizeof(payload), ModuleId::Time);
     }
 }

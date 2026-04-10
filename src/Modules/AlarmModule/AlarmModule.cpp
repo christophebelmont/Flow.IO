@@ -7,6 +7,7 @@
 
 #include "Core/CommandRegistry.h"
 #include "Core/ErrorCodes.h"
+#include "Core/ModuleId.h"
 #include "Core/MqttTopics.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
@@ -88,7 +89,7 @@ void AlarmModule::emitAlarmEvent_(EventId id, AlarmId alarmId) const
 {
     if (!eventBus_) return;
     const AlarmPayload payload{(uint16_t)alarmId};
-    (void)eventBus_->post(id, &payload, sizeof(payload));
+    (void)eventBus_->post(id, &payload, sizeof(payload), ModuleId::Alarm);
 }
 
 void AlarmModule::noteAlarmNotified_(AlarmId id, uint32_t nowMs)

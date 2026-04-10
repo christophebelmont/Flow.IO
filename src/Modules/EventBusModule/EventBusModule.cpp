@@ -3,6 +3,7 @@
  * @brief Implementation file.
  */
 #include "EventBusModule.h"
+#include "Core/ModuleId.h"
 #define LOG_MODULE_ID ((LogModuleId)LogModuleIdValue::EventBusModule)
 #include "Core/ModuleLog.h"
 
@@ -16,8 +17,12 @@ void EventBusModule::init(ConfigStore&, ServiceRegistry& services) {
     }
 
     LOGI("EventBusService registered");
-    /// Broadcast system started (no payload)
-    _bus.post(EventId::SystemStarted, nullptr, 0);
+}
+
+void EventBusModule::onStart(ConfigStore&, ServiceRegistry&)
+{
+    /// Broadcast system started after all modules completed config loading and subscriptions.
+    _bus.post(EventId::SystemStarted, nullptr, 0, ModuleId::EventBus);
 }
 
 void EventBusModule::loop() {

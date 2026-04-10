@@ -46,13 +46,13 @@ public:
     void init(ConfigStore& cfg, ServiceRegistry& services) override;
     void onConfigLoaded(ConfigStore& cfg, ServiceRegistry& services) override;
     void loop() override;
+    uint32_t startDelayMs() const override { return Limits::Boot::PoolLogicStartDelayMs; }
     uint8_t runtimeSnapshotCount() const override;
     const char* runtimeSnapshotSuffix(uint8_t idx) const override;
     RuntimeRouteClass runtimeSnapshotClass(uint8_t idx) const override;
     bool runtimeSnapshotAffectsKey(uint8_t idx, DataKey key) const override;
     bool buildRuntimeSnapshot(uint8_t idx, char* out, size_t len, uint32_t& maxTsOut) const override;
     bool writeRuntimeUiValue(uint8_t valueId, IRuntimeUiWriter& writer) const override;
-    void setStartupReady(bool ready) { startupReady_ = ready; }
     static MqttBuildResult buildCfgBaseStatic_(void* ctx, uint16_t messageId, MqttBuildContext& buildCtx);
 
 private:
@@ -110,7 +110,6 @@ private:
 
     // State and configuration storage
     bool enabled_ = true;
-    volatile bool startupReady_ = true;
 
     // Modes
     bool autoMode_ = true;

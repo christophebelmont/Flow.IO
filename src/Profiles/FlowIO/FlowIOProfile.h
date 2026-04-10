@@ -29,14 +29,6 @@ struct HAService;
 namespace Profiles {
 namespace FlowIO {
 
-struct BootOrchestratorState {
-    bool active = false;
-    bool mqttReleased = false;
-    bool haReleased = false;
-    bool poolLogicReleased = false;
-    uint32_t t0Ms = 0;
-};
-
 struct ModuleInstances {
     WifiModule wifiModule{};
     TimeModule timeModule{};
@@ -63,7 +55,6 @@ struct ModuleInstances {
     const HAService* haService = nullptr;
     char topicNetworkState[Limits::TopicBuf] = {0};
     char topicSystemState[Limits::TopicBuf] = {0};
-    BootOrchestratorState bootOrchestrator{};
 };
 
 ModuleInstances& moduleInstances();

@@ -6,6 +6,7 @@
 #include "Core/BufferUsageTracker.h"
 #include "Core/NvsKeys.h"
 #include "Core/Log.h"
+#include "Core/ModuleId.h"
 #include "Core/SnprintfCheck.h"
 #include <ArduinoJson.h>
 #include <stdio.h>
@@ -55,7 +56,7 @@ void ConfigStore::notifyChanged(const char* nvsKey, const char* moduleName, uint
         p.module[sizeof(p.module) - 1] = '\0';
     }
 
-    _eventBus->post(EventId::ConfigChanged, &p, sizeof(p));
+    _eventBus->post(EventId::ConfigChanged, &p, sizeof(p), ModuleId::ConfigStore);
 }
 
 void ConfigStore::recordNvsWrite_(size_t bytesWritten)

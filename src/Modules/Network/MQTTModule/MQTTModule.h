@@ -58,6 +58,7 @@ public:
     void onConfigLoaded(ConfigStore& cfg, ServiceRegistry& services) override;
     void loop() override;
     uint16_t taskStackSize() const override { return Limits::Mqtt::TaskStackSize; }
+    uint32_t startDelayMs() const override { return Limits::Boot::MqttStartDelayMs; }
 
     bool addRuntimePublisher(const char* topic,
                              uint32_t periodMs,
@@ -73,7 +74,6 @@ public:
 
     void formatTopic(char* out, size_t outLen, const char* suffix) const;
     bool isConnected() const { return state_ == MQTTState::Connected; }
-    void setStartupReady(bool ready) { startupReady_ = ready; }
     DataStore* dataStorePtr() const { return dataStore_; }
 
 private:
@@ -259,7 +259,6 @@ private:
     uint32_t netReadyTs_ = 0;
     uint8_t retryCount_ = 0;
     uint32_t retryDelayMs_ = Limits::Mqtt::Backoff::MinMs;
-    bool startupReady_ = false;
 
     uint32_t rxDropCount_ = 0;
     uint32_t parseFailCount_ = 0;

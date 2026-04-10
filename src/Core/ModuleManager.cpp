@@ -3,11 +3,18 @@
  * @brief Implementation file.
  */
 #include "ModuleManager.h"
+#include <Arduino.h>
 #include "Board/BoardSerialMap.h"
 #include "Core/Log.h"
 #include "Core/LogModuleIds.h"
 
 #define LOG_MODULE_ID ((LogModuleId)LogModuleIdValue::CoreModuleManager)
+
+namespace {
+constexpr uint8_t kStartupPreparedFlag = 0x01U;
+constexpr uint8_t kStartupActiveFlag = 0x02U;
+constexpr uint8_t kStartupFailedFlag = 0x04U;
+}
 
 static void logRegisteredModules(Module* modules[], uint8_t count) {
     ///Logger::log(LogLevel::Info, "MOD", "Registered modules (%u):", count);
@@ -189,14 +196,56 @@ bool ModuleManager::initAll(ConfigStore& cfg, ServiceRegistry& services) {
     for (uint8_t i = 0; i < orderedCount; ++i) {
         Module* module = ordered[i];
         if (!module) continue;
-
         module->resetPrimaryTaskHandle_();
+    }
 
-        const uint8_t declaredTaskCount = module->taskCount();
-        if (declaredTaskCount == 0) {
-            continue;
+    startupEpochMs_ = millis();
+    startupFlags_ = (uint8_t)(kStartupPreparedFlag | kStartupActiveFlag);
+    startupStartedMask_ = 0U;
+
+    if (!tickStartup(cfg, services)) {
+        return false;
+    }
+
+    Log::debug(LOG_MODULE_ID, "initAll: startup prepared modules=%u", (unsigned)orderedCount);
+    Log::debug(LOG_MODULE_ID, "initAll: done");
+    
+    return true;
+}
+
+bool ModuleManager::dependenciesStarted_(Module& module) const
+{
+    const uint8_t depCount = module.dependencyCount();
+    for (uint8_t d = 0; d < depCount; ++d) {
+        const ModuleId depId = module.dependency(d);
+        if (!isValidModuleId(depId)) continue;
+
+        bool found = false;
+        for (uint8_t i = 0; i < orderedCount; ++i) {
+            Module* dep = ordered[i];
+            if (!dep || dep->moduleId() != depId) continue;
+            found = true;
+            if ((startupStartedMask_ & (1UL << i)) == 0U) return false;
+            break;
         }
+        if (!found) return false;
+    }
+    return true;
+}
 
+bool ModuleManager::startModule_(uint8_t orderedIdx, ConfigStore& cfg, ServiceRegistry& services)
+{
+    if (orderedIdx >= orderedCount) return false;
+    if ((startupStartedMask_ & (1UL << orderedIdx)) != 0U) return true;
+
+    Module* module = ordered[orderedIdx];
+    if (!module) return false;
+    if (!dependenciesStarted_(*module)) return true;
+
+    module->onStart(cfg, services);
+
+    const uint8_t declaredTaskCount = module->taskCount();
+    if (declaredTaskCount > 0) {
         const ModuleTaskSpec* specs = module->taskSpecs();
         if (!specs) {
             Log::error(LOG_MODULE_ID, "taskSpecs missing module=%s taskCount=%u",
@@ -254,8 +303,46 @@ bool ModuleManager::initAll(ConfigStore& cfg, ServiceRegistry& services) {
         }
     }
 
-    Log::debug(LOG_MODULE_ID, "initAll: done");
-    
+    startupStartedMask_ |= (1UL << orderedIdx);
+    Log::debug(LOG_MODULE_ID, "startup release: module=%s delay_ms=%lu tasks=%u",
+               toString(module->moduleId()),
+               (unsigned long)module->startDelayMs(),
+               (unsigned)declaredTaskCount);
+    return true;
+}
+
+bool ModuleManager::tickStartup(ConfigStore& cfg, ServiceRegistry& services)
+{
+    if ((startupFlags_ & kStartupPreparedFlag) == 0U) return true;
+    if ((startupFlags_ & kStartupFailedFlag) != 0U) return false;
+    if ((startupFlags_ & kStartupActiveFlag) == 0U) return true;
+
+    const uint32_t elapsedMs = millis() - startupEpochMs_;
+    bool allStarted = true;
+    for (uint8_t i = 0; i < orderedCount; ++i) {
+        if ((startupStartedMask_ & (1UL << i)) != 0U) continue;
+        Module* module = ordered[i];
+        if (!module) continue;
+
+        const uint32_t releaseDelayMs = module->startDelayMs();
+        if (elapsedMs < releaseDelayMs) {
+            allStarted = false;
+            continue;
+        }
+
+        if (!startModule_(i, cfg, services)) {
+            startupFlags_ |= kStartupFailedFlag;
+            startupFlags_ &= (uint8_t)~kStartupActiveFlag;
+            return false;
+        }
+        if ((startupStartedMask_ & (1UL << i)) == 0U) {
+            allStarted = false;
+        }
+    }
+
+    if (allStarted) {
+        startupFlags_ &= (uint8_t)~kStartupActiveFlag;
+    }
     return true;
 }
 

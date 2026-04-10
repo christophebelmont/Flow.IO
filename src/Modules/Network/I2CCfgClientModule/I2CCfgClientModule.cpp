@@ -410,6 +410,10 @@ void I2CCfgClientModule::onConfigLoaded(ConfigStore&, ServiceRegistry& services)
          (long)cfgData_.scl,
          (long)cfgData_.freqHz,
          (unsigned)cfgData_.targetAddr);
+}
+
+void I2CCfgClientModule::onStart(ConfigStore&, ServiceRegistry&)
+{
     startLink_();
 }
 

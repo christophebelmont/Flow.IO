@@ -389,7 +389,6 @@ void MQTTModule::loop()
             break;
 
         case MQTTState::WaitingNetwork:
-            if (!startupReady_) break;
             if (!netReady_) break;
             if ((millis() - netReadyTs_) >= Limits::Mqtt::Timing::NetWarmupMs) {
                 connectMqtt_();

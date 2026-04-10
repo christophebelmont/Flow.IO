@@ -99,7 +99,7 @@
       "flowio_binding_port_digital_input": [
         {
           "value": 200,
-          "label": "200 | PortDigitalIn1 | digital_in1 | GPIO34 | etat"
+          "label": "200 | PortDigitalIn1 | digital_in1 | GPIO34 | compteur"
         },
         {
           "value": 201,
@@ -111,7 +111,7 @@
         },
         {
           "value": 203,
-          "label": "203 | PortDigitalIn4 | digital_in4 | GPIO35 | compteur"
+          "label": "203 | PortDigitalIn4 | digital_in4 | GPIO35 | etat"
         }
       ],
       "flowio_binding_port_digital_output": [

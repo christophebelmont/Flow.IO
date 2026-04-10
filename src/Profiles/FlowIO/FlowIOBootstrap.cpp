@@ -110,47 +110,6 @@ bool buildSystemSnapshot(MQTTModule* mqtt, char* out, size_t len)
     return (wrote > 0) && ((size_t)wrote < len);
 }
 
-void startBootOrchestrator(ModuleInstances& modules)
-{
-    modules.bootOrchestrator.active = true;
-    modules.bootOrchestrator.mqttReleased = false;
-    modules.bootOrchestrator.haReleased = false;
-    modules.bootOrchestrator.poolLogicReleased = false;
-    modules.bootOrchestrator.t0Ms = millis();
-
-    modules.mqttModule.setStartupReady(false);
-    modules.haModule.setStartupReady(false);
-    modules.poolLogicModule.setStartupReady(false);
-}
-
-void runBootOrchestrator(ModuleInstances& modules)
-{
-    if (!modules.bootOrchestrator.active) return;
-
-    const uint32_t elapsed = millis() - modules.bootOrchestrator.t0Ms;
-
-    if (!modules.bootOrchestrator.mqttReleased && elapsed >= Limits::Boot::MqttStartDelayMs) {
-        modules.mqttModule.setStartupReady(true);
-        modules.bootOrchestrator.mqttReleased = true;
-    }
-
-    if (!modules.bootOrchestrator.haReleased && elapsed >= Limits::Boot::HaStartDelayMs) {
-        modules.haModule.setStartupReady(true);
-        modules.bootOrchestrator.haReleased = true;
-    }
-
-    if (!modules.bootOrchestrator.poolLogicReleased && elapsed >= Limits::Boot::PoolLogicStartDelayMs) {
-        modules.poolLogicModule.setStartupReady(true);
-        modules.bootOrchestrator.poolLogicReleased = true;
-    }
-
-    if (modules.bootOrchestrator.mqttReleased &&
-        modules.bootOrchestrator.haReleased &&
-        modules.bootOrchestrator.poolLogicReleased) {
-        modules.bootOrchestrator.active = false;
-    }
-}
-
 void registerModules(AppContext& ctx, ModuleInstances& modules)
 {
     ctx.moduleManager.add(&modules.logHubModule);
@@ -216,7 +175,6 @@ void postInit(AppContext& ctx, ModuleInstances& modules)
     modules.mqttModule.addRuntimePublisher(modules.topicNetworkState, 60000, 0, false, buildNetworkSnapshot);
     modules.mqttModule.addRuntimePublisher(modules.topicSystemState, 60000, 0, false, buildSystemSnapshot);
     registerIoHomeAssistant(ctx, modules);
-    startBootOrchestrator(modules);
 }
 
 }  // namespace
@@ -234,10 +192,6 @@ void setupProfile(AppContext& ctx)
     ctx.preferences.begin(NvsKeys::StorageNamespace, false);
     ctx.registry.setPreferences(ctx.preferences);
     ctx.registry.runMigrations(CURRENT_CFG_VERSION, steps, MIGRATION_COUNT);
-
-    modules.mqttModule.setStartupReady(false);
-    modules.haModule.setStartupReady(false);
-    modules.poolLogicModule.setStartupReady(false);
 
     registerModules(ctx, modules);
     configureIoModule(ctx, modules);
@@ -262,7 +216,6 @@ void loopProfile(AppContext&)
 {
     ModuleInstances& modules = moduleInstances();
     refreshIoHomeAssistantIfNeeded(modules);
-    runBootOrchestrator(modules);
     delay(20);
 }
 

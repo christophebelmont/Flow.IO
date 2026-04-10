@@ -29,6 +29,8 @@ public:
     }
     /** @brief Initialize and register EventBus service. */
     void init(ConfigStore& cfg, ServiceRegistry& services) override;
+    /** @brief Emit the startup event once every module finished config loading. */
+    void onStart(ConfigStore& cfg, ServiceRegistry& services) override;
     /** @brief Dispatch events from the queue. */
     void loop() override;
 

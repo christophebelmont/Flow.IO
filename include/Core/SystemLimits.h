@@ -248,6 +248,8 @@ constexpr uint32_t MqttStartDelayMs = 1500;
 constexpr uint32_t HaStartDelayMs = 15000;
 /** @brief Delay in ms before enabling PoolLogic control loop (`PoolLogicModule::setStartupReady`). */
 constexpr uint32_t PoolLogicStartDelayMs = 10000;
+/** @brief Delay in ms before releasing the Supervisor web task (`WebInterfaceModule`). */
+constexpr uint32_t WebInterfaceStartDelayMs = 10000;
 }  // namespace Boot
 
 /** @brief Firmware update networking limits shared by the update module. */

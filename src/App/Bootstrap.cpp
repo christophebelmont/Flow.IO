@@ -55,6 +55,8 @@ void loop()
         run();
     }
 
+    (void)gContext.moduleManager.tickStartup(gContext.registry, gContext.services);
+
     if (gContext.profile && gContext.profile->loop) {
         gContext.profile->loop(gContext);
     }

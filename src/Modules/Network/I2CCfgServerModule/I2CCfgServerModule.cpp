@@ -330,6 +330,10 @@ void I2CCfgServerModule::onConfigLoaded(ConfigStore&, ServiceRegistry& services)
                                (uint8_t)(sizeof(kI2cServerCfgRoutes) / sizeof(kI2cServerCfgRoutes[0])),
                                services);
     }
+}
+
+void I2CCfgServerModule::onStart(ConfigStore&, ServiceRegistry&)
+{
     startLink_();
 }
 

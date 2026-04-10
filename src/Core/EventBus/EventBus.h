@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "EventId.h"
+#include "Core/ModuleId.h"
 #include "Core/SystemLimits.h"
 
 #include "freertos/FreeRTOS.h"
@@ -46,7 +47,6 @@ class EventBus {
 public:
     static constexpr uint16_t MAX_SUBSCRIBERS = Limits::EventSubscribersMax;
     static constexpr uint8_t SUB_REJECT_RING_CAP = 8;
-
     // Maximum payload size copied into internal queue.
     static constexpr uint8_t MAX_PAYLOAD_SIZE = 48;
 
@@ -63,10 +63,16 @@ public:
     /**
      * @brief Post an event from any task; payload is copied into the queue.
      */
-    bool post(EventId id, const void* payload = nullptr, size_t len = 0);
+    bool post(EventId id,
+              const void* payload = nullptr,
+              size_t len = 0,
+              ModuleId producer = ModuleId::Unknown);
 
     /** @brief Post an event from ISR context. */
-    bool postFromISR(EventId id, const void* payload = nullptr, size_t len = 0);
+    bool postFromISR(EventId id,
+                     const void* payload = nullptr,
+                     size_t len = 0,
+                     ModuleId producer = ModuleId::Unknown);
 
     /** @brief Dispatch queued events and call subscribers. */
     void dispatch(uint16_t maxEvents = 8);

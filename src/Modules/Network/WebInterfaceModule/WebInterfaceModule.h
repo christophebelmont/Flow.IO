@@ -41,11 +41,11 @@ public:
     }
 
     void init(ConfigStore& cfg, ServiceRegistry& services) override;
+    uint32_t startDelayMs() const override { return Limits::Boot::WebInterfaceStartDelayMs; }
     void loop() override;
 
 private:
     static constexpr int kServerPort = 80;
-    static constexpr uint32_t kStartupServerWarmupMs = 10000U;
 
     // Keep UART framing aligned with core log entry limits.
     static constexpr size_t kSerialLogLineChars =
@@ -117,8 +117,6 @@ private:
     bool spiffsReady_ = false;
     volatile bool netReady_ = false;
     volatile bool uartPaused_ = false;
-    uint32_t serverWarmupSinceMs_ = 0;
-    bool serverWarmupLogged_ = false;
     bool localLogSinkRegistered_ = false;
     const FirmwareUpdateService* fwUpdateSvc_ = nullptr;
     ServiceRegistry* services_ = nullptr;

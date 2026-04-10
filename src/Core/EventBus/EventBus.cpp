@@ -4,6 +4,7 @@
  */
 #include "EventBus.h"
 #include <Arduino.h>  // micros(), millis()
+#include <stdio.h>
 #include "Core/BufferUsageTracker.h"
 #include "Core/Log.h"
 
@@ -78,7 +79,8 @@ const char* EventBus::subRejectReasonStr_(uint8_t reason)
     return "unknown";
 }
 
-bool EventBus::post(EventId id, const void* payload, size_t len) {
+bool EventBus::post(EventId id, const void* payload, size_t len, ModuleId producer) {
+    (void)producer;
     if (_queue == nullptr) {
         portENTER_CRITICAL(&_statsMux);
         ++_postDropTotal;
@@ -109,6 +111,7 @@ bool EventBus::post(EventId id, const void* payload, size_t len) {
 
     /// non-blocking send (0 ticks) to keep real-time constraints
     BaseType_t ok = xQueueSend(_queue, &qe, 0);
+    const UBaseType_t queued = _queue ? uxQueueMessagesWaiting(_queue) : 0U;
     portENTER_CRITICAL(&_statsMux);
     if (ok == pdTRUE) {
         ++_postOkTotal;
@@ -120,7 +123,6 @@ bool EventBus::post(EventId id, const void* payload, size_t len) {
         if (_winCurrentDropBurst > _winMaxDropBurst) _winMaxDropBurst = _winCurrentDropBurst;
     }
     portEXIT_CRITICAL(&_statsMux);
-    const UBaseType_t queued = _queue ? uxQueueMessagesWaiting(_queue) : 0U;
     BufferUsageTracker::note(TrackedBufferId::EventBusRuntime,
                              (size_t)_count * sizeof(Subscriber) + (size_t)queued * sizeof(QueuedEvent),
                              (size_t)QUEUE_LENGTH * sizeof(QueuedEvent) + sizeof(_subs),
@@ -129,7 +131,8 @@ bool EventBus::post(EventId id, const void* payload, size_t len) {
     return ok == pdTRUE;
 }
 
-bool EventBus::postFromISR(EventId id, const void* payload, size_t len) {
+bool EventBus::postFromISR(EventId id, const void* payload, size_t len, ModuleId producer) {
+    (void)producer;
     if (_queue == nullptr) {
         portENTER_CRITICAL_ISR(&_statsMux);
         ++_postDropTotal;
@@ -162,6 +165,7 @@ bool EventBus::postFromISR(EventId id, const void* payload, size_t len) {
 
     BaseType_t higherWoken = pdFALSE;
     BaseType_t ok = xQueueSendFromISR(_queue, &qe, &higherWoken);
+    const UBaseType_t queued = _queue ? uxQueueMessagesWaitingFromISR(_queue) : 0U;
     portENTER_CRITICAL_ISR(&_statsMux);
     if (ok == pdTRUE) {
         ++_postOkTotal;
@@ -177,7 +181,6 @@ bool EventBus::postFromISR(EventId id, const void* payload, size_t len) {
     if (higherWoken == pdTRUE) {
         portYIELD_FROM_ISR();
     }
-    const UBaseType_t queued = _queue ? uxQueueMessagesWaitingFromISR(_queue) : 0U;
     BufferUsageTracker::noteFromISR(TrackedBufferId::EventBusRuntime,
                                     (size_t)_count * sizeof(Subscriber) + (size_t)queued * sizeof(QueuedEvent),
                                     (size_t)QUEUE_LENGTH * sizeof(QueuedEvent) + sizeof(_subs),
@@ -358,6 +361,7 @@ void EventBus::dispatch(uint16_t maxEvents) {
             }
             portEXIT_CRITICAL(&_statsMux);
         }
+
     }
 
 #if EVENTBUS_PROFILE

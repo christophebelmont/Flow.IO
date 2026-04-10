@@ -34,7 +34,9 @@ public:
 
     void init(ConfigStore& cfg, ServiceRegistry& services) override;
     void onConfigLoaded(ConfigStore&, ServiceRegistry& services) override;
+    void onStart(ConfigStore&, ServiceRegistry&) override { setStartupReady(true); }
     void loop() override;
+    uint32_t startDelayMs() const override { return Limits::Boot::HaStartDelayMs; }
     void setStartupReady(bool ready);
 
 private:
@@ -64,7 +66,7 @@ private:
     const MqttService* mqttSvc_ = nullptr;
 
     HAConfig cfgData_{};
-    bool startupReady_ = true;
+    bool startupReady_ = false;
     bool producerRegistered_ = false;
     bool published_ = false;
 

@@ -42,6 +42,8 @@ public:
     virtual void init(ConfigStore& cfg, ServiceRegistry& services) = 0;
     /** @brief Called once all persistent config values are loaded. */
     virtual void onConfigLoaded(ConfigStore&, ServiceRegistry&) {}
+    /** @brief Called when the startup sequencer releases the module. */
+    virtual void onStart(ConfigStore&, ServiceRegistry&) {}
     /** @brief Main module loop called from the module task. */
     virtual void loop() = 0;
 
@@ -56,6 +58,8 @@ public:
     virtual UBaseType_t taskPriority() const { return 1; }
     /** @brief CPU core affinity for the FreeRTOS task (`0` or `1` on ESP32). */
     virtual BaseType_t taskCore() const { return 1; }
+    /** @brief Relative startup delay in ms applied by `ModuleManager` before `onStart`. */
+    virtual uint32_t startDelayMs() const { return 0U; }
 
     /** @brief Get the first started FreeRTOS task handle for this module. */
     TaskHandle_t getTaskHandle() const { return primaryTaskHandle_; }

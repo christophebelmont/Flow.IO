@@ -33,6 +33,7 @@ public:
 
     void init(ConfigStore& cfg, ServiceRegistry& services) override;
     void onConfigLoaded(ConfigStore&, ServiceRegistry&) override;
+    void onStart(ConfigStore&, ServiceRegistry&) override;
     uint8_t taskCount() const override { return started_ ? 1 : 0; }
     const ModuleTaskSpec* taskSpecs() const override;
     bool registerRuntimeUiProvider(const IRuntimeUiValueProvider* provider);

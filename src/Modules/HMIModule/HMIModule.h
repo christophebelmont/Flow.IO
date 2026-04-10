@@ -89,7 +89,6 @@ private:
     void refreshRuntimeFlags_();
     void refreshAlarmFlags_();
     void refreshWaterLevelFlag_();
-    void updatePumpRuntimeAlarmFromSlot_(uint8_t slot);
     void applyLedMask_(bool force = false);
 
     HmiService hmiSvc_{
