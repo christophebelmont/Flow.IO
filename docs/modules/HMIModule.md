@@ -5,15 +5,21 @@
 Couche d'orchestration HMI locale:
 - lit/édite la configuration via `ConfigStoreService`
 - maintient un menu de configuration paginé (6 lignes/page)
-- délègue le rendu et les entrées au driver matériel (`IHmiDriver`)
+- délègue le rendu et les entrées au driver matériel interactif (`IHmiDriver`)
+- pilote en option des sorties d'affichage annexes (LEDs façade, émetteur RF433 Venice)
 
-En V1, le driver embarqué est `NextionDriver`.
+En V1, le driver interactif embarqué est `NextionDriver`.
+Une sortie déportée `TfaVeniceRf433Sink` peut aussi émettre la température d'eau
+vers un récepteur TFA Venice compatible.
 
 ## Dépendances
 
 - `loghub`
 - `config`
 - `eventbus`
+- `datastore`
+- `io`
+- `alarms`
 
 ## Service exposé
 
@@ -63,3 +69,20 @@ Des hints peuvent forcer le widget et les contraintes (bornes/options).
 ## Événements internes
 
 Sur `EventId::ConfigChanged`, si le module affiché est impacté, l'écran est resynchronisé automatiquement.
+
+## Config HMI
+
+Trois branches de config dédiées sont exposées:
+
+- `hmi/nextion`
+  - `enabled`: active/désactive l'écriture vers l'écran Nextion
+- `hmi/leds`
+  - `enabled`: active/désactive les écritures de masque logique vers `StatusLedsService`
+- `hmi/venice`
+  - `enabled`: active/désactive l'émetteur RF433 Venice
+  - `tx_gpio`: GPIO TX du module 433 MHz
+  - la période, le canal et l'identifiant capteur restent fixés aux valeurs par défaut du driver
+
+Quand `hmi/leds/enabled=false`, le `HMIModule` cesse simplement d'écrire le
+masque LEDs. Cela laisse le PCF8574 disponible pour d'autres usages côté
+`IOModule`.

@@ -24,6 +24,7 @@ namespace {
 #define FLOW_HMI_CONFIG_MENU_ENABLED 0
 #endif
 static constexpr bool kConfigMenuEnabled = (FLOW_HMI_CONFIG_MENU_ENABLED != 0);
+static constexpr const char* kHmiModulePrefix = "hmi/";
 static constexpr uint8_t kLedBitMqttConnected = 0;
 static constexpr uint8_t kLedBitPageSelect = 1;
 static constexpr uint8_t kLedBitModeA = 2;
@@ -96,6 +97,27 @@ static const ConfigMenuHint kHints[] = {
 
 } // namespace
 
+void HMIModule::applyOutputConfig_()
+{
+    IHmiDriver* wantedDriver = cfgData_.nextionEnabled ? static_cast<IHmiDriver*>(&nextion_) : nullptr;
+    if (driver_ != wantedDriver) {
+        driver_ = wantedDriver;
+        driverReady_ = false;
+        if (driver_) viewDirty_ = true;
+    }
+
+    TfaVeniceRf433Config veniceCfg{};
+    veniceCfg.enabled = cfgData_.veniceEnabled;
+    veniceCfg.txPin =
+        (cfgData_.veniceTxGpio >= 0 && cfgData_.veniceTxGpio <= 127) ? (int8_t)cfgData_.veniceTxGpio : (int8_t)-1;
+    venice_.setConfig(veniceCfg);
+
+    if (!cfgData_.ledsEnabled) {
+        wifiBlinkOn_ = false;
+    }
+    ledMaskValid_ = false;
+}
+
 bool HMIModule::requestRefresh_()
 {
     viewDirty_ = true;
@@ -140,8 +162,13 @@ uint8_t HMIModule::getLedPage_() const
     return ledPage_;
 }
 
-void HMIModule::init(ConfigStore&, ServiceRegistry& services)
+void HMIModule::init(ConfigStore& cfg, ServiceRegistry& services)
 {
+    cfg.registerVar(ledsEnabledVar_);
+    cfg.registerVar(nextionEnabledVar_);
+    cfg.registerVar(veniceEnabledVar_);
+    cfg.registerVar(veniceTxGpioVar_);
+
     logHub_ = services.get<LogHubService>(ServiceId::LogHub);
     cfgSvc_ = services.get<ConfigStoreService>(ServiceId::ConfigStore);
     dsSvc_ = services.get<DataStoreService>(ServiceId::DataStore);
@@ -187,7 +214,7 @@ void HMIModule::init(ConfigStore&, ServiceRegistry& services)
     dcfg.txPin = Board::SerialMap::hmiTxPin();
     dcfg.baud = Board::SerialMap::HmiBaud;
     nextion_.setConfig(dcfg);
-    driver_ = &nextion_;
+    applyOutputConfig_();
     driverReady_ = false;
     viewDirty_ = true;
     lastRenderMs_ = 0;
@@ -197,6 +224,7 @@ void HMIModule::init(ConfigStore&, ServiceRegistry& services)
     lastLedPageToggleMs_ = millis();
     lastWifiBlinkToggleMs_ = millis();
     poolLevelIoId_ = PoolBinding::kSensorBindings[PoolBinding::kSensorSlotPoolLevel].ioId;
+    waterTempIoId_ = PoolBinding::kSensorBindings[PoolBinding::kSensorSlotWaterTemp].ioId;
 
     LOGI("HMI service registered with driver=%s led_panel=%s",
          driver_ ? driver_->driverId() : "none",
@@ -208,6 +236,7 @@ void HMIModule::onConfigLoaded(ConfigStore&, ServiceRegistry&)
     refreshPoolLogicFlags_();
     refreshRuntimeFlags_();
     refreshAlarmFlags_();
+    applyOutputConfig_();
     applyLedMask_(true);
 }
 
@@ -244,6 +273,10 @@ void HMIModule::refreshPoolLogicFlags_()
         uint16_t ioId = (uint16_t)poolLevelIoId_;
         if (findJsonUInt16_(poollogicCfgJson_, "pool_lvl_io_id", ioId)) {
             poolLevelIoId_ = (IoId)ioId;
+        }
+        ioId = (uint16_t)waterTempIoId_;
+        if (findJsonUInt16_(poollogicCfgJson_, "wat_temp_io_id", ioId)) {
+            waterTempIoId_ = (IoId)ioId;
         }
     }
 }
@@ -286,6 +319,7 @@ void HMIModule::refreshAlarmFlags_()
 
 void HMIModule::applyLedMask_(bool force)
 {
+    if (!cfgData_.ledsEnabled) return;
     if (!statusLedsSvc_ || !statusLedsSvc_->setMask) return;
 
     uint8_t mask = 0U;
@@ -353,6 +387,10 @@ void HMIModule::onEvent_(const Event& e)
         if (p->moduleId == (uint8_t)ConfigModuleId::PoolLogic) {
             refreshPoolLogicFlags_();
             ledDirty = true;
+        }
+        if (p->module[0] && strncmp(p->module, kHmiModulePrefix, strlen(kHmiModulePrefix)) == 0) {
+            applyOutputConfig_();
+            ledDirty = cfgData_.ledsEnabled;
         }
     } else if (e.id == EventId::DataChanged && e.payload && e.len >= sizeof(DataChangedPayload)) {
         const DataChangedPayload* p = static_cast<const DataChangedPayload*>(e.payload);
@@ -561,55 +599,58 @@ bool HMIModule::buildMenuJson_(char* out, size_t outLen) const
 
 void HMIModule::loop()
 {
-    if (!driver_) {
-        vTaskDelay(pdMS_TO_TICKS(250));
-        return;
-    }
-
-    if (!driverReady_) {
-        driverReady_ = driver_->begin();
+    if (driver_) {
         if (!driverReady_) {
-            vTaskDelay(pdMS_TO_TICKS(500));
-            return;
+            driverReady_ = driver_->begin();
+            if (!driverReady_) {
+                venice_.tick(millis(), ioSvc_, waterTempIoId_);
+                vTaskDelay(pdMS_TO_TICKS(500));
+                return;
+            }
+            viewDirty_ = true;
         }
-        viewDirty_ = true;
-    }
 
-    HmiEvent ev{};
-    while (driver_->pollEvent(ev)) {
-        handleDriverEvent_(ev);
+        HmiEvent ev{};
+        while (driver_->pollEvent(ev)) {
+            handleDriverEvent_(ev);
+        }
+    } else {
+        driverReady_ = false;
     }
 
     const uint32_t now = millis();
-    if (wifiReady_ && !mqttReady_) {
-        if ((uint32_t)(now - lastWifiBlinkToggleMs_) >= kWifiBlinkPeriodMs) {
+    if (cfgData_.ledsEnabled) {
+        if (wifiReady_ && !mqttReady_) {
+            if ((uint32_t)(now - lastWifiBlinkToggleMs_) >= kWifiBlinkPeriodMs) {
+                lastWifiBlinkToggleMs_ = now;
+                wifiBlinkOn_ = !wifiBlinkOn_;
+                applyLedMask_(true);
+            }
+        } else if (wifiBlinkOn_) {
+            wifiBlinkOn_ = false;
             lastWifiBlinkToggleMs_ = now;
-            wifiBlinkOn_ = !wifiBlinkOn_;
             applyLedMask_(true);
         }
-    } else if (wifiBlinkOn_) {
-        wifiBlinkOn_ = false;
-        lastWifiBlinkToggleMs_ = now;
-        applyLedMask_(true);
-    }
 
-    if (statusLedsSvc_ && (uint32_t)(now - lastLedPageToggleMs_) >= kLedPageTogglePeriodMs) {
-        lastLedPageToggleMs_ = now;
-        const uint8_t nextPage = (ledPage_ == 1U) ? 2U : 1U;
-        ledPage_ = nextPage;
-        applyLedMask_(true);
+        if (statusLedsSvc_ && (uint32_t)(now - lastLedPageToggleMs_) >= kLedPageTogglePeriodMs) {
+            lastLedPageToggleMs_ = now;
+            const uint8_t nextPage = (ledPage_ == 1U) ? 2U : 1U;
+            ledPage_ = nextPage;
+            applyLedMask_(true);
+        }
+        if (!ledMaskValid_ || (uint32_t)(now - lastLedApplyTryMs_) >= 1000U) {
+            applyLedMask_();
+            lastLedApplyTryMs_ = now;
+        }
     }
-    if (!ledMaskValid_ || (uint32_t)(now - lastLedApplyTryMs_) >= 1000U) {
-        applyLedMask_();
-        lastLedApplyTryMs_ = now;
-    }
-    const bool periodicRefresh = ((uint32_t)(now - lastRenderMs_) >= 1200U);
-    if (viewDirty_ || periodicRefresh) {
+    const bool periodicRefresh = driver_ && ((uint32_t)(now - lastRenderMs_) >= 1200U);
+    if (driver_ && (viewDirty_ || periodicRefresh)) {
         if (render_()) {
             viewDirty_ = false;
         }
     }
 
-    driver_->tick(now);
+    if (driver_) driver_->tick(now);
+    venice_.tick(now, ioSvc_, waterTempIoId_);
     vTaskDelay(pdMS_TO_TICKS(25));
 }

@@ -1,9 +1,9 @@
 {
   "_meta": {
     "generated": true,
-    "total": 429,
-    "decl_total": 215,
-    "decl_with_cfgdoc": 116,
+    "total": 433,
+    "decl_total": 219,
+    "decl_with_cfgdoc": 120,
     "missing_cfgdoc_count": 99,
     "manual_overrides_total": 23,
     "manual_overrides_applied": 5
@@ -1034,6 +1034,42 @@
       "label": "Constructeur",
       "help": "Nom du constructeur exposé dans Home Assistant.",
       "var": "vendorVar",
+      "source": "cfgdoc"
+    },
+    "hmi/leds/enabled": {
+      "module": "hmi/leds",
+      "name": "enabled",
+      "type": "Bool",
+      "label": "Pilotage LEDs facade",
+      "help": "Autorise le HMIModule a ecrire le masque logique des LEDs via StatusLedsService.",
+      "var": "ledsEnabledVar_",
+      "source": "cfgdoc"
+    },
+    "hmi/nextion/enabled": {
+      "module": "hmi/nextion",
+      "name": "enabled",
+      "type": "Bool",
+      "label": "Nextion actif",
+      "help": "Autorise le HMIModule a envoyer le rendu et les commandes vers l'ecran Nextion local.",
+      "var": "nextionEnabledVar_",
+      "source": "cfgdoc"
+    },
+    "hmi/venice/enabled": {
+      "module": "hmi/venice",
+      "name": "enabled",
+      "type": "Bool",
+      "label": "Venice RF433 actif",
+      "help": "Active l'emission periodique de la temperature d'eau vers un afficheur TFA Venice compatible.",
+      "var": "veniceEnabledVar_",
+      "source": "cfgdoc"
+    },
+    "hmi/venice/tx_gpio": {
+      "module": "hmi/venice",
+      "name": "tx_gpio",
+      "type": "Int32",
+      "label": "GPIO emission Venice",
+      "help": "GPIO utilise pour l'emetteur RF433 du driver Venice.",
+      "var": "veniceTxGpioVar_",
       "source": "cfgdoc"
     },
     "io/debug/trace_enabled": {

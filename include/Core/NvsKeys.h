@@ -355,4 +355,11 @@ constexpr char Enabled[] = "al_en"; // Alarm module persisted key for field `ena
 constexpr char EvalPeriodMs[] = "al_epms"; // Alarm module persisted key for field `eval_period_ms`.
 }  // namespace Alarm
 
+namespace Hmi {
+constexpr char LedsEnabled[] = "hmi_leds"; // HMI module persisted key for logical LED-panel writes enable.
+constexpr char NextionEnabled[] = "hmi_nxen"; // HMI module persisted key for Nextion output enable.
+constexpr char VeniceEnabled[] = "hmi_vcen"; // HMI module persisted key for Venice RF433 output enable.
+constexpr char VeniceTxGpio[] = "hmi_vcgp"; // HMI module persisted key for Venice RF433 TX GPIO.
+}  // namespace Hmi
+
 }  // namespace NvsKeys

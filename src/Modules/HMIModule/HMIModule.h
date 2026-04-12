@@ -5,12 +5,14 @@
  */
 
 #include "Core/Module.h"
+#include "Core/NvsKeys.h"
 #include "Core/ServiceBinding.h"
 #include "Core/EventBus/EventBus.h"
 #include "Core/Services/Services.h"
 #include "Modules/HMIModule/ConfigMenuModel.h"
 #include "Modules/HMIModule/Drivers/HmiDriverTypes.h"
 #include "Modules/HMIModule/Drivers/NextionDriver.h"
+#include "Modules/HMIModule/Drivers/TfaVeniceRf433Sink.h"
 
 class HMIModule : public Module {
 public:
@@ -37,6 +39,33 @@ public:
     void loop() override;
 
 private:
+    struct ConfigData {
+        bool ledsEnabled = true;
+        bool nextionEnabled = true;
+        bool veniceEnabled = false;
+        int32_t veniceTxGpio = 14;
+    } cfgData_{};
+
+    // CFGDOC: {"label":"Pilotage LEDs facade", "help":"Autorise le HMIModule a ecrire le masque logique des LEDs via StatusLedsService."}
+    ConfigVariable<bool,0> ledsEnabledVar_{
+        NVS_KEY(NvsKeys::Hmi::LedsEnabled), "enabled", "hmi/leds",
+        ConfigType::Bool, &cfgData_.ledsEnabled, ConfigPersistence::Persistent, 0
+    };
+    // CFGDOC: {"label":"Nextion actif", "help":"Autorise le HMIModule a envoyer le rendu et les commandes vers l'ecran Nextion local."}
+    ConfigVariable<bool,0> nextionEnabledVar_{
+        NVS_KEY(NvsKeys::Hmi::NextionEnabled), "enabled", "hmi/nextion",
+        ConfigType::Bool, &cfgData_.nextionEnabled, ConfigPersistence::Persistent, 0
+    };
+    // CFGDOC: {"label":"Venice RF433 actif", "help":"Active l'emission periodique de la temperature d'eau vers un afficheur TFA Venice compatible."}
+    ConfigVariable<bool,0> veniceEnabledVar_{
+        NVS_KEY(NvsKeys::Hmi::VeniceEnabled), "enabled", "hmi/venice",
+        ConfigType::Bool, &cfgData_.veniceEnabled, ConfigPersistence::Persistent, 0
+    };
+    // CFGDOC: {"label":"GPIO emission Venice", "help":"GPIO utilise pour l'emetteur RF433 du driver Venice."}
+    ConfigVariable<int32_t,0> veniceTxGpioVar_{
+        NVS_KEY(NvsKeys::Hmi::VeniceTxGpio), "tx_gpio", "hmi/venice",
+        ConfigType::Int32, &cfgData_.veniceTxGpio, ConfigPersistence::Persistent, 0
+    };
     const LogHubService* logHub_ = nullptr;
     const ConfigStoreService* cfgSvc_ = nullptr;
     const DataStoreService* dsSvc_ = nullptr;
@@ -47,6 +76,7 @@ private:
 
     ConfigMenuModel menu_;
     NextionDriver nextion_;
+    TfaVeniceRf433Sink venice_;
     IHmiDriver* driver_ = nullptr;
 
     bool driverReady_ = false;
@@ -69,6 +99,7 @@ private:
     bool waterLevelLow_ = false;
     bool wifiBlinkOn_ = false;
     IoId poolLevelIoId_ = IO_ID_INVALID;
+    IoId waterTempIoId_ = IO_ID_INVALID;
     char poollogicCfgJson_[768]{};
     uint32_t lastLedApplyTryMs_ = 0;
     uint32_t lastLedPageToggleMs_ = 0;
@@ -89,6 +120,7 @@ private:
     void refreshRuntimeFlags_();
     void refreshAlarmFlags_();
     void refreshWaterLevelFlag_();
+    void applyOutputConfig_();
     void applyLedMask_(bool force = false);
 
     HmiService hmiSvc_{
