@@ -20,6 +20,7 @@ vers un récepteur TFA Venice compatible.
 - `datastore`
 - `io`
 - `alarms`
+- `command`
 
 ## Service exposé
 
@@ -63,8 +64,11 @@ Des hints peuvent forcer le widget et les contraintes (bornes/options).
   - `bHome`, `bBack`, `bValid`, `bPrev`, `bNext`, `bR0..bR5`
   - `nPage`, `nPages`
 - Entrées:
+  - protocole binaire custom `# <len> <opcode> <payload...>`
   - événements touch Nextion standard (`0x65`)
   - événements texte optionnels (`EV:*`) terminés par `FF FF FF`
+- Référence de protocole et objets:
+  - voir `docs/integration/nextion-esp-protocol.md`
 
 ## Événements internes
 
