@@ -516,6 +516,35 @@ void PoolLogicModule::init(ConfigStore& cfg, ServiceRegistry& services)
         cmdSvc_->registerHandler(cmdSvc_->ctx, "poollogic.filtration.write", &PoolLogicModule::cmdFiltrationWriteStatic_, this);
         cmdSvc_->registerHandler(cmdSvc_->ctx, "poollogic.filtration.recalc", &PoolLogicModule::cmdFiltrationRecalcStatic_, this);
         cmdSvc_->registerHandler(cmdSvc_->ctx, "poollogic.auto_mode.set", &PoolLogicModule::cmdAutoModeSetStatic_, this);
+        static constexpr const char* kMqttControlCmds[] = {
+            "poollogic.auto_mode.toggle",
+            "poollogic.ph_auto_mode.set",
+            "poollogic.ph_auto_mode.toggle",
+            "poollogic.orp_auto_mode.set",
+            "poollogic.orp_auto_mode.toggle",
+            "poollogic.winter_mode.set",
+            "poollogic.winter_mode.toggle",
+            "poollogic.filtration.toggle",
+            "poollogic.ph_pump.write",
+            "poollogic.ph_pump.toggle",
+            "poollogic.orp_pump.write",
+            "poollogic.orp_pump.toggle",
+            "poollogic.light.write",
+            "poollogic.light.toggle",
+            "poollogic.lights.write",
+            "poollogic.lights.toggle",
+            "poollogic.robot.write",
+            "poollogic.robot.toggle",
+            "poollogic.heater.write",
+            "poollogic.heater.toggle",
+            "poollogic.chlorine_generator.write",
+            "poollogic.chlorine_generator.toggle",
+            "poollogic.swg.write",
+            "poollogic.swg.toggle"
+        };
+        for (uint8_t i = 0; i < (uint8_t)(sizeof(kMqttControlCmds) / sizeof(kMqttControlCmds[0])); ++i) {
+            cmdSvc_->registerHandler(cmdSvc_->ctx, kMqttControlCmds[i], &PoolLogicModule::cmdMqttControlStatic_, this);
+        }
     }
     // PoolLogic owns the alarm definitions but delegates evaluation to the
     // shared alarm module through static condition callbacks.

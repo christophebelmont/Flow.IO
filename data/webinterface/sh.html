@@ -266,7 +266,12 @@
           <div class="control-topbar-heading">
             <h1 id="flowCfgTitle">Configuration</h1>
           </div>
-          <button id="flowCfgRefresh" class="btn-tonal btn-icon-only btn-refresh-icon" aria-label="Rafraîchir la configuration" title="Rafraîchir la configuration"><span class="refresh-icon-glyph" aria-hidden="true"></span></button>
+          <div class="topbar-actions control-topbar-actions">
+            <button id="flowCfgRefresh" class="btn-tonal btn-icon-only btn-refresh-icon" aria-label="Rafraîchir la configuration" title="Rafraîchir la configuration"><span class="refresh-icon-glyph" aria-hidden="true"></span></button>
+            <button id="flowCfgExport" class="btn-tonal btn-compact">Exporter ConfigStore</button>
+            <button id="flowCfgImport" class="btn-tonal btn-compact">Importer ConfigStore</button>
+            <input id="flowCfgImportFile" type="file" accept=".json,application/json" hidden />
+          </div>
         </div>
         <div class="card control-card">
           <div class="control-shell control-shell-tree">
@@ -286,6 +291,7 @@
                 <div class="control-section-title">Variables</div>
                 <div id="flowCfgFields" class="control-fields"></div>
                 <div id="flowCfgStatus" class="config-status">Configuration distante prête.</div>
+                <div id="flowCfgBackupStatus" class="config-status config-status-muted">Sauvegarde configuration prête.</div>
                 <div class="control-actions">
                   <button id="flowCfgApply" class="btn-primary">Appliquer</button>
                 </div>

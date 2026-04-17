@@ -668,7 +668,7 @@ void AlarmModule::registerHaEntities_(ServiceRegistry& services)
             "rt/alarms/id1006",
             "{{ 'True' if value_json.a | int(0) else 'False' }}",
             "problem",
-            "diagnostic",
+            nullptr,
             "mdi:waves-arrow-down"
         };
         if (haSvc_->addBinarySensor(haSvc_->ctx, &waterLevelLow)) {

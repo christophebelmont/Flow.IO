@@ -56,8 +56,8 @@ private:
     };
     struct ConfigData {
         bool enabled = true;
-        int32_t sda = 5;
-        int32_t scl = 15;
+        int32_t sda = 27;
+        int32_t scl = 13;
         int32_t freqHz = 100000;
         uint8_t targetAddr = 0x42;
     } cfgData_{};

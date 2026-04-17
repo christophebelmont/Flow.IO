@@ -1685,6 +1685,26 @@
       font-size: 13px;
       background: var(--panel-shell-bg);
     }
+    .config-status-muted {
+      margin-top: 8px;
+      font-size: 12px;
+      background: rgba(238, 244, 249, 0.88);
+    }
+    .config-status.is-ok {
+      border-color: rgba(47, 158, 104, 0.42);
+      color: #256B4A;
+      background: rgba(225, 245, 234, 0.72);
+    }
+    .config-status.is-error {
+      border-color: rgba(209, 76, 102, 0.42);
+      color: #8A2F45;
+      background: rgba(250, 226, 232, 0.72);
+    }
+    .config-status.is-busy {
+      border-color: rgba(43, 118, 180, 0.34);
+      color: #1E5F95;
+      background: rgba(225, 236, 247, 0.72);
+    }
     .config-section {
       margin-top: 2px;
       margin-bottom: 14px;
@@ -1773,6 +1793,20 @@
       display: grid;
       gap: 4px;
       flex: 1 1 auto;
+    }
+    .control-topbar-actions {
+      flex: 0 1 auto;
+    }
+    .control-topbar-actions .btn-compact {
+      min-height: 30px;
+      padding: 6px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      border-radius: 10px;
+    }
+    .control-topbar-actions button:disabled {
+      opacity: 0.62;
+      cursor: progress;
     }
     .control-layout {
       display: grid;
@@ -2462,6 +2496,14 @@
       }
       .control-layout {
         grid-template-columns: 1fr;
+      }
+      .control-topbar-actions {
+        width: 100%;
+        justify-content: flex-start;
+      }
+      .control-topbar-actions .btn-compact {
+        min-height: 30px;
+        padding: 6px 10px;
       }
       .cfg-tree-pane {
         position: static;

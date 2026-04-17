@@ -145,6 +145,14 @@
       };
     }
 
+    function utf8ByteLength(value) {
+      const text = String(value || '');
+      if (typeof TextEncoder === 'function') {
+        return new TextEncoder().encode(text).length;
+      }
+      return text.length;
+    }
+
     function runAsyncTaskSafely(task) {
       return Promise.resolve().then(task).catch(() => {});
     }
@@ -671,12 +679,16 @@
     const poolMeasuresStatus = document.getElementById('poolMeasuresStatus');
     const poolMeasuresGrid = document.getElementById('poolMeasuresGrid');
     const flowCfgRefreshBtn = document.getElementById('flowCfgRefresh');
+    const flowCfgExportBtn = document.getElementById('flowCfgExport');
+    const flowCfgImportBtn = document.getElementById('flowCfgImport');
+    const flowCfgImportFileInput = document.getElementById('flowCfgImportFile');
     const flowCfgApplyBtn = document.getElementById('flowCfgApply');
     const flowCfgTree = document.getElementById('flowCfgTree');
     const flowCfgPathLabel = document.getElementById('flowCfgCurrentPath');
     const flowCfgPathMeta = document.getElementById('flowCfgPathMeta');
     const flowCfgFields = document.getElementById('flowCfgFields');
     const flowCfgStatus = document.getElementById('flowCfgStatus');
+    const flowCfgBackupStatus = document.getElementById('flowCfgBackupStatus');
     const flowCfgTreePane = flowCfgTree ? flowCfgTree.closest('.cfg-pane') : null;
     const flowCfgDetailPane = flowCfgFields ? flowCfgFields.closest('.cfg-pane') : null;
     let flowCfgCurrentModule = '';
@@ -692,6 +704,7 @@
     let flowCfgDetailLoadingDepth = 0;
     let flowCfgLoadPromise = null;
     let flowCfgRetryTimer = null;
+    let flowCfgFlowOnlyFailureStreak = 0;
     let upgradeCfgLoadedOnce = false;
     let wifiConfigLoadedOnce = false;
     let flowCfgLoadedOnce = false;
@@ -706,6 +719,11 @@
     let wifiScanAutoRequested = false;
     let flowStatusReqSeq = 0;
     const fieldApplyCheckIcon = '✓';
+    const flowCfgBackupFormat = 'flowio-configstore-backup';
+    const flowCfgBackupVersion = 1;
+    const flowCfgBackupRedactedToken = '__REDACTED__';
+    const flowCfgBackupPatchTargetBytes = 1300;
+    let flowCfgBackupBusy = false;
     const flowStatusDomainTtlMs = 20000;
     const flowStatusDashboardRuntimeUiIds = Object.freeze({
       waterTemp: 2101,
@@ -4028,11 +4046,12 @@
         : baseUrl;
       const fetchFn = source === 'supervisor' ? fetch : fetchFlowRemoteQueued;
       const res = await fetchFn(url, { cache: 'no-store' });
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
       if (!res.ok || !data || data.ok !== true || !Array.isArray(data.children)) {
-        throw new Error(source === 'supervisor'
+        const fallback = source === 'supervisor'
           ? 'liste enfants supervisor indisponible'
-          : 'liste enfants indisponible');
+          : 'liste enfants indisponible';
+        throw new Error(extractApiErrorMessage(data, fallback));
       }
 
       const children = data.children
@@ -5403,6 +5422,9 @@
 
     async function ensureFlowCfgLoaded(forceReload) {
       const force = !!forceReload;
+      if (force) {
+        flowCfgFlowOnlyFailureStreak = 0;
+      }
       if (flowCfgLoadPromise) {
         await flowCfgLoadPromise;
         if (!force) {
@@ -5425,8 +5447,12 @@
           loadResult = await chargerFlowCfgModules(force || attempt > 0);
           if (loadResult.ok) {
             flowCfgLoadedOnce = true;
+            flowCfgFlowOnlyFailureStreak = 0;
             stopFlowCfgRetry();
             return;
+          }
+          if (loadResult.supervisorLoaded && !loadResult.flowLoaded) {
+            break;
           }
           if (attempt + 1 < retryDelaysMs.length) {
             flowCfgStatus.textContent = formatCfgLoadStatus(loadResult, false);
@@ -5434,6 +5460,23 @@
         }
 
         if (isPageActive('page-control')) {
+          if (loadResult.supervisorLoaded && !loadResult.flowLoaded) {
+            flowCfgFlowOnlyFailureStreak += 1;
+            const retryDelayMs = Math.min(60000, 7000 + ((flowCfgFlowOnlyFailureStreak - 1) * 5000));
+            if (flowCfgFlowOnlyFailureStreak >= 6) {
+              stopFlowCfgRetry();
+              flowCfgStatus.textContent =
+                'Flow.io indisponible (lien I2C). Configuration Supervisor disponible. ' +
+                'Auto-retry en pause, utilisez Rafraîchir.';
+            } else {
+              flowCfgStatus.textContent =
+                'Flow.io indisponible pour le moment. Configuration Supervisor disponible. ' +
+                'Nouvelle tentative dans ' + Math.max(1, Math.round(retryDelayMs / 1000)) + ' s.';
+              scheduleFlowCfgRetry(retryDelayMs);
+            }
+            return;
+          }
+          flowCfgFlowOnlyFailureStreak = 0;
           flowCfgStatus.textContent = formatCfgLoadStatus(loadResult, true);
           scheduleFlowCfgRetry(2500);
         }
@@ -5551,6 +5594,450 @@
         return;
       }
       await appliquerFlowCfg();
+    }
+
+    function setFlowCfgBackupStatus(message, tone) {
+      if (!flowCfgBackupStatus) return;
+      flowCfgBackupStatus.textContent = String(message || '').trim() || 'Sauvegarde configuration prête.';
+      flowCfgBackupStatus.classList.remove('is-ok', 'is-error', 'is-busy');
+      if (tone === 'ok') flowCfgBackupStatus.classList.add('is-ok');
+      if (tone === 'error') flowCfgBackupStatus.classList.add('is-error');
+      if (tone === 'busy') flowCfgBackupStatus.classList.add('is-busy');
+    }
+
+    function setFlowCfgBackupBusy(busy) {
+      flowCfgBackupBusy = !!busy;
+      if (flowCfgExportBtn) flowCfgExportBtn.disabled = flowCfgBackupBusy;
+      if (flowCfgImportBtn) flowCfgImportBtn.disabled = flowCfgBackupBusy;
+      if (flowCfgImportFileInput) flowCfgImportFileInput.disabled = flowCfgBackupBusy;
+    }
+
+    function flowCfgBackupStoreLabel(storeName) {
+      return storeName === 'supervisor' ? 'Supervisor' : 'Flow.io';
+    }
+
+    function flowCfgBackupStoreFetchImpl(storeName) {
+      return storeName === 'supervisor' ? fetch : fetchFlowRemoteQueued;
+    }
+
+    function flowCfgBackupStoreBasePath(storeName) {
+      return storeName === 'supervisor' ? '/api/supervisorcfg' : '/api/flowcfg';
+    }
+
+    function flowCfgBackupIsoDateForFile(dateLike) {
+      const d = dateLike instanceof Date ? dateLike : new Date();
+      const pad = (value) => String(value).padStart(2, '0');
+      return d.getUTCFullYear()
+        + pad(d.getUTCMonth() + 1)
+        + pad(d.getUTCDate())
+        + '-'
+        + pad(d.getUTCHours())
+        + pad(d.getUTCMinutes())
+        + pad(d.getUTCSeconds());
+    }
+
+    function flowCfgBackupDownloadText(filename, textContent) {
+      const blob = new Blob([textContent], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = filename;
+      anchor.rel = 'noopener';
+      document.body.appendChild(anchor);
+      anchor.click();
+      setTimeout(() => {
+        document.body.removeChild(anchor);
+        URL.revokeObjectURL(url);
+      }, 0);
+    }
+
+    function flowCfgBackupShouldRedactField(key, value) {
+      const normalizedKey = String(key || '').trim().toLowerCase();
+      if (!normalizedKey) return false;
+      if (/pass|token|secret|api[_-]?key/.test(normalizedKey)) return true;
+      if (typeof value === 'string' && value.trim() === '***') return true;
+      return false;
+    }
+
+    function flowCfgBackupRedactModuleData(storeName, moduleName, moduleData) {
+      const result = {};
+      const redactedFields = [];
+      const source = (moduleData && typeof moduleData === 'object' && !Array.isArray(moduleData)) ? moduleData : {};
+      Object.keys(source).sort().forEach((key) => {
+        const value = source[key];
+        if (flowCfgBackupShouldRedactField(key, value)) {
+          result[key] = flowCfgBackupRedactedToken;
+          redactedFields.push({
+            module: moduleName,
+            key: key,
+            reason: 'secret',
+            store: storeName
+          });
+          return;
+        }
+        result[key] = value;
+      });
+      return { data: result, redactedFields };
+    }
+
+    async function flowCfgBackupFetchModules(storeName) {
+      const basePath = flowCfgBackupStoreBasePath(storeName);
+      const fetchImpl = flowCfgBackupStoreFetchImpl(storeName);
+      const data = await fetchOkJson(
+        basePath + '/modules',
+        { cache: 'no-store' },
+        'liste modules ' + flowCfgBackupStoreLabel(storeName) + ' indisponible',
+        fetchImpl
+      );
+      if (!Array.isArray(data.modules)) {
+        throw new Error('liste modules ' + flowCfgBackupStoreLabel(storeName) + ' invalide');
+      }
+      return data.modules
+        .filter((moduleName) => typeof moduleName === 'string' && moduleName.trim().length > 0)
+        .map((moduleName) => moduleName.trim())
+        .sort((left, right) => left.localeCompare(right));
+    }
+
+    async function flowCfgBackupFetchModule(storeName, moduleName) {
+      const basePath = flowCfgBackupStoreBasePath(storeName);
+      const fetchImpl = flowCfgBackupStoreFetchImpl(storeName);
+      const data = await fetchOkJson(
+        basePath + '/module?name=' + encodeURIComponent(moduleName),
+        { cache: 'no-store' },
+        'lecture module ' + moduleName + ' (' + flowCfgBackupStoreLabel(storeName) + ') impossible',
+        fetchImpl
+      );
+      if (!data || typeof data.data !== 'object' || Array.isArray(data.data)) {
+        throw new Error('module ' + moduleName + ' invalide (' + flowCfgBackupStoreLabel(storeName) + ')');
+      }
+      return {
+        data: data.data,
+        truncated: !!data.truncated
+      };
+    }
+
+    function flowCfgBackupValidatePrimitiveValue(value, moduleName, key) {
+      if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return;
+      throw new Error('Valeur invalide pour ' + moduleName + '.' + key + ' (type non supporté).');
+    }
+
+    function flowCfgBackupNormalizeStoreSection(rawStore, storeName) {
+      const store = rawStore && typeof rawStore === 'object' ? rawStore : {};
+      const rawModules = (store.modules && typeof store.modules === 'object' && !Array.isArray(store.modules))
+        ? store.modules
+        : {};
+      const modules = {};
+      Object.keys(rawModules).forEach((moduleName) => {
+        const cleanModuleName = String(moduleName || '').trim();
+        if (!cleanModuleName) return;
+        const rawModuleData = rawModules[moduleName];
+        if (!rawModuleData || typeof rawModuleData !== 'object' || Array.isArray(rawModuleData)) {
+          throw new Error('Module invalide dans backup: ' + cleanModuleName + ' (' + flowCfgBackupStoreLabel(storeName) + ').');
+        }
+        const normalizedData = {};
+        Object.keys(rawModuleData).forEach((key) => {
+          const cleanKey = String(key || '').trim();
+          if (!cleanKey) return;
+          const value = rawModuleData[key];
+          flowCfgBackupValidatePrimitiveValue(value, cleanModuleName, cleanKey);
+          normalizedData[cleanKey] = value;
+        });
+        modules[cleanModuleName] = normalizedData;
+      });
+
+      const truncatedModules = Array.isArray(store.truncated_modules)
+        ? store.truncated_modules
+            .filter((moduleName) => typeof moduleName === 'string' && moduleName.trim().length > 0)
+            .map((moduleName) => moduleName.trim())
+        : [];
+
+      const redactedFields = Array.isArray(store.redacted_fields)
+        ? store.redacted_fields
+            .filter((entry) => entry && typeof entry === 'object')
+            .map((entry) => ({
+              module: String(entry.module || '').trim(),
+              key: String(entry.key || '').trim()
+            }))
+            .filter((entry) => entry.module.length > 0 && entry.key.length > 0)
+        : [];
+
+      return {
+        modules,
+        truncated_modules: truncatedModules,
+        redacted_fields: redactedFields
+      };
+    }
+
+    function flowCfgBackupValidateDocument(parsedDoc) {
+      if (!parsedDoc || typeof parsedDoc !== 'object') {
+        throw new Error('Backup invalide (objet JSON attendu).');
+      }
+      if (String(parsedDoc.format || '').trim() !== flowCfgBackupFormat) {
+        throw new Error('Backup invalide (format non reconnu).');
+      }
+      if (Number(parsedDoc.version) !== flowCfgBackupVersion) {
+        throw new Error('Backup invalide (version non supportée).');
+      }
+      const stores = (parsedDoc.stores && typeof parsedDoc.stores === 'object') ? parsedDoc.stores : null;
+      if (!stores) {
+        throw new Error('Backup invalide (stores absent).');
+      }
+      return {
+        format: flowCfgBackupFormat,
+        version: flowCfgBackupVersion,
+        stores: {
+          supervisor: flowCfgBackupNormalizeStoreSection(stores.supervisor, 'supervisor'),
+          flow: flowCfgBackupNormalizeStoreSection(stores.flow, 'flow')
+        }
+      };
+    }
+
+    function flowCfgBackupBuildRedactedFieldSet(redactedFields) {
+      const set = new Set();
+      (Array.isArray(redactedFields) ? redactedFields : []).forEach((entry) => {
+        const moduleName = String(entry && entry.module ? entry.module : '').trim();
+        const key = String(entry && entry.key ? entry.key : '').trim();
+        if (!moduleName || !key) return;
+        set.add(moduleName + '\u0000' + key);
+      });
+      return set;
+    }
+
+    function flowCfgBackupBuildModulePatch(moduleName, moduleData, redactedFieldSet) {
+      const patch = {};
+      const source = (moduleData && typeof moduleData === 'object' && !Array.isArray(moduleData)) ? moduleData : {};
+      Object.keys(source).sort().forEach((key) => {
+        const value = source[key];
+        if (value === flowCfgBackupRedactedToken) return;
+        if (redactedFieldSet && redactedFieldSet.has(moduleName + '\u0000' + key)) return;
+        patch[key] = value;
+      });
+      return patch;
+    }
+
+    function flowCfgBackupSplitModulePatch(moduleName, modulePatch, maxBytes) {
+      const keys = Object.keys(modulePatch || {}).sort();
+      if (!keys.length) return [];
+
+      const chunks = [];
+      let current = {};
+      keys.forEach((key) => {
+        const next = Object.assign({}, current, { [key]: modulePatch[key] });
+        const nextPatch = { [moduleName]: next };
+        if (utf8ByteLength(JSON.stringify(nextPatch)) <= maxBytes) {
+          current = next;
+          return;
+        }
+
+        if (Object.keys(current).length === 0) {
+          throw new Error('Champ trop volumineux pour import: ' + moduleName + '.' + key);
+        }
+
+        chunks.push({ [moduleName]: current });
+        current = { [key]: modulePatch[key] };
+        const singlePatch = { [moduleName]: current };
+        if (utf8ByteLength(JSON.stringify(singlePatch)) > maxBytes) {
+          throw new Error('Champ trop volumineux pour import: ' + moduleName + '.' + key);
+        }
+      });
+
+      if (Object.keys(current).length > 0) {
+        chunks.push({ [moduleName]: current });
+      }
+      return chunks;
+    }
+
+    async function flowCfgBackupApplyPatch(storeName, patchJson) {
+      const basePath = flowCfgBackupStoreBasePath(storeName);
+      const fetchImpl = flowCfgBackupStoreFetchImpl(storeName);
+      const response = await fetchJsonResponse(
+        basePath + '/apply',
+        createFormPostOptions({ patch: patchJson }),
+        fetchImpl
+      );
+      if (!response.res.ok || !response.data || response.data.ok !== true) {
+        if (storeName === 'flow') {
+          throw new Error(formatFlowCfgApplyError(response.data));
+        }
+        throw new Error(extractApiErrorMessage(response.data, 'apply refusé'));
+      }
+    }
+
+    async function exportFlowCfgBackup() {
+      if (flowCfgBackupBusy) return;
+      setFlowCfgBackupBusy(true);
+      const startedAt = Date.now();
+      try {
+        setFlowCfgBackupStatus('Préparation de l\'export ConfigStore...', 'busy');
+        const createdAt = new Date();
+        const backupDoc = {
+          format: flowCfgBackupFormat,
+          version: flowCfgBackupVersion,
+          created_at_utc: createdAt.toISOString(),
+          meta: {
+            supervisor_fw: supervisorFirmwareVersion || '-',
+            flow_reachable: false
+          },
+          stores: {
+            supervisor: {
+              modules: {},
+              truncated_modules: [],
+              redacted_fields: []
+            },
+            flow: {
+              modules: {},
+              truncated_modules: [],
+              redacted_fields: []
+            }
+          }
+        };
+
+        const stores = ['supervisor', 'flow'];
+        for (const storeName of stores) {
+          const storeLabel = flowCfgBackupStoreLabel(storeName);
+          setFlowCfgBackupStatus('Lecture des modules ' + storeLabel + '...', 'busy');
+          const modules = await flowCfgBackupFetchModules(storeName);
+          for (let i = 0; i < modules.length; i += 1) {
+            const moduleName = modules[i];
+            setFlowCfgBackupStatus(
+              'Export ' + storeLabel + ' : ' + moduleName + ' (' + (i + 1) + '/' + modules.length + ')...',
+              'busy'
+            );
+            const modulePayload = await flowCfgBackupFetchModule(storeName, moduleName);
+            if (modulePayload.truncated) {
+              backupDoc.stores[storeName].truncated_modules.push(moduleName);
+            }
+            const redacted = flowCfgBackupRedactModuleData(storeName, moduleName, modulePayload.data);
+            backupDoc.stores[storeName].modules[moduleName] = redacted.data;
+            redacted.redactedFields.forEach((entry) => {
+              backupDoc.stores[storeName].redacted_fields.push({
+                module: entry.module,
+                key: entry.key
+              });
+            });
+          }
+          backupDoc.stores[storeName].module_count = modules.length;
+          if (storeName === 'flow') {
+            backupDoc.meta.flow_reachable = true;
+          }
+        }
+
+        const truncatedErrors = []
+          .concat((backupDoc.stores.supervisor.truncated_modules || []).map((moduleName) => 'Supervisor/' + moduleName))
+          .concat((backupDoc.stores.flow.truncated_modules || []).map((moduleName) => 'Flow.io/' + moduleName));
+        if (truncatedErrors.length > 0) {
+          throw new Error(
+            'export interrompu: modules tronqués (' + truncatedErrors.join(', ') + ').'
+          );
+        }
+
+        const serialized = JSON.stringify(backupDoc, null, 2);
+        const fileName = 'flowio-configstore-backup-' + flowCfgBackupIsoDateForFile(createdAt) + '.json';
+        flowCfgBackupDownloadText(fileName, serialized);
+        const durationMs = Date.now() - startedAt;
+        setFlowCfgBackupStatus(
+          'Export terminé (' + fileName + ', ' + Math.max(1, Math.round(durationMs / 1000)) + ' s).',
+          'ok'
+        );
+      } catch (err) {
+        setFlowCfgBackupStatus('Export échoué: ' + err, 'error');
+      } finally {
+        setFlowCfgBackupBusy(false);
+      }
+    }
+
+    async function importFlowCfgBackupFromText(rawText, fileName) {
+      if (flowCfgBackupBusy) return;
+      setFlowCfgBackupBusy(true);
+      const startedAt = Date.now();
+      try {
+        let parsedDoc = null;
+        try {
+          parsedDoc = JSON.parse(String(rawText || ''));
+        } catch (err) {
+          throw new Error('JSON invalide.');
+        }
+        const backupDoc = flowCfgBackupValidateDocument(parsedDoc);
+        if (!confirm('Confirmer l\'import du backup "' + (fileName || 'inconnu') + '" ?')) {
+          setFlowCfgBackupStatus('Import annulé.', '');
+          return;
+        }
+
+        const report = {
+          supervisor: { modules_applied: 0, modules_skipped: 0, patches_applied: 0 },
+          flow: { modules_applied: 0, modules_skipped: 0, patches_applied: 0 }
+        };
+
+        const stores = ['supervisor', 'flow'];
+        for (const storeName of stores) {
+          const storeData = backupDoc.stores[storeName];
+          const storeLabel = flowCfgBackupStoreLabel(storeName);
+          const moduleNames = Object.keys(storeData.modules || {}).sort((left, right) => left.localeCompare(right));
+          const truncatedSet = new Set(storeData.truncated_modules || []);
+          const redactedSet = flowCfgBackupBuildRedactedFieldSet(storeData.redacted_fields);
+
+          for (let moduleIndex = 0; moduleIndex < moduleNames.length; moduleIndex += 1) {
+            const moduleName = moduleNames[moduleIndex];
+            if (truncatedSet.has(moduleName)) {
+              report[storeName].modules_skipped += 1;
+              continue;
+            }
+
+            const modulePatch = flowCfgBackupBuildModulePatch(
+              moduleName,
+              storeData.modules[moduleName],
+              redactedSet
+            );
+            if (Object.keys(modulePatch).length === 0) {
+              report[storeName].modules_skipped += 1;
+              continue;
+            }
+
+            const chunkPatches = flowCfgBackupSplitModulePatch(
+              moduleName,
+              modulePatch,
+              flowCfgBackupPatchTargetBytes
+            );
+
+            for (let chunkIndex = 0; chunkIndex < chunkPatches.length; chunkIndex += 1) {
+              setFlowCfgBackupStatus(
+                'Import ' + storeLabel + ' : ' + moduleName
+                + ' (' + (moduleIndex + 1) + '/' + moduleNames.length + ', patch ' + (chunkIndex + 1)
+                + '/' + chunkPatches.length + ')...',
+                'busy'
+              );
+              await flowCfgBackupApplyPatch(storeName, JSON.stringify(chunkPatches[chunkIndex]));
+              report[storeName].patches_applied += 1;
+            }
+
+            report[storeName].modules_applied += 1;
+          }
+        }
+
+        await ensureFlowCfgLoaded(true).catch(() => {});
+        const durationMs = Date.now() - startedAt;
+        setFlowCfgBackupStatus(
+          'Import terminé (' + Math.max(1, Math.round(durationMs / 1000)) + ' s). '
+            + 'Supervisor: ' + report.supervisor.modules_applied + ' module(s), '
+            + report.supervisor.patches_applied + ' patch(s). '
+            + 'Flow.io: ' + report.flow.modules_applied + ' module(s), '
+            + report.flow.patches_applied + ' patch(s).',
+          'ok'
+        );
+      } catch (err) {
+        setFlowCfgBackupStatus('Import échoué: ' + err, 'error');
+      } finally {
+        setFlowCfgBackupBusy(false);
+        if (flowCfgImportFileInput) {
+          flowCfgImportFileInput.value = '';
+        }
+      }
+    }
+
+    async function importFlowCfgBackupFromFile(file) {
+      if (!file) return;
+      const text = await file.text();
+      await importFlowCfgBackupFromText(text, file.name || 'backup.json');
     }
 
     async function callSystemAction(target, action) {
@@ -5728,6 +6215,21 @@
     function initConfigBindings() {
       bindClickAction(flowCfgRefreshBtn, () => ensureFlowCfgLoaded(true));
       bindClickAction(flowCfgApplyBtn, () => appliquerPrimaryCfg());
+      bindClickAction(flowCfgExportBtn, () => exportFlowCfgBackup());
+      bindClickAction(flowCfgImportBtn, () => {
+        if (!flowCfgImportFileInput || flowCfgBackupBusy) return;
+        flowCfgImportFileInput.value = '';
+        flowCfgImportFileInput.click();
+      });
+      if (flowCfgImportFileInput) {
+        flowCfgImportFileInput.addEventListener('change', () => {
+          const file = flowCfgImportFileInput.files && flowCfgImportFileInput.files[0]
+            ? flowCfgImportFileInput.files[0]
+            : null;
+          if (!file) return;
+          runAsyncTaskSafely(() => importFlowCfgBackupFromFile(file));
+        });
+      }
     }
 
     function initGlobalUiBindings() {

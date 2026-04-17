@@ -126,18 +126,78 @@ Persistance: `ConfigStore` + `NvsKeys::PoolLogic::*`
 
 Enregistrées via `CommandService`:
 
+Transport MQTT (`<base>/<device>/cmd`) :
+- payload attendu: `{"cmd":"<nom_commande>","args":{...}}`
+
+Commandes modes:
+- `poollogic.auto_mode.set`
+  - args: `{"value":true|false}`
+  - persiste et applique `auto_mode`
+- `poollogic.auto_mode.toggle`
+  - inverse `auto_mode`
+- `poollogic.ph_auto_mode.set`
+  - args: `{"value":true|false}`
+  - persiste et applique `ph_auto_mode`
+- `poollogic.ph_auto_mode.toggle`
+  - inverse `ph_auto_mode`
+- `poollogic.orp_auto_mode.set`
+  - args: `{"value":true|false}`
+  - persiste et applique `orp_auto_mode`
+- `poollogic.orp_auto_mode.toggle`
+  - inverse `orp_auto_mode`
+- `poollogic.winter_mode.set`
+  - args: `{"value":true|false}`
+  - persiste et applique `winter_mode`
+- `poollogic.winter_mode.toggle`
+  - inverse `winter_mode`
+
+Commandes actionneurs:
 - `poollogic.filtration.write`
   - args: `{"value":true|false}`
   - force `auto_mode=false`
   - écrit l'état désiré du slot filtration via `pooldev.writeDesired`
+- `poollogic.filtration.toggle`
+  - inverse l'état réel filtration
+  - force `auto_mode=false`
+- `poollogic.ph_pump.write`
+  - args: `{"value":true|false}`
+  - écrit la consigne de pompe pH
+  - si `value=true`, force `ph_auto_mode=false` (aligné avec `pooldevice.write`)
+- `poollogic.ph_pump.toggle`
+  - inverse l'état réel pompe pH
+  - si passage ON, force `ph_auto_mode=false`
+- `poollogic.orp_pump.write`
+  - args: `{"value":true|false}`
+  - écrit la consigne de pompe ORP/chlore liquide
+  - si `value=true`, force `orp_auto_mode=false` (aligné avec `pooldevice.write`)
+- `poollogic.orp_pump.toggle`
+  - inverse l'état réel pompe ORP/chlore liquide
+  - si passage ON, force `orp_auto_mode=false`
+- `poollogic.light.write` / `poollogic.lights.write`
+  - args: `{"value":true|false}`
+  - écrit la consigne éclairage
+- `poollogic.light.toggle` / `poollogic.lights.toggle`
+  - inverse l'état réel éclairage
+- `poollogic.robot.write`
+  - args: `{"value":true|false}`
+  - écrit la consigne robot
+- `poollogic.robot.toggle`
+  - inverse l'état réel robot
+- `poollogic.heater.write`
+  - args: `{"value":true|false}`
+  - écrit la consigne chauffage
+- `poollogic.heater.toggle`
+  - inverse l'état réel chauffage
+- `poollogic.chlorine_generator.write` / `poollogic.swg.write`
+  - args: `{"value":true|false}`
+  - écrit la consigne électrolyseur (SWG)
+- `poollogic.chlorine_generator.toggle` / `poollogic.swg.toggle`
+  - inverse l'état réel électrolyseur (SWG)
 
+Commande utilitaire:
 - `poollogic.filtration.recalc`
   - met en file une recomputation de la fenêtre
   - traitement asynchrone dans la loop
-
-- `poollogic.auto_mode.set`
-  - args: `{"value":true|false}`
-  - persiste et applique `auto_mode`
 
 Les réponses d'erreur suivent `ErrorCode` (`MissingArgs`, `MissingValue`, `NotReady`, `Disabled`, `InterlockBlocked`, etc.).
 
