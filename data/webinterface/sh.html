@@ -16,7 +16,7 @@
         </div>
       </div>
       <nav class="menu-group">
-        <button class="menu-item active" data-page="page-pool-measures"><span class="ico icon-measures" aria-hidden="true"></span><span class="label">Mesures</span></button>
+        <button class="menu-item active" data-page="page-pool-measures"><span class="ico icon-measures" aria-hidden="true"></span><span class="label">Tableau de Bord</span></button>
         <button class="menu-item" data-page="page-calibration"><span class="ico icon-calibration" aria-hidden="true"></span><span class="label">Étalonnage</span></button>
         <button class="menu-item" data-page="page-terminal"><span class="ico icon-terminal" aria-hidden="true"></span><span class="label">Journaux</span></button>
         <button class="menu-item" data-page="page-system"><span class="ico icon-system" aria-hidden="true"></span><span class="label">Mises à Jour</span></button>
@@ -49,7 +49,7 @@
       </div>
       <section id="page-pool-measures" class="page active">
         <div class="topbar">
-          <h1>Mesures</h1>
+          <h1>Tableau de Bord</h1>
           <div class="topbar-actions">
             <span id="poolMeasuresStatus" class="status-chip measure-status-badge">en attente...</span>
             <button id="poolMeasuresRefresh" class="btn-tonal btn-icon-only btn-refresh-icon" aria-label="Rafraîchir les mesures actives" title="Rafraîchir les mesures actives"><span class="refresh-icon-glyph" aria-hidden="true"></span></button>
@@ -264,7 +264,7 @@
 
       <section id="page-calibration" class="page">
         <div class="topbar">
-          <h1>Calibration</h1>
+          <h1>Étalonnage</h1>
           <div class="topbar-actions">
             <span id="calibrationStatusChip" class="status-chip">Prêt</span>
           </div>
@@ -274,7 +274,7 @@
             <section class="cfg-pane calibration-pane">
               <div class="control-section-title">Assistant</div>
               <p class="calibration-intro">
-                Calibrez les sondes piscine en calculant automatiquement les coefficients <b>C0</b> et <b>C1</b> selon la formule
+                Étalonnez les sondes piscine en calculant automatiquement les coefficients <b>C0</b> et <b>C1</b> selon la formule
                 <code>valeur = C0 * input + C1</code>.
               </p>
 
@@ -316,7 +316,7 @@
               <div id="calibrationModeHint" class="config-status config-status-muted">Mode 2 points actif.</div>
 
               <div id="calibrationTwoPointFields" class="calibration-fields-shell">
-                <div class="calibration-fields-title">Calibration 2 points</div>
+                <div class="calibration-fields-title">Étalonnage 2 points</div>
                 <div class="calibration-grid calibration-grid-points">
                   <div class="field">
                     <label for="calibrationPoint1Measured">Point 1 - Mesure affichée</label>
@@ -338,7 +338,7 @@
               </div>
 
               <div id="calibrationOnePointFields" class="calibration-fields-shell" hidden>
-                <div class="calibration-fields-title">Calibration 1 point (offset)</div>
+                <div class="calibration-fields-title">Étalonnage 1 point (offset)</div>
                 <div class="calibration-grid calibration-grid-points">
                   <div class="field">
                     <label for="calibrationSingleMeasured">Mesure affichée</label>
@@ -358,7 +358,7 @@
 
               <div id="calibrationPreview" class="calibration-preview" hidden></div>
               <div id="calibrationChecks" class="calibration-checks" hidden></div>
-              <div id="calibrationStatus" class="config-status">Calibration prête.</div>
+              <div id="calibrationStatus" class="config-status">Étalonnage prêt.</div>
             </section>
           </div>
         </div>

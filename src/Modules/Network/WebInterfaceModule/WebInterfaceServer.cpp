@@ -36,6 +36,10 @@
 #define FLOW_WEB_UNIFY_STATUS_CARD_ICONS 0
 #endif
 
+#ifndef FLOW_WEB_DISABLE_ICONS
+#define FLOW_WEB_DISABLE_ICONS 0
+#endif
+
 #ifndef FLOW_WEB_HEAP_FORENSICS
 #define FLOW_WEB_HEAP_FORENSICS 0
 #endif
@@ -1234,6 +1238,10 @@ void WebInterfaceModule::startServer_()
     };
 
     server_.on("/assets/favicon.png", HTTP_GET, [this](AsyncWebServerRequest* request) {
+#if FLOW_WEB_DISABLE_ICONS
+        request->send(204);
+        return;
+#else
         char redirectPath[96] = {0};
         const int n = snprintf(redirectPath,
                                sizeof(redirectPath),
@@ -1244,8 +1252,13 @@ void WebInterfaceModule::startServer_()
             return;
         }
         request->redirect(redirectPath);
+#endif
     });
     server_.on("/favicon.ico", HTTP_GET, [this](AsyncWebServerRequest* request) {
+#if FLOW_WEB_DISABLE_ICONS
+        request->send(204);
+        return;
+#else
         char redirectPath[96] = {0};
         const int n = snprintf(redirectPath,
                                sizeof(redirectPath),
@@ -1256,6 +1269,7 @@ void WebInterfaceModule::startServer_()
             return;
         }
         request->redirect(redirectPath);
+#endif
     });
     auto webInterfaceLandingUrl = [this]() -> const char* {
         NetworkAccessMode mode = NetworkAccessMode::None;
@@ -1322,6 +1336,10 @@ void WebInterfaceModule::startServer_()
     });
     auto registerWebSvgRoute = [this, beginSpiffsAssetResponse, sendPreparedAssetResponse](const char* assetPath) {
         server_.on(assetPath, HTTP_GET, [this, beginSpiffsAssetResponse, sendPreparedAssetResponse, assetPath](AsyncWebServerRequest* request) {
+#if FLOW_WEB_DISABLE_ICONS
+            request->send(204);
+            return;
+#else
             SpiffsAssetForensicMeta forensicMeta{};
             bool heapRejected = false;
             AsyncWebServerResponse* response =
@@ -1331,6 +1349,7 @@ void WebInterfaceModule::startServer_()
                 return;
             }
             sendPreparedAssetResponse(request, response, &forensicMeta);
+#endif
         });
     };
     registerWebSvgRoute("/webinterface/i/m.svg");
@@ -1388,6 +1407,7 @@ void WebInterfaceModule::startServer_()
         doc["firmware_version"] = FirmwareVersion::Full;
         doc["hide_menu_svg"] = (FLOW_WEB_HIDE_MENU_SVG != 0);
         doc["unify_status_card_icons"] = (FLOW_WEB_UNIFY_STATUS_CARD_ICONS != 0);
+        doc["disable_icons"] = (FLOW_WEB_DISABLE_ICONS != 0);
         doc["upms"] = (uint32_t)millis();
         JsonObject heap = doc.createNestedObject("heap");
         heap["free"] = (uint32_t)ESP.getFreeHeap();

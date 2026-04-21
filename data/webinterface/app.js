@@ -26,14 +26,66 @@
     let supervisorUptimeMs = 0;
     let supervisorHeap = {};
     let hideMenuSvg = false;
+    let disableWebIcons = false;
     let unifyStatusCardIcons = false;
     let flowStatusLiveTimer = null;
     let pageLoadToken = 0;
     let deferredVisualAssetsScheduled = false;
     let menuAssetsActivated = false;
     let deferredMenuAssetsArmed = false;
+    let fieldApplyCheckIcon = '✓';
     const pendingSystemActionCountdowns = new Map();
     let activeColorPickerPopover = null;
+
+    function menuFallbackLetter(label) {
+      const text = String(label || '').trim();
+      if (!text) return '?';
+      return Array.from(text)[0].toLocaleUpperCase('fr-FR');
+    }
+
+    function iconCheckText() {
+      return '✓';
+    }
+
+    function syncMenuIconFallbacks() {
+      menuItems.forEach((item) => {
+        if (!item) return;
+        const icon = item.querySelector('.ico');
+        const label = item.querySelector('.label');
+        if (!icon || !label) return;
+        const fallback = menuFallbackLetter(label.textContent);
+        icon.setAttribute('data-fallback-text', fallback);
+        icon.textContent = disableWebIcons ? fallback : '';
+      });
+    }
+
+    function syncRenderedCheckFallbacks() {
+      const checkText = iconCheckText();
+      document.querySelectorAll('.step-ic.done').forEach((node) => {
+        if (!node) return;
+        node.textContent = checkText;
+      });
+      document.querySelectorAll('.status-flag-check.is-true').forEach((node) => {
+        if (!node) return;
+        node.textContent = checkText;
+      });
+      document.querySelectorAll('.measure-domain-chip-check').forEach((node) => {
+        if (!node) return;
+        node.textContent = checkText;
+      });
+      document.querySelectorAll('.control-field-apply').forEach((node) => {
+        if (!node) return;
+        node.textContent = checkText;
+      });
+    }
+
+    function applyIconUsagePreference(disabled) {
+      disableWebIcons = !!disabled;
+      document.body.classList.toggle('web-icons-disabled', disableWebIcons);
+      fieldApplyCheckIcon = iconCheckText();
+      syncMenuIconFallbacks();
+      syncRenderedCheckFallbacks();
+    }
 
     function applyMenuIconPreference(hidden) {
       hideMenuSvg = !!hidden;
@@ -299,6 +351,10 @@
     function activateMenuAssets(deferred, stepDelayMs) {
       if (menuAssetsActivated) return;
       menuAssetsActivated = true;
+      if (disableWebIcons) {
+        markDeferredVisualAssetsWarm();
+        return;
+      }
       const stepMs = Math.max(0, Number(stepDelayMs) || deferredMenuAssetStepMs);
       const steps = [];
       if (!hideMenuSvg) {
@@ -333,7 +389,7 @@
     }
 
     function armDeferredMenuAssets(startDelayMs, stepDelayMs, fallbackDelayMs) {
-      if (deferredMenuAssetsArmed || menuAssetsActivated || hideMenuSvg || !drawer) return;
+      if (deferredMenuAssetsArmed || menuAssetsActivated || hideMenuSvg || disableWebIcons || !drawer) return;
       deferredMenuAssetsArmed = true;
       let triggered = false;
       const trigger = () => {
@@ -352,6 +408,7 @@
     function scheduleDeferredVisualAssets() {
       if (deferredVisualAssetsScheduled) return;
       deferredVisualAssetsScheduled = true;
+      if (disableWebIcons) return;
       if (hasWarmDeferredVisualAssets() && !isReloadNavigation()) {
         activateMenuAssets(false);
         return;
@@ -412,11 +469,13 @@
             }
           }
         }
+        applyIconUsagePreference(!!data.disable_icons);
         applyMenuIconPreference(!!data.hide_menu_svg);
         applyStatusIconPreference(!!data.unify_status_card_icons);
-        if (hasWarmDeferredVisualAssets()) {
+        if (!disableWebIcons && hasWarmDeferredVisualAssets()) {
           activateMenuAssets(false);
         }
+        scheduleDeferredVisualAssets();
         if (typeof data.firmware_version === 'string') {
           const trimmed = data.firmware_version.trim();
           if (trimmed) {
@@ -435,6 +494,7 @@
           refreshFlowStatus(false).catch(() => {});
         }
       } catch (err) {
+        scheduleDeferredVisualAssets();
       }
     }
 
@@ -753,7 +813,7 @@
     let supCfgRootExpanded = true;
     let wifiScanAutoRequested = false;
     let flowStatusReqSeq = 0;
-    const fieldApplyCheckIcon = '✓';
+    fieldApplyCheckIcon = iconCheckText();
     const flowCfgBackupFormat = 'flowio-configstore-backup';
     const flowCfgBackupVersion = 1;
     const flowCfgBackupRedactedToken = '__REDACTED__';
@@ -1174,7 +1234,7 @@
           refreshIcon.setAttribute('aria-hidden', 'true');
           icon.appendChild(refreshIcon);
         } else if (state === 'done') {
-          icon.textContent = '✓';
+          icon.textContent = iconCheckText();
         } else if (state === 'error') {
           icon.textContent = '!';
         } else {
@@ -1548,6 +1608,7 @@
     function updateUpgradeConfigFieldApplyState(def) {
       if (!def || !def.button) return;
       const dirty = isUpgradeConfigFieldDirty(def);
+      def.button.textContent = fieldApplyCheckIcon;
       def.button.disabled = !dirty;
       def.button.classList.toggle('is-dirty', dirty);
       def.button.classList.remove('is-pending');
@@ -3222,7 +3283,7 @@
       const state = known ? (value ? 'is-true' : 'is-false') : 'is-empty';
       const marker = document.createElement('span');
       marker.className = 'status-flag-check ' + state;
-      marker.textContent = known ? (value ? '✓' : '') : '?';
+      marker.textContent = known ? (value ? iconCheckText() : '') : '?';
       marker.setAttribute(
         'aria-label',
         label + ' / ' + columnLabel + ' : ' + (known ? (value ? 'oui' : 'non') : 'indisponible')
@@ -3541,7 +3602,7 @@
         const check = document.createElement('span');
         check.className = 'measure-domain-chip-check';
         check.setAttribute('aria-hidden', 'true');
-        check.textContent = '✓';
+        check.textContent = iconCheckText();
         button.appendChild(check);
 
         const label = document.createElement('span');
@@ -3885,7 +3946,7 @@
     }
 
     function calibrationSetStatus(message, tone) {
-      const text = String(message || '').trim() || 'Calibration prête.';
+      const text = String(message || '').trim() || 'Étalonnage prêt.';
       if (calibrationStatus) {
         calibrationStatus.textContent = text;
         calibrationStatus.classList.remove('is-ok', 'is-error', 'is-busy');
@@ -4081,7 +4142,7 @@
       } catch (err) {
         calibrationContext = null;
         calibrationSetSummary('-', NaN, NaN);
-        calibrationSetStatus('Chargement calibration échoué: ' + err, 'error');
+        calibrationSetStatus('Chargement étalonnage échoué: ' + err, 'error');
       } finally {
         if (calibrationLoadBtn) calibrationLoadBtn.disabled = false;
       }
@@ -4258,7 +4319,7 @@
           checks.push({
             tone: 'ok',
             label: 'OK',
-            text: 'Décalage mesuré compatible avec une calibration 1 point.'
+            text: 'Décalage mesuré compatible avec un étalonnage 1 point.'
           });
         }
       }
@@ -4274,7 +4335,7 @@
     function calibrationRenderPreview(model) {
       if (!calibrationPreview) return;
       calibrationPreview.hidden = false;
-      const modeLabel = model.mode === 'two' ? 'Calibration 2 points' : 'Calibration 1 point';
+      const modeLabel = model.mode === 'two' ? 'Étalonnage 2 points' : 'Étalonnage 1 point';
       calibrationPreview.innerHTML =
         '<div class="calibration-preview-head">' + modeLabel + ' prête pour ' + model.sensorLabel + '</div>' +
         '<div class="calibration-preview-grid">' +
@@ -4324,7 +4385,7 @@
         calibrationSetStatus('Nouveaux coefficients calculés. Vous pouvez appliquer.', 'ok');
       } catch (err) {
         calibrationResetComputedUi();
-        calibrationSetStatus('Calcul calibration échoué: ' + err, 'error');
+        calibrationSetStatus('Calcul étalonnage échoué: ' + err, 'error');
       }
     }
 
@@ -4350,9 +4411,9 @@
         }
 
         await loadCalibrationSensorConfig(false);
-        calibrationSetStatus('Calibration appliquée avec succès.', 'ok');
+        calibrationSetStatus('Étalonnage appliqué avec succès.', 'ok');
       } catch (err) {
-        calibrationSetStatus('Application calibration échouée: ' + err, 'error');
+        calibrationSetStatus('Application étalonnage échouée: ' + err, 'error');
         if (calibrationApplyBtn) calibrationApplyBtn.disabled = !calibrationComputed;
       }
     }
@@ -6844,7 +6905,7 @@
       bindClickAction(calibrationApplyBtn, () => applyCalibrationResult());
 
       calibrationSyncSelectionUi();
-      calibrationSetStatus('Calibration prête.');
+      calibrationSetStatus('Étalonnage prêt.');
     }
 
     function initWifiBindings() {
@@ -6967,6 +7028,7 @@
     initConfigBindings();
     initGlobalUiBindings();
 
+    syncMenuIconFallbacks();
     renderUpgradeJourney(readUpgradeUiSession() || { phase: 'idle', target: '', detail: 'Aucune opération en cours.' });
     resumeUpgradeReconnectFlow();
     startDrawerRuntimeTimer();
@@ -6982,4 +7044,3 @@
     } else {
       setTimeout(startInitialUi, 16);
     }
-    scheduleDeferredVisualAssets();

@@ -11,19 +11,13 @@
 #define RUNTIME_DATA_CORE_FIELDS
 #endif
 
-#include "Modules/IOModule/IOModuleDataModel.h"
-#include "Modules/Network/HAModule/HAModuleDataModel.h"
-#include "Modules/Network/MQTTModule/MQTTModuleDataModel.h"
+#include "Modules/Network/I2CCfgClientModule/I2CCfgClientModuleDataModel.h"
 #include "Modules/Network/TimeModule/TimeModuleDataModel.h"
 #include "Modules/Network/WifiModule/WifiModuleDataModel.h"
-#include "Modules/PoolDeviceModule/PoolDeviceModuleDataModel.h"
 
 struct RuntimeData {
     RUNTIME_DATA_CORE_FIELDS
-    IORuntimeData io;
-    HARuntimeData ha;
-    MQTTRuntimeData mqtt;
+    FlowRemoteRuntimeData flowRemote;
     TimeRuntimeData time;
     WifiRuntimeData wifi;
-    PoolDeviceRuntimeData pool;
 };
