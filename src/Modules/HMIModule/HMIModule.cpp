@@ -1259,7 +1259,9 @@ void HMIModule::onEvent_(const Event& e)
 void HMIModule::handleDriverEvent_(const HmiEvent& e)
 {
     if (e.type == HmiEventType::Command) {
-        (void)executeHmiCommand_(e.command, e.value);
+        if (executeHmiCommand_(e.command, e.value)) {
+            setHomeErrorMessage_("", true);
+        }
         return;
     }
 

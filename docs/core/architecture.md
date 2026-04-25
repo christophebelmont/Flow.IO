@@ -136,14 +136,15 @@ Le profil `Supervisor` porte notamment:
 
 ## Chaîne de logs
 
-La chaîne de logs actuelle est:
+La chaîne de logs commune est:
 
 1. `LogHubModule`: buffer et registre de modules de log
 2. `LogDispatcherModule`: distribution vers les sinks
 3. `LogSerialSinkModule`: sortie série
-4. `LogAlarmSinkModule`: conversion de certains logs en alarmes
 
-Le logging fonctionne de manière asynchrone. Les modules produisent des entrées de log et les poussent dans le buffer central porté par `LogHubModule`. Ces entrées sont ensuite consommées par `LogDispatcherModule`, qui les redistribue vers les sinks enregistrés. Chaque sink applique ensuite son propre traitement, par exemple l'émission sur le port série pour `LogSerialSinkModule` ou la transformation en alarmes pour `LogAlarmSinkModule`.
+Le profil `Supervisor` ajoute aussi `LogAlarmSinkModule`, qui convertit certains logs `Warn`/`Error` en conditions d'alarme. Le profil `FlowIO` ne l'enregistre pas dans `src/Profiles/FlowIO/FlowIOBootstrap.cpp`.
+
+Le logging fonctionne de manière asynchrone. Les modules produisent des entrées de log et les poussent dans le buffer central porté par `LogHubModule`. Ces entrées sont ensuite consommées par `LogDispatcherModule`, qui les redistribue vers les sinks enregistrés. Chaque sink applique ensuite son propre traitement, par exemple l'émission sur le port série pour `LogSerialSinkModule` ou la transformation en alarmes pour `LogAlarmSinkModule` côté `Supervisor`.
 
 ## Transport MQTT
 

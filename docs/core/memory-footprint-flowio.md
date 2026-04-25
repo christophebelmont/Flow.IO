@@ -16,11 +16,11 @@ Sortie `xtensa-esp32-elf-size -A .pio/build/FlowIO/firmware.elf`:
 
 | Section | Taille |
 |---|---:|
-| `.dram0.data` | `25 824 o` |
-| `.dram0.bss` | `94 136 o` |
-| Total DRAM statique | `119 960 o` |
+| `.dram0.data` | `25 936 o` |
+| `.dram0.bss` | `95 712 o` |
+| Total DRAM statique | `121 648 o` |
 
-Ce total correspond au `RAM: used 119960 bytes` reporte par PlatformIO.
+Ce total correspond au `RAM: used 121648 bytes` reporte par PlatformIO.
 
 ## Methode
 
@@ -43,7 +43,7 @@ En consequence:
 
 Le bloc principal du profil `FlowIO` est:
 
-- `Profiles::FlowIO::moduleInstances()::instances`: `53 656 o` en `.bss`
+- `Profiles::FlowIO::moduleInstances()::instances`: `57 424 o` en `.bss`
 
 Ce bloc contient presque tous les objets module embarques par valeur.
 
@@ -53,7 +53,7 @@ Les tailles ci-dessous representent l'empreinte statique de l'instance module em
 
 | Module / bloc | DRAM statique estimee | Heap persistante estimee | Notes |
 |---|---:|---:|---|
-| `IOModule` | `10 996 o` | `0 o` | Gros pools internes statiques, pas de heap persistante dediee |
+| `IOModule` | `~11 500 o` | `0 o` | Gros pools internes statiques, notamment 17 slots analogiques, pas de heap persistante dediee |
 | `MQTTModule` | `9 416 o` | `~6 970 o` | `scratch_` (`2 630 o`) + `rxQueueStorage_` (`4 096 o`) + `cfgProducer_` (`~244 o`) |
 | `PoolDeviceModule` | `6 248 o` | `~676 o` | `cfgRoutes_` (`~432 o`) + `cfgMqttPub_` (`~244 o`) |
 | `TimeModule` | `4 704 o` | `~244 o` | `cfgMqttPub_` |
@@ -102,9 +102,9 @@ Les tailles ci-dessous proviennent directement de `firmware.map` ou `xtensa-esp3
 
 | Symbole | Type | Taille | Source |
 |---|---|---:|---|
-| `Profiles::FlowIO::moduleInstances()::instances` | `.bss` | `53 656 o` | Profil `FlowIO` |
-| `gContext` | `.bss` | `8 400 o` | `src/App/Bootstrap.cpp` |
-| `ConfigStore::applyJson()::doc` | `.bss` | `4 136 o` | `src/Core/ConfigStore.cpp` |
+| `Profiles::FlowIO::moduleInstances()::instances` | `.bss` | `57 424 o` | Profil `FlowIO` |
+| `gContext` | `.bss` | `10 060 o` | `src/App/Bootstrap.cpp` |
+| `ConfigStore::applyJson()::doc` | `.bss` | `1 064 o` | `src/Core/ConfigStore.cpp` |
 | `MQTTModule::processRxCmd_()::doc` | `.bss` | `1 064 o` | `src/Modules/Network/MQTTModule/MQTTRx.cpp` |
 | `MQTTModule::processRxCfgSet_()::cfgDoc` | `.bss` | `1 064 o` | `src/Modules/Network/MQTTModule/MQTTRx.cpp` |
 | `parseCmdArgsObject_()` de `TimeModule` | `.bss` | `808 o` | `src/Modules/Network/TimeModule/TimeModule.cpp` |
@@ -117,7 +117,7 @@ Les tailles ci-dessous proviennent directement de `firmware.map` ou `xtensa-esp3
 
 Observation:
 
-- `ModuleInstances` + `gContext` representent a eux seuls `62 056 o` de DRAM statique.
+- `ModuleInstances` + `gContext` representent a eux seuls `67 484 o` de DRAM statique.
 - Les `StaticJsonDocument<>` persistants pèsent encore plusieurs kilo-octets en `.bss` hors modules.
 
 ### Structures internes majeures cachees dans `ModuleInstances`
@@ -134,7 +134,7 @@ Ces tailles ne sont pas directement visibles dans le `.map`, car elles sont incl
 | `PoolDeviceModule::runtimePersistBuf_[8][192]` | statique | `1 536 o` | staging NVS runtime devices |
 | `PoolDeviceModule::slots_[8]` | statique | `~1 280 o` | etat complet des 8 appareils |
 | `IOModule::digitalSlots_[15]` | statique | `~2 100 o` | 15 slots digitaux |
-| `IOModule::analogSlots_[12]` | statique | `~1 200 o` | 12 slots analogiques |
+| `IOModule::analogSlots_[17]` | statique | `~1 700 o` | 17 slots analogiques |
 | `TimeModule::sched_[16]` | statique | `~1 152 o` | runtime scheduler |
 
 Ces postes sont utiles pour cibler les reductions reelles de `.bss` quand on ne veut pas tout basculer en heap.

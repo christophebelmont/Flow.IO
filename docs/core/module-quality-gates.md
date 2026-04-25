@@ -14,7 +14,6 @@ Cette page récapitule les modules documentés dans `docs/modules/`, leur rôle 
 | DataStoreModule | `datastore` | passif | oui | oui | `docs/modules/DataStoreModule.md` |
 | CommandModule | `cmd` | passif | oui | oui | `docs/modules/CommandModule.md` |
 | AlarmModule | `alarms` | actif | oui | oui | `docs/modules/AlarmModule.md` |
-| LogAlarmSinkModule | `log.sink.alarm` | passif | oui | oui | `docs/modules/LogAlarmSinkModule.md` |
 | WifiModule | `wifi` | actif | oui | oui | `docs/modules/WifiModule.md` |
 | TimeModule | `time` | actif | oui | oui | `docs/modules/TimeModule.md` |
 | SystemModule | `system` | passif | oui | oui | `docs/modules/SystemModule.md` |
@@ -33,13 +32,14 @@ Cette page récapitule les modules documentés dans `docs/modules/`, leur rôle 
 
 ## Modules spécifiques à `Supervisor`
 
-| Module | `moduleId` | Type | Rôle |
-|---|---|---|---|
-| `i2ccfg.client` | `i2ccfg.client` | passif avec tâche | accès distant à la configuration et au runtime du `FlowIO` |
-| `wifiprov` | `wifiprov` | actif | provisioning réseau local |
-| `webinterface` | `webinterface` | actif | interface web Supervisor |
-| `fwupdate` | `fwupdate` | actif | mise à jour firmware et écran |
-| SupervisorHMIModule | `hmi.supervisor` | actif | interface TFT locale | 
+| Module | `moduleId` | Type | Rôle | Documentation |
+|---|---|---|---|---|
+| LogAlarmSinkModule | `log.sink.alarm` | passif | conversion de logs Warn/Error en conditions d'alarme | `docs/modules/LogAlarmSinkModule.md` |
+| `i2ccfg.client` | `i2ccfg.client` | passif avec tâche | accès distant à la configuration et au runtime du `FlowIO` | `docs/core/flow-supervisor-i2c-protocol.md` |
+| `wifiprov` | `wifiprov` | actif | provisioning réseau local | `docs/integration/mise-en-service.md` |
+| `webinterface` | `webinterface` | actif | interface web Supervisor | `docs/core/runtime-ui-exposure.md` |
+| `fwupdate` | `fwupdate` | actif | mise à jour firmware et écran | `docs/integration/mise-en-service.md` |
+| SupervisorHMIModule | `hmi.supervisor` | actif | interface TFT locale | `docs/modules/SupervisorHMIModule.md` |
 
 ## Modules complémentaires utilisés par les profils
 

@@ -141,16 +141,15 @@ Ordre d'enregistrement dans `src/Profiles/FlowIO/FlowIOBootstrap.cpp`:
 8. `i2ccfg.server`
 9. `hmi`
 10. `alarms`
-11. `log.sink.alarm`
-12. `wifi`
-13. `time`
-14. `mqtt`
-15. `ha`
-16. `system`
-17. `io`
-18. `poollogic`
-19. `pooldev`
-20. `sysmon`
+11. `wifi`
+12. `time`
+13. `mqtt`
+14. `ha`
+15. `system`
+16. `io`
+17. `poollogic`
+18. `pooldev`
+19. `sysmon`
 
 ### Profil `Supervisor`
 
@@ -185,13 +184,13 @@ Les valeurs ci-dessous correspondent à l'implémentation actuelle du profil `Fl
 | Entrées digitales IO | 5 | `IOModule::MAX_DIGITAL_INPUTS` |
 | Sorties digitales IO | 10 | `IOModule::MAX_DIGITAL_OUTPUTS` |
 | Équipements `PoolDevice` | 8 | `POOL_DEVICE_MAX` |
-| Capteurs Home Assistant | 24 | `HAModule::MAX_HA_SENSORS` |
-| Binary sensors Home Assistant | 8 | `HAModule::MAX_HA_BINARY_SENSORS` |
-| Switches Home Assistant | 16 | `HAModule::MAX_HA_SWITCHES` |
-| Numbers Home Assistant | 16 | `HAModule::MAX_HA_NUMBERS` |
-| Buttons Home Assistant | 8 | `HAModule::MAX_HA_BUTTONS` |
+| Capteurs Home Assistant | 40 | `HAModule::MAX_HA_SENSORS` |
+| Binary sensors Home Assistant | 6 | `HAModule::MAX_HA_BINARY_SENSORS` |
+| Switches Home Assistant | 14 | `HAModule::MAX_HA_SWITCHES` |
+| Numbers Home Assistant | 14 | `HAModule::MAX_HA_NUMBERS` |
+| Buttons Home Assistant | 24 | `HAModule::MAX_HA_BUTTONS` |
 | Routes runtime MQTT* | 36 | `Limits::MaxRuntimeRoutes` |
-| EventBus queue | 32 | `Limits::EventQueueLen` |
-| Variables de configuration | 315 | `Limits::MaxConfigVars` |
+| EventBus queue | 40 | `Limits::EventQueueLen` |
+| Variables de configuration | 380 | `Limits::MaxConfigVars` |
 
 \* Une route runtime MQTT correspond à un canal de publication runtime déclaré dans le firmware. Chaque route relie une source d'état interne à un suffixe de topic MQTT, par exemple `rt/io/input/a0`, `rt/pdm/state/pd0` ou `rt/system/state`.

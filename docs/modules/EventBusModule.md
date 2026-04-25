@@ -17,7 +17,7 @@ Type: module actif.
 
 - core: `1`
 - task name: `EventBus`
-- stack: `4096`
+- stack: `2816`
 - priority: `1`
 - loop: `dispatch(16)` puis `delay(5 ms)`
 
@@ -27,7 +27,7 @@ Type: module actif.
 
 ## Capacités / limites
 
-- longueur queue: `Limits::EventQueueLen` (`32`)
+- longueur queue: `Limits::EventQueueLen` (`40`)
 - payload max par événement: `48` octets
 - abonnés max: `Limits::EventSubscribersMax` (`50`)
 - ring interne de traces de rejets d'abonnement: `8`
@@ -55,7 +55,7 @@ Abonnements:
 
 ### Statistiques abonnements (toutes les 5s)
 
-`sub stats 5s: used=../50 queue=../32 data=.. cfg=.. sched=.. alarm=.. other=.. rej_total=.. cap=.. null_cb=..`
+`sub stats 5s: used=../50 queue=../40 data=.. cfg=.. sched=.. alarm=.. other=.. rej_total=.. cap=.. null_cb=..`
 - niveau log: `DEBUG` par défaut, `WARN` si rejet d'abonnement (`rej_total/cap/null_cb > 0`) ou queue pleine
 - `used`: nombre d'abonnements actifs
 - `queue`: occupation instantanée queue

@@ -35,6 +35,19 @@ Type: module actif (event-driven par notification task).
 - `datastore`
 - `mqtt`
 
+## Capacités statiques
+
+Capacités compile-time actuelles dans `src/Modules/Network/HAModule/HAModule.h`:
+
+| Type d'entité | Capacité |
+|---|---:|
+| sensors | 40 |
+| binary sensors | 6 |
+| switches | 14 |
+| numbers | 14 |
+| buttons | 24 |
+| cleanups discovery | 9 |
+
 ## Config / NVS
 
 Module config: `ha` (`moduleId = ConfigModuleId::Ha`, branche locale `1`):

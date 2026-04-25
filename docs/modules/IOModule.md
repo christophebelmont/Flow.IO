@@ -65,7 +65,7 @@ Capacités compile-time actuelles dans `src/Modules/IOModule/IOModule.h`:
 
 | Capacité | Valeur |
 |---|---:|
-| entrées analogiques | 12 |
+| entrées analogiques | 17 |
 | entrées digitales | 5 |
 | sorties digitales | 10 |
 | slots digitaux totaux | 15 |
@@ -74,7 +74,7 @@ Plages d'`IoId` utilisées:
 
 - sorties digitales: `IO_ID_DO_BASE .. IO_ID_DO_BASE + 9`
 - entrées digitales: `IO_ID_DI_BASE .. IO_ID_DI_BASE + 4`
-- entrées analogiques: `IO_ID_AI_BASE .. IO_ID_AI_BASE + 11`
+- entrées analogiques: `IO_ID_AI_BASE .. IO_ID_AI_BASE + 16`
 
 ## Backends physiques pris en charge
 
@@ -84,6 +84,8 @@ Backends actuellement gérés par le module:
 - sorties via `PCF8574`
 - entrées analogiques `ADS1115`
 - sondes `DS18B20`
+- capteurs `SHT40`, `BMP280`, `BME680`
+- mesures électriques `INA226`
 - compteur d'impulsions sur GPIO avec debounce
 
 Les `IoBackend` visibles dans le service sont:
@@ -93,6 +95,10 @@ Les `IoBackend` visibles dans le service sont:
 - `IO_BACKEND_ADS1115_INT`
 - `IO_BACKEND_ADS1115_EXT_DIFF`
 - `IO_BACKEND_DS18B20`
+- `IO_BACKEND_SHT40`
+- `IO_BACKEND_BMP280`
+- `IO_BACKEND_BME680`
+- `IO_BACKEND_INA226`
 
 ## Modèle de binding actuel
 
@@ -113,6 +119,10 @@ Ports déclarés actuellement:
 - ADS interne: `PortAdsInternal0..3`
 - ADS externe différentiel: `PortAdsExternal0..1`
 - DS18B20: `PortDsWater`, `PortDsAir`
+- SHT40: `PortSht40Temp`, `PortSht40Humidity`
+- BMP280: `PortBmp280Temp`, `PortBmp280Pressure`
+- BME680: `PortBme680Temp`, `PortBme680Humidity`, `PortBme680Pressure`, `PortBme680Gas`
+- INA226: `PortIna226ShuntMv`, `PortIna226BusV`, `PortIna226CurrentMa`, `PortIna226PowerMw`, `PortIna226LoadV`
 - entrées digitales GPIO: `PortDigitalIn1..4`
 - sorties relais GPIO: `PortRelay1..8`
 - sorties PCF8574: `PortPcf0Bit0..7`
@@ -127,7 +137,7 @@ Ports déclarés actuellement:
 
 Le profil `FlowIO` instancie aujourd'hui:
 
-- 6 entrées analogiques
+- 17 entrées analogiques (`a00..a16`, dont `a06..a16` comme slots configurables supplémentaires)
 - 4 entrées digitales
 - 8 sorties digitales
 

@@ -27,9 +27,9 @@ Bus utilisé:
 
 Configuration par défaut:
 - adresse I2C serveur Flow.io: `0x42`
-- fréquence: `100000 Hz`
-- GPIO par défaut Flow.io: SDA `12`, SCL `14`
-- GPIO par défaut Supervisor: SDA `21`, SCL `22`
+- fréquence: `400000 Hz`
+- GPIO par défaut Flow.io: SDA `5`, SCL `15`
+- GPIO par défaut Supervisor: SDA `27`, SCL `13`
 
 Références source:
 - framing et opcodes: [`include/Core/I2cCfgProtocol.h`](../../include/Core/I2cCfgProtocol.h)
