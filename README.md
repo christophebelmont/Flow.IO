@@ -81,7 +81,7 @@ La documentation complète (architecture, services Core, flux EventBus/DataStore
 
 ## Documentation utilisateur
 
-- [Documentation utilisateurs (PDF)](docs/Documentation%20utilisateurs.pdf)
+- [Documentation utilisateurs (PDF)](docs/Documentation%20utilisateur.pdf)
 
 ## Référence rapide
 
