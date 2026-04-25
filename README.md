@@ -38,8 +38,7 @@ Actionneurs pilotés:
 
 L'interface Nextion offre une vue synthétique des mesures, états et commandes principales pour l'exploitation quotidienne au bord du bassin.
 
-![Nextion TouchScreen HMI](docs/pictures/Nextion_Screens_v5.jpg)
-
+![Nextion TouchScreen HMI2](docs/pictures/Nextion5-2.jpeg)
 ## Automatisation utile au quotidien
 
 - calcul automatique de la fenêtre de filtration selon la température d'eau
